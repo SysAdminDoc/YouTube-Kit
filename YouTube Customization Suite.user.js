@@ -5,9 +5,12 @@
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=youtube.com
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_getResourceText
+// @updateURL    https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/YouTube%20Customization%20Suite.user.js
+// @downloadURL  https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/YouTube%20Customization%20Suite.user.js
 // @resource     betterDarkMode https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/Themes/youtube-dark-theme.css
 // @run-at       document-end
 // ==/UserScript==
