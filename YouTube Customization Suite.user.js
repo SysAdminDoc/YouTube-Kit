@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Customization Suite
 // @namespace    https://github.com/user/yt-enhancement-suite
-// @version      2.7
+// @version      2.9
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
@@ -16,11 +16,11 @@
     'use strict';
 
     // ——————————————————————————————————————————————————————————————————————————
-    //  ~ YouTube Customization Suite v2.7 ~
+    //  ~ YouTube Customization Suite v2.9 ~
     //
-    //  - Added "Themes" section to settings.
-    //  - Added toggle to force YouTube's native dark theme.
-    //  - Added sub-setting to apply "Better Full Dark Theme" enhancement.
+    //  - Added default CSS fixes for watch page metadata and live chat layout.
+    //  - Relocated watch page controls (Logo, Settings Cog) from a floating
+    //    position to the top metadata bar, next to the channel avatar.
     //
     // ——————————————————————————————————————————————————————————————————————————
 
@@ -118,7 +118,7 @@
             fitPlayerToWindow: false,
             hideRelatedVideos: false,
             expandVideoWidth: true,
-            floatingLogoOnWatch: false,
+            floatingLogoOnWatch: false, // This ID is kept for settings compatibility
 
             // Watch Page - Other Elements
             hideMerchShelf: false,
@@ -177,35 +177,45 @@
         {
             id: 'settingsButton',
             name: 'Settings Button',
-            description: 'Shows a settings cog. Its position changes depending on the page (header vs. watch page).',
+            description: 'Shows a settings cog. On watch pages, it appears next to the channel info. On other pages, it appears in the main header.',
             group: 'Core UI',
             _elements: { watch: null, masthead: null },
             _ruleId: 'settingsButtonRule',
             _handleDisplay() {
                 const isWatch = window.location.pathname.startsWith('/watch');
-                const masthead = document.querySelector('ytd-topbar-logo-renderer');
 
+                // --- Handle Watch Page ---
                 if (isWatch) {
-                    if (this._elements.masthead) {
-                        this._elements.masthead.remove();
-                        this._elements.masthead = null;
-                    }
-                    if (!document.getElementById('yt-floating-cog')) {
+                    this._elements.masthead?.remove(); // Clean up other page's cog
+                    this._elements.masthead = null;
+                    document.getElementById('yt-floating-cog')?.remove(); // Clean up old floating cog
+
+                    const ownerDiv = document.querySelector('#top-row #owner');
+                    if (ownerDiv && !document.getElementById('yt-suite-watch-cog')) {
                         const cog = document.createElement('div');
-                        cog.id = 'yt-floating-cog';
+                        cog.id = 'yt-suite-watch-cog';
                         const btn = document.createElement('button');
                         btn.title = 'Open YouTube Suite Settings';
                         btn.appendChild(createCogSvg());
                         btn.onclick = () => document.body.classList.toggle('yt-suite-panel-open');
                         cog.appendChild(btn);
-                        document.body.appendChild(cog);
                         this._elements.watch = cog;
+
+                        // Insert into DOM, respecting logo order
+                        const logo = document.getElementById('yt-suite-watch-logo');
+                        if (logo && logo.parentElement === ownerDiv) {
+                            ownerDiv.insertBefore(cog, logo.nextSibling);
+                        } else {
+                            ownerDiv.prepend(cog);
+                        }
                     }
-                } else {
-                    if (this._elements.watch) {
-                        this._elements.watch.remove();
-                        this._elements.watch = null;
-                    }
+                }
+                // --- Handle Non-Watch Page ---
+                else {
+                    this._elements.watch?.remove(); // Clean up watch page's cog
+                    this._elements.watch = null;
+
+                    const masthead = document.querySelector('ytd-topbar-logo-renderer');
                     if (masthead && !document.getElementById('yt-masthead-cog')) {
                         const cog = document.createElement('div');
                         cog.id = 'yt-masthead-cog';
@@ -226,6 +236,7 @@
                 removeRule(this._ruleId);
                 this._elements.watch?.remove();
                 this._elements.masthead?.remove();
+                document.getElementById('yt-suite-watch-cog')?.remove(); // Extra cleanup
                 this._elements = { watch: null, masthead: null };
             }
         },
@@ -503,34 +514,43 @@
         },
         {
             id: 'floatingLogoOnWatch',
-            name: 'Floating Logo on Watch Page',
-            description: 'Displays a semi-transparent YouTube logo in the bottom-right of watch pages.',
+            name: 'Logo in Video Header',
+            description: 'On watch pages, adds a YouTube logo (linking to Subscriptions) next to the channel avatar.',
             group: 'Watch Page - Layout',
             _element: null,
             _ruleId: 'floatingLogoRule',
             handleLogoDisplay() {
                 const isWatchPage = window.location.pathname.startsWith('/watch');
-                if (isWatchPage && !document.getElementById('yt-floating-logo')) {
-                    this._element = document.createElement('div');
-                    this._element.id = 'yt-floating-logo';
-                    const link = document.createElement('a');
-                    link.href = 'https://www.youtube.com/feed/subscriptions';
-                    link.title = 'YouTube Subscriptions';
+                const ownerDiv = document.querySelector('#top-row #owner');
 
-                    const originalLogo = document.querySelector('ytd-topbar-logo-renderer ytd-logo');
-                    if (originalLogo) {
-                        const clonedLogo = originalLogo.cloneNode(true);
-                        link.appendChild(clonedLogo);
-                    } else {
-                        const fallbackLogo = document.createElement('ytd-logo');
-                        fallbackLogo.className = 'style-scope ytd-topbar-logo-renderer';
-                        fallbackLogo.setAttribute('is-red-logo', '');
-                        link.appendChild(fallbackLogo);
+                // Cleanup old floating version from body
+                document.getElementById('yt-floating-logo')?.remove();
+
+                if (isWatchPage && ownerDiv) {
+                    let logoEl = document.getElementById('yt-suite-watch-logo');
+                    if (!logoEl) {
+                        logoEl = document.createElement('div');
+                        logoEl.id = 'yt-suite-watch-logo';
+                        const link = document.createElement('a');
+                        link.href = 'https://www.youtube.com/feed/subscriptions';
+                        link.title = 'YouTube Subscriptions';
+
+                        const originalLogo = document.querySelector('ytd-topbar-logo-renderer ytd-logo');
+                        if (originalLogo) {
+                            const clonedLogo = originalLogo.cloneNode(true);
+                            link.appendChild(clonedLogo);
+                        } else {
+                            const fallbackLogo = document.createElement('ytd-logo');
+                            fallbackLogo.className = 'style-scope ytd-topbar-logo-renderer';
+                            fallbackLogo.setAttribute('is-red-logo', '');
+                            link.appendChild(fallbackLogo);
+                        }
+                        logoEl.appendChild(link);
+                        ownerDiv.prepend(logoEl);
                     }
-                    this._element.appendChild(link);
-                    document.body.appendChild(this._element);
-                } else if (!isWatchPage && document.getElementById('yt-floating-logo')) {
-                    document.getElementById('yt-floating-logo')?.remove();
+                    this._element = logoEl;
+                } else if (this._element) {
+                    this._element.remove();
                     this._element = null;
                 }
             },
@@ -539,7 +559,8 @@
             },
             destroy() {
                 removeRule(this._ruleId);
-                document.getElementById('yt-floating-logo')?.remove();
+                this._element?.remove();
+                document.getElementById('yt-suite-watch-logo')?.remove();
                 this._element = null;
             }
         },
@@ -772,7 +793,7 @@
         title.textContent = 'YouTube Customization Suite';
         const version = document.createElement('span');
         version.className = 'version';
-        version.textContent = 'v2.7';
+        version.textContent = 'v2.9';
         header.append(title, version);
 
         const main = document.createElement('main');
@@ -934,34 +955,39 @@
             .yt-suite-btn-primary { background-color: var(--yt-suite-accent-color); color: white; border: none; padding: 10px 20px; border-radius: 6px; font-family: var(--panel-font); font-weight: 500; cursor: pointer; transition: background-color .2s; }
             .yt-suite-btn-primary:hover { background-color: #cc0000; }
 
-            /* -- Watch Page Floating Elements -- */
-            #yt-floating-logo, #yt-floating-cog {
-                position: fixed !important;
-                bottom: 16px !important;
-                opacity: 0.1 !important;
-                transition: opacity 0.2s ease !important;
-                z-index: 9999 !important;
-                pointer-events: auto !important;
-            }
-            #yt-floating-logo:hover, #yt-floating-cog:hover {
-                opacity: 1 !important;
-            }
-            #yt-floating-logo {
-                right: 16px !important;
+            /* -- Watch Page Header Controls -- */
+            #yt-suite-watch-logo, #yt-suite-watch-cog {
                 display: flex;
+                align-items: center;
+                margin-right: 12px;
             }
-             #yt-floating-logo ytd-logo {
-                width: 100px;
+            #yt-suite-watch-logo a {
+                display: flex;
+                align-items: center;
             }
-            #yt-floating-cog {
-                right: calc(16px + 100px + 8px) !important; /* Position left of logo */
+            #yt-suite-watch-logo ytd-logo {
+                width: 90px;
+                height: auto;
             }
-            #yt-floating-cog button {
-                background: none; border: none; padding: 0; cursor: pointer;
-                display: flex; align-items: center; justify-content: center;
+            #yt-suite-watch-cog button {
+                background: transparent;
+                border: none;
+                width: 40px;
+                height: 40px;
+                cursor: pointer;
+                padding: 8px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
             }
-            #yt-floating-cog svg {
-                width: 40px; height: 40px; color: #fff;
+            #yt-suite-watch-cog svg {
+                 width: 24px;
+                 height: 24px;
+                 fill: var(--yt-spec-icon-inactive);
+            }
+            #yt-suite-watch-cog button:hover {
+                background-color: var(--yt-spec-badge-chip-background);
             }
 
             /* -- Masthead Settings Cog -- */
@@ -991,6 +1017,15 @@
             }
             #yt-masthead-cog button:hover {
                 background-color: var(--yt-spec-badge-chip-background);
+            }
+
+            /* -- General Watch Page Fixes -- */
+            ytd-watch-metadata {
+                margin-top: 180px !important;
+            }
+            ytd-live-chat-frame#chat {
+                width: 402px !important;
+                margin-top: -58px !important;
             }
         `;
         document.head.appendChild(style);
