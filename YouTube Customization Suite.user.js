@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         YouTube Customization Suite
 // @namespace    https://github.com/user/yt-enhancement-suite
-// @version      3.0
+// @version      3.2
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
-// @icon         https://www.google.com/s2/favicons?sz=64&domain=youtube.com
+// @icon         https://www.google.com/s2/favicons?domain=youtube.com
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_getResourceText
@@ -19,8 +19,10 @@
     'use strict';
 
     // ——————————————————————————————————————————————————————————————————————————
-    //  ~ YouTube Customization Suite v3.0 ~
+    //  ~ YouTube Customization Suite v3.2 ~
     //
+    //  - Fixed selectors for hiding Share, Clip, Thanks, and Save buttons.
+    //  - Refactored 'More actions' button to be separate from Clip/Thanks.
     //  - Added feature to hide live chat engagement messages.
     //  - Added default CSS fixes for watch page metadata and live chat layout.
     //  - Relocated watch page controls (Logo, Settings Cog) from a floating
@@ -135,6 +137,9 @@
             hideLikeButton: false,
             hideDislikeButton: false,
             hideShareButton: false,
+            hideClipButton: false,
+            hideThanksButton: false,
+            hideSaveButton: false,
             hideDownloadButton: false,
             hideSponsorButton: false,
             hideMoreActionsButton: false,
@@ -537,7 +542,7 @@
                         logoEl = document.createElement('div');
                         logoEl.id = 'yt-suite-watch-logo';
                         const link = document.createElement('a');
-                        link.href = 'https://www.youtube.com/feed/subscriptions';
+                        link.href = '/feed/subscriptions';
                         link.title = 'YouTube Subscriptions';
 
                         const originalLogo = document.querySelector('ytd-topbar-logo-renderer ytd-logo');
@@ -678,10 +683,13 @@
         },
         { id: 'hideLikeButton', name: 'Hide Like Button', description: 'Hides the Like button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner .yt-like-button-view-model, ytd-watch-metadata like-button-view-model', this.id); }, destroy() { this._styleElement?.remove(); }},
         { id: 'hideDislikeButton', name: 'Hide Dislike Button', description: 'Hides the Dislike button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner .yt-dislike-button-view-model, ytd-watch-metadata dislike-button-view-model', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideShareButton', name: 'Hide Share Button', description: 'Hides the Share button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner ytd-button-renderer:has(button[aria-label="Share"])', this.id); }, destroy() { this._styleElement?.remove(); }},
+        { id: 'hideShareButton', name: 'Hide Share Button', description: 'Hides the Share button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('yt-button-view-model:has(button[aria-label="Share"])', this.id); }, destroy() { this._styleElement?.remove(); }},
+        { id: 'hideClipButton', name: 'Hide Clip Button', description: 'Hides the Clip button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('yt-button-view-model:has(button[aria-label="Clip"])', this.id); }, destroy() { this._styleElement?.remove(); }},
+        { id: 'hideThanksButton', name: 'Hide Thanks Button', description: 'Hides the Thanks button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('yt-button-view-model:has(button[aria-label="Thanks"])', this.id); }, destroy() { this._styleElement?.remove(); }},
+        { id: 'hideSaveButton', name: 'Hide Save Button', description: 'Hides the "Save to playlist" button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('yt-button-view-model:has(button[aria-label="Save to playlist"])', this.id); }, destroy() { this._styleElement?.remove(); }},
         { id: 'hideDownloadButton', name: 'Hide Download/Offline Button', description: 'Hides the Download or Offline button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner ytd-download-button-renderer, ytd-button-renderer:has(button[aria-label="Offline"])', this.id); }, destroy() { this._styleElement?.remove(); }},
         { id: 'hideSponsorButton', name: 'Hide Join/Sponsor Button', description: 'Hides the channel membership "Join" button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#sponsor-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideMoreActionsButton', name: 'Hide "More actions" Button', description: 'Hides the three-dots "More actions" button (includes Thanks, Clip, etc.).', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner #button-shape.ytd-menu-renderer, #actions-inner ytd-button-renderer:has(button[aria-label*="Clip"]), #actions-inner ytd-button-renderer:has(button[aria-label*="Thanks"])', this.id); }, destroy() { this._styleElement?.remove(); }},
+        { id: 'hideMoreActionsButton', name: 'Hide "More actions" (3-dot) Button', description: 'Hides the three-dots "More actions" menu button which contains other actions.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner #button-shape > button[aria-label="More actions"]', this.id); }, destroy() { this._styleElement?.remove(); }},
 
         // Group: Watch Page - Player Controls
         {
@@ -825,7 +833,7 @@
         title.textContent = 'YouTube Customization Suite';
         const version = document.createElement('span');
         version.className = 'version';
-        version.textContent = 'v3.0';
+        version.textContent = 'v3.2';
         header.append(title, version);
 
         const main = document.createElement('main');
