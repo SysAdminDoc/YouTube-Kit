@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Customization Suite
 // @namespace    https://github.com/user/yt-enhancement-suite
-// @version      2.9
+// @version      3.0
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
@@ -19,8 +19,9 @@
     'use strict';
 
     // ——————————————————————————————————————————————————————————————————————————
-    //  ~ YouTube Customization Suite v2.9 ~
+    //  ~ YouTube Customization Suite v3.0 ~
     //
+    //  - Added feature to hide live chat engagement messages.
     //  - Added default CSS fixes for watch page metadata and live chat layout.
     //  - Relocated watch page controls (Logo, Settings Cog) from a floating
     //    position to the top metadata bar, next to the channel avatar.
@@ -127,6 +128,7 @@
             hideMerchShelf: false,
             hideDescriptionExtras: false,
             hidePinnedComments: false,
+            hideLiveChatEngagement: false,
 
             // Watch Page - Action Buttons
             autolikeVideos: false,
@@ -590,6 +592,33 @@
                 this._styleElement?.remove();
             }
         },
+        {
+            id: 'hideLiveChatEngagement',
+            name: 'Hide Live Chat Engagement',
+            description: 'Removes "Welcome to live chat!" and other engagement messages.',
+            group: 'Watch Page - Other Elements',
+            _styleElement: null,
+            _ruleId: 'hideLiveChatEngagementRule',
+            _runRemoval() {
+                // This function is called by the main observer to remove elements from the DOM
+                document.querySelectorAll('yt-live-chat-viewer-engagement-message-renderer').forEach(el => el.remove());
+            },
+            init() {
+                // Inject a style for immediate hiding, preventing flashes of content
+                const css = `
+                    yt-live-chat-viewer-engagement-message-renderer {
+                        display: none !important;
+                    }
+                `;
+                this._styleElement = injectStyle(css, this.id, true);
+                // Use the main rule engine to periodically clean up the DOM
+                addRule(this._ruleId, this._runRemoval);
+            },
+            destroy() {
+                this._styleElement?.remove();
+                removeRule(this._ruleId);
+            }
+        },
 
         // Group: Watch Page - Action Buttons
         {
@@ -796,7 +825,7 @@
         title.textContent = 'YouTube Customization Suite';
         const version = document.createElement('span');
         version.className = 'version';
-        version.textContent = 'v2.9';
+        version.textContent = 'v3.0';
         header.append(title, version);
 
         const main = document.createElement('main');
