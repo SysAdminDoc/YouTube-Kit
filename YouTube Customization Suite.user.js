@@ -2,8 +2,8 @@
 // @name         YouTube Customization Suite
 // @namespace    https://github.com/user/yt-enhancement-suite
 // @version      2.3
-// @description  Ultimate YouTube UI customization. Hide elements, control layout, and enhance your viewing experience.
-// @author       Your Name
+// @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
+// @author       Matthew Parker
 // @match        https://*.youtube.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
