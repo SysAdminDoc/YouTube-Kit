@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Customization Suite
 // @namespace    https://github.com/user/yt-enhancement-suite
-// @version      1.7
+// @version      2.3
 // @description  Ultimate YouTube UI customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Your Name
 // @match        https://*.youtube.com/*
@@ -14,10 +14,10 @@
     'use strict';
 
     // ——————————————————————————————————————————————————————————————————————————
-    //  ~ YouTube Customization Suite v1.7 ~
+    //  ~ YouTube Customization Suite v2.3 ~
     //
-    //  - Added new "Autolike Videos" feature based on the provided script.
-    //    This can be toggled in the "Watch Page - Action Buttons" section.
+    //  - Fixed the "Fit Player to Window" feature by restoring the correct CSS
+    //    for player positioning and page scrolling.
     //
     // ——————————————————————————————————————————————————————————————————————————
 
@@ -94,12 +94,15 @@
             // Header
             hideCreateButton: false,
             hideVoiceSearch: false,
+            logoToSubscriptions: false,
 
             // Sidebar
-            collapsibleGuide: false,
+            hideSidebar: false,
 
             // General Content
             removeAllShorts: true,
+            fullWidthSubscriptions: false,
+            fiveVideosPerRow: false,
 
             // Watch Page - Layout
             fitPlayerToWindow: false,
@@ -120,6 +123,7 @@
             hideMoreActionsButton: false,
 
             // Watch Page - Player Controls
+            autoMaxResolution: false,
             hideNextButton: false,
             hideAutoplayToggle: false,
             hideSubtitlesToggle: false,
@@ -131,6 +135,10 @@
         },
         async load() {
             let savedSettings = await GM_getValue('ytSuiteSettings', {});
+            // Migration for older setting name
+            if (savedSettings.hasOwnProperty('collapsibleGuide')) {
+                delete savedSettings.collapsibleGuide;
+            }
             if (savedSettings.hasOwnProperty('hideShortsFeed')) {
                 savedSettings.removeAllShorts = savedSettings.hideShortsFeed;
                 delete savedSettings.hideShortsFeed;
@@ -193,35 +201,57 @@
             init() { this._styleElement = injectStyle('#voice-search-button', this.id); },
             destroy() { this._styleElement?.remove(); }
         },
+        {
+            id: 'logoToSubscriptions',
+            name: 'Logo Links to Subscriptions',
+            description: 'Changes the YouTube logo link to go to your Subscriptions feed.',
+            group: 'Header',
+            _observer: null,
+            _relinkLogo() {
+                const logoRenderer = document.querySelector('ytd-topbar-logo-renderer');
+                if (!logoRenderer) return;
+
+                const link = logoRenderer.querySelector('a#logo');
+                if (link && link.href !== 'https://www.youtube.com/feed/subscriptions') {
+                    link.href = 'https://www.youtube.com/feed/subscriptions';
+                }
+            },
+            init() {
+                this._observer = new MutationObserver(() => this._relinkLogo());
+                this._observer.observe(document.body, { childList: true, subtree: true });
+                this._relinkLogo(); // Initial run
+            },
+            destroy() {
+                if (this._observer) this._observer.disconnect();
+                const logoLink = document.querySelector('ytd-topbar-logo-renderer a#logo');
+                if (logoLink) logoLink.href = '/'; // Restore original link
+            }
+        },
 
         // Group: Sidebar
         {
-            id: 'collapsibleGuide',
-            name: 'Collapsible Hover Sidebar',
-            description: 'Collapses the left sidebar (guide) and reveals it on hover.',
+            id: 'hideSidebar',
+            name: 'Hide Sidebar',
+            description: 'Completely removes the left sidebar and its toggle button.',
             group: 'Sidebar',
             _styleElement: null,
             init() {
-                this._styleElement = document.createElement('style');
-                this._styleElement.id = 'yt-suite-collapsible-guide';
-                this._styleElement.textContent = `
-                    ytd-mini-guide-renderer { display: none !important; }
-                    ytd-app[guide-persistent-and-visible] #guide {
-                        transform: translateX(-100%);
-                        transition: transform 0.2s ease-in-out;
-                        z-index: 1000;
+                const appElement = document.querySelector('ytd-app');
+                if (appElement) {
+                    appElement.removeAttribute('guide-persistent-and-visible');
+                    const guideDrawer = appElement.querySelector('tp-yt-app-drawer#guide');
+                    if (guideDrawer && guideDrawer.hasAttribute('opened')) {
+                        guideDrawer.removeAttribute('opened');
                     }
-                    ytd-app[guide-persistent-and-visible] #guide:hover {
-                        transform: translateX(0);
-                    }
-                    ytd-page-manager[video-id] { margin-left: 0 !important; }
+                }
+                const css = `
+                    #guide, #guide-button, ytd-mini-guide-renderer, tp-yt-app-drawer:not([persistent]) { display: none !important; }
+                    ytd-page-manager { margin-left: 0 !important; }
                 `;
-                document.head.appendChild(this._styleElement);
-                document.querySelector('ytd-app')?.setAttribute('guide-persistent-and-visible', '');
+                this._styleElement = injectStyle(css, this.id, true);
             },
             destroy() {
                 this._styleElement?.remove();
-                document.querySelector('ytd-app')?.removeAttribute('guide-persistent-and-visible');
             }
         },
 
@@ -231,6 +261,7 @@
             name: 'Remove All Shorts Videos',
             description: 'Removes all Shorts videos from any page (Home, Subscriptions, Search, etc.).',
             group: 'General Content',
+            _styleElement: null,
             init() {
                 const removeShortsRule = () => {
                     document.querySelectorAll('a[href^="/shorts"]').forEach(a => {
@@ -238,16 +269,57 @@
                         while (parent && (!parent.tagName.startsWith('YTD-') || parent.tagName === 'YTD-THUMBNAIL')) {
                             parent = parent.parentElement;
                         }
-                        if (parent) parent.remove();
+                        if (parent) parent.style.display = 'none';
                     });
-                    document.querySelectorAll('ytd-reel-shelf-renderer').forEach(el => el.remove());
                 };
                 addRule(this.id, removeShortsRule);
+                const css = `
+                    ytd-reel-shelf-renderer,
+                    ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]) {
+                        display: none !important;
+                    }
+                `;
+                this._styleElement = injectStyle(css, this.id + '-style', true);
             },
             destroy() {
                 removeRule(this.id);
+                this._styleElement?.remove();
             }
         },
+        {
+            id: 'fullWidthSubscriptions',
+            name: 'Make Subscriptions Full-Width',
+            description: 'Expands the subscription grid to use the full page width.',
+            group: 'General Content',
+            _styleElement: null,
+            init() {
+                const css = `
+                    ytd-browse[page-subtype="subscriptions"] #grid-container.ytd-two-column-browse-results-renderer {
+                        max-width: 100% !important;
+                    }
+                `;
+                this._styleElement = injectStyle(css, this.id, true);
+            },
+            destroy() { this._styleElement?.remove(); }
+        },
+        {
+            id: 'fiveVideosPerRow',
+            name: '5 Videos Per Row',
+            description: 'Changes the video grid layout to show 5 videos per row.',
+            group: 'General Content',
+            _styleElement: null,
+            init() {
+                const videosPerRow = 5;
+                const css = `
+                    #contents.ytd-rich-grid-renderer {
+                        --ytd-rich-grid-items-per-row: ${videosPerRow} !important;
+                    }
+                `;
+                this._styleElement = injectStyle(css, this.id, true);
+            },
+            destroy() { this._styleElement?.remove(); }
+        },
+
 
         // Group: Watch Page - Layout
         {
@@ -412,6 +484,54 @@
         { id: 'hideMoreActionsButton', name: 'Hide "More actions" Button', description: 'Hides the three-dots "More actions" button (includes Thanks, Clip, etc.).', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner #button-shape.ytd-menu-renderer, #actions-inner ytd-button-renderer:has(button[aria-label*="Clip"]), #actions-inner ytd-button-renderer:has(button[aria-label*="Thanks"])', this.id); }, destroy() { this._styleElement?.remove(); }},
 
         // Group: Watch Page - Player Controls
+        {
+            id: 'autoMaxResolution',
+            name: 'Auto Max Resolution',
+            description: 'Automatically sets the video quality to the highest available resolution.',
+            group: 'Watch Page - Player Controls',
+            _onPlayerUpdated: null,
+            _onNavigateFinish: null,
+            init() {
+                const setMaxQuality = (player) => {
+                    if (!player || typeof player.getAvailableQualityLevels !== 'function') return;
+                    const levels = player.getAvailableQualityLevels();
+                    if (!levels || !levels.length) return;
+
+                    const best = levels
+                        .map(label => ({ label, num: parseInt((label.match(/\d+/) || [])[0], 10) || 0 }))
+                        .sort((a, b) => b.num - a.num)[0].label;
+
+                    try {
+                        player.setPlaybackQualityRange(best);
+                        console.log('[YT Suite AutoMaxRes] Set quality to', best);
+                    } catch (e) {
+                        console.warn('[YT Suite AutoMaxRes] Could not set quality', e);
+                    }
+                };
+
+                this._onPlayerUpdated = (evt) => {
+                    const player = evt?.target?.player_ || document.getElementById('movie_player');
+                    setMaxQuality(player);
+                };
+
+                this._onNavigateFinish = () => {
+                    const player = document.getElementById('movie_player');
+                    setTimeout(() => setMaxQuality(player), 500);
+                };
+
+                window.addEventListener('yt-player-updated', this._onPlayerUpdated, true);
+                window.addEventListener('yt-navigate-finish', this._onNavigateFinish, true);
+
+                // Initial check for already loaded player
+                this._onNavigateFinish();
+                console.log('[YT Suite AutoMaxRes] Initialized.');
+            },
+            destroy() {
+                if (this._onPlayerUpdated) window.removeEventListener('yt-player-updated', this._onPlayerUpdated, true);
+                if (this._onNavigateFinish) window.removeEventListener('yt-navigate-finish', this._onNavigateFinish, true);
+                console.log('[YT Suite AutoMaxRes] Disabled.');
+            }
+        },
         { id: 'hideNextButton', name: 'Hide "Next video" Button', description: 'Hides the next video button in the player controls.', group: 'Watch Page - Player Controls', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-next-button', this.id); }, destroy() { this._styleElement?.remove(); }},
         { id: 'hideAutoplayToggle', name: 'Hide Autoplay Toggle', description: 'Hides the autoplay toggle in the player controls.', group: 'Watch Page - Player Controls', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-autonav-toggle-button-container', this.id); }, destroy() { this._styleElement?.remove(); }},
         { id: 'hideSubtitlesToggle', name: 'Hide Subtitles Toggle', description: 'Hides the subtitles/CC button in the player controls.', group: 'Watch Page - Player Controls', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-subtitles-button', this.id); }, destroy() { this._styleElement?.remove(); }},
@@ -421,10 +541,14 @@
         { id: 'hideFullscreenButton', name: 'Hide Fullscreen Button', description: 'Hides the fullscreen button in the player controls.', group: 'Watch Page - Player Controls', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-fullscreen-button', this.id); }, destroy() { this._styleElement?.remove(); }},
     ];
 
-    function injectStyle(selector, featureId) {
+    function injectStyle(selector, featureId, isRawCss = false) {
         const style = document.createElement('style');
         style.id = `yt-suite-style-${featureId}`;
-        style.textContent = `${selector} { display: none !important; }`;
+        if (isRawCss) {
+            style.textContent = selector;
+        } else {
+            style.textContent = `${selector} { display: none !important; }`;
+        }
         document.head.appendChild(style);
         return style;
     }
@@ -497,7 +621,7 @@
         title.textContent = 'YouTube Customization Suite';
         const version = document.createElement('span');
         version.className = 'version';
-        version.textContent = 'v1.7';
+        version.textContent = 'v2.3';
         header.append(title, version);
 
         const main = document.createElement('main');
