@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         YouTube Customization Suite
-// @namespace    https://github.com/user/yt-enhancement-suite
+// @namespace    https://github.com/SysAdminDoc/Youtube_Customization_Suite
 // @version      3.15
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Matthew Parker
