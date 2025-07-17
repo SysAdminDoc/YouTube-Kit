@@ -1,16 +1,19 @@
 // ==UserScript==
 // @name         YouTube Customization Suite
 // @namespace    https://github.com/user/yt-enhancement-suite
-// @version      3.13
+// @version      3.15
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
+// @exclude      https://music.youtube.com/*
 // @icon         https://raw.githubusercontent.com/SysAdminDoc/Youtube_Customization_Suite/refs/heads/main/ytlogo.png
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_getResourceText
 // @grant        GM_notification
 // @grant        GM_download
+// @grant        GM.xmlHttpRequest
+// @connect      sponsor.ajay.app
 // @updateURL    https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/YouTube%20Customization%20Suite.user.js
 // @downloadURL  https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/YouTube%20Customization%20Suite.user.js
 // @resource     betterDarkMode https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/Themes/youtube-dark-theme.css
@@ -22,9 +25,11 @@
 (function() {
     'use strict';
 
+// ——————————————————————————————————————————————————————————————————————————
 //  ~ CHANGELOG ~
 //
 //  v3.15
+//  - ADDED: Option to skip sponsored segments using the SponsorBlock API.
 //  - ADDED: Option to hide the on-screen captions container.
 //  - RE-IMPLEMENTED: All features from v3.12-v3.14 on a more stable script base.
 //
@@ -54,6 +59,8 @@
 //  - ADDED: Behavior toggles (prevent autoplay, expand description, etc.).
 //  - ADDED: Content toggles (redirect Shorts, hide end cards, etc.).
 //  - ADDED: "Catppuccin Mocha" theme.
+//
+// ——————————————————————————————————————————————————————————————————————————
 
 
     // —————————————————————
@@ -159,6 +166,7 @@
             preventAutoplay: false,
             autoExpandDescription: false,
             sortCommentsNewestFirst: false,
+            skipSponsors: false, // <-- NEW SETTING
 
             // Watch Page - Other Elements
             hideMerchShelf: false,
@@ -230,10 +238,63 @@
         }
     };
 
+    // —————————————————————
+    // 2. FEATURE DEFINITIONS & LOGIC
+    // —————————————————————
 
-    // —————————————————————
-    // 2. FEATURE DEFINITIONS
-    // —————————————————————
+    // --- SponsorBlock Logic ---
+    let sponsorSegments = [];
+    let sponsorVideoId = null;
+    let sponsorCheckInterval = null;
+
+    function fetchSponsorSegments() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const newVideoId = urlParams.get('v');
+
+        if (newVideoId && newVideoId !== sponsorVideoId) {
+            sponsorVideoId = newVideoId;
+            sponsorSegments = []; // Reset segments for new video
+
+            GM.xmlHttpRequest({
+                method: 'GET',
+                url: `https://sponsor.ajay.app/api/skipSegments?videoID=${sponsorVideoId}&categories=["sponsor","selfpromo"]`,
+                onload: function(response) {
+                    if (response.status === 200) {
+                        try {
+                            const data = JSON.parse(response.responseText);
+                            sponsorSegments = data.map(item => item.segment);
+                        } catch (e) {
+                            console.error('[YT Suite SponsorBlock] Error parsing segments:', e);
+                            sponsorSegments = [];
+                        }
+                    } else {
+                        sponsorSegments = [];
+                    }
+                },
+                onerror: function(error) {
+                    console.error('[YT Suite SponsorBlock] API request failed:', error);
+                    sponsorSegments = [];
+                }
+            });
+        }
+    }
+
+    function checkSponsorSegment() {
+        const video = document.querySelector('video.html5-main-video');
+        if (video && !video.paused && sponsorSegments.length > 0) {
+            const currentTime = video.currentTime;
+            for (const segment of sponsorSegments) {
+                if (currentTime >= segment[0] && currentTime < segment[1]) {
+                    video.currentTime = segment[1];
+                    console.log(`[YT Suite] Sponsored segment skipped to ${segment[1]}`);
+                    break; // Skip to the next check
+                }
+            }
+        }
+    }
+    // --- End SponsorBlock Logic ---
+
+
     const features = [
         // Group: Header
         {
@@ -699,6 +760,29 @@
                 removeRule(this.id);
             }
         },
+        { // <-- NEW FEATURE DEFINITION
+            id: 'skipSponsors',
+            name: 'Skip Sponsored Segments',
+            description: 'Automatically skips sponsored sections and self-promotion in videos using the SponsorBlock API.',
+            group: 'Watch Page - Behavior',
+            init() {
+                if (window.location.pathname.startsWith('/watch')) {
+                    fetchSponsorSegments();
+                }
+                window.addEventListener('yt-navigate-finish', fetchSponsorSegments);
+                sponsorCheckInterval = setInterval(checkSponsorSegment, 500);
+            },
+            destroy() {
+                window.removeEventListener('yt-navigate-finish', fetchSponsorSegments);
+                if (sponsorCheckInterval) {
+                    clearInterval(sponsorCheckInterval);
+                    sponsorCheckInterval = null;
+                }
+                sponsorSegments = [];
+                sponsorVideoId = null;
+            }
+        },
+
 
         // Group: Watch Page - Other Elements
         { id: 'hideMerchShelf', name: 'Hide Merch Shelf', description: 'Hides the merchandise shelf that appears below the video.', group: 'Watch Page - Other Elements', _styleElement: null, init() { this._styleElement = injectStyle('ytd-merch-shelf-renderer', this.id); }, destroy() { this._styleElement?.remove(); }},
@@ -1258,7 +1342,7 @@
         title.textContent = 'YouTube Customization Suite';
         const version = document.createElement('span');
         version.className = 'version';
-        version.textContent = 'v3.13';
+        version.textContent = 'v3.15'; // <-- UPDATED VERSION
         header.append(title, version);
 
         const main = document.createElement('main');
