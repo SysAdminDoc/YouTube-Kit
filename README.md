@@ -4,7 +4,7 @@ A powerful userscript for ultimate YouTube customization, allowing you to hide e
 
 ## BETA: Working out small bugs, still adding additional features. Script is stable.
 
-## [Install Here](https://github.com/SysAdminDoc/Youtube_Customization_Suite/blob/main/YouTube%20Customization%20Suite.user.js)
+## [Install Here](https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/YouTube%20Customization%20Suite.user.js)
 
 ## Introduction
 
