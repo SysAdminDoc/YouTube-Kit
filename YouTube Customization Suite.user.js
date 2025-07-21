@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         YouTube Customization Suite
 // @namespace    https://github.com/user/yt-enhancement-suite
-// @version      3.19.1
+// @version      3.20
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
 // @exclude      https://*.youtube.com/embed/*
-// @exclude      https://*.youtube.com/shorts/*
+// @exclude      https://music.youtube.com/*
 // @icon         https://raw.githubusercontent.com/SysAdminDoc/Youtube_Customization_Suite/refs/heads/main/ytlogo.png
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -29,16 +29,17 @@
 // ——————————————————————————————————————————————————————————————————————————
 //  ~ CHANGELOG ~
 //
-//  v3.19.1
-//  - FIXED: Race condition on watch pages where the player would sometimes fail to expand. Added a delay to the theater mode click to ensure the player is ready.
-//  - FIXED: Conflicting CSS rule that could cause layout issues when "Fit Player to Window" is active. The rule is now conditional.
-//
-//  v3.19
-//  - ADDED: New option "Hide Clarify Boxes" to hide informational panels on sensitive topics below videos.
-//  - ADDED: New option "Hide Chat Messages from Bots" to filter live chat messages from users with "bot" in their name.
-//
-//  v3.18
-//  - FIXED: Baked in new CSS rules for ytd-watch-metadata and ytd-live-chat-frame to correct the layout on watch pages by default.
+//  v3.20
+//  - INTEGRATED: Features from multiple userscripts.
+//  - ADDED: 'Widen Search Bar' feature in Header group.
+//  - ADDED: 'Squarify' theme option to remove all border-radius.
+//  - ADDED: 'Hide Video Description Row' option in Watch Page - Layout.
+//  - ADDED: New 'Player Enhancements' group with 'Add Loop & Screenshot Buttons' feature. (From YouTube Enhancer)
+//  - ADDED: 'Open Channel Pages on "Videos" Tab' feature. (From Youtube channels open to "Videos" tab)
+//  - REPLACED: Original SponsorBlock logic with the more advanced version from sb.js for better segment handling.
+//  - FIXED: Auto-quality popup menu should now reliably close after selection.
+//  - FIXED: Watch page CSS injection logic updated.
+//  - UPDATED: Settings cog icon replaced with a higher-quality SVG.
 //
 // ——————————————————————————————————————————————————————————————————————————
 
@@ -114,6 +115,7 @@
             hideCreateButton: false,
             hideVoiceSearch: false,
             logoToSubscriptions: false,
+            widenSearchBar: false,
 
             // Sidebar
             hideSidebar: false,
@@ -122,6 +124,7 @@
             nativeDarkMode: false,
             betterDarkMode: false,
             catppuccinMocha: false,
+            squarify: false,
 
             // Progress Bar Themes
             nyanCatProgressBar: false,
@@ -134,12 +137,14 @@
             hideSubscriptionOptions: false,
             fiveVideosPerRow: false,
             hidePaidContentOverlay: false,
+            redirectToVideosTab: false,
 
             // Watch Page - Layout
             fitPlayerToWindow: false,
             hideRelatedVideos: false,
             expandVideoWidth: true,
             floatingLogoOnWatch: false,
+            hideDescriptionRow: false,
 
             // Watch Page - Behavior
             preventAutoplay: false,
@@ -149,7 +154,7 @@
 
             // Watch Page - Other Elements
             hideMerchShelf: false,
-            hideClarifyBoxes: false, // <-- NEW SETTING
+            hideClarifyBoxes: false,
             hideDescriptionExtras: false,
             hideHashtags: false,
             hidePinnedComments: false,
@@ -175,7 +180,7 @@
             hideTopFanIcons: false,
             hideSuperChats: false,
             hideLevelUp: false,
-            hideChatBots: false, // <-- NEW SETTING
+            hideChatBots: false,
             keywordFilterList: '',
 
             // Watch Page - Action Buttons
@@ -190,6 +195,9 @@
             replaceWithCobaltDownloader: false,
             hideSponsorButton: false,
             hideMoreActionsButton: false,
+
+            // Player Enhancements
+            playerEnhancements: false,
 
             // Watch Page - Player Controls
             autoMaxResolution: false,
@@ -222,59 +230,6 @@
     // —————————————————————
     // 2. FEATURE DEFINITIONS & LOGIC
     // —————————————————————
-
-    // --- SponsorBlock Logic ---
-    let sponsorSegments = [];
-    let sponsorVideoId = null;
-    let sponsorCheckInterval = null;
-
-    function fetchSponsorSegments() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const newVideoId = urlParams.get('v');
-
-        if (newVideoId && newVideoId !== sponsorVideoId) {
-            sponsorVideoId = newVideoId;
-            sponsorSegments = [];
-
-            GM.xmlHttpRequest({
-                method: 'GET',
-                url: `https://sponsor.ajay.app/api/skipSegments?videoID=${sponsorVideoId}&categories=["sponsor","selfpromo"]`,
-                onload: function(response) {
-                    if (response.status === 200) {
-                        try {
-                            const data = JSON.parse(response.responseText);
-                            sponsorSegments = data.map(item => item.segment);
-                        } catch (e) {
-                            console.error('[YT Suite SponsorBlock] Error parsing segments:', e);
-                            sponsorSegments = [];
-                        }
-                    } else {
-                        sponsorSegments = [];
-                    }
-                },
-                onerror: function(error) {
-                    console.error('[YT Suite SponsorBlock] API request failed:', error);
-                    sponsorSegments = [];
-                }
-            });
-        }
-    }
-
-    function checkSponsorSegment() {
-        const video = document.querySelector('video.html5-main-video');
-        if (video && !video.paused && sponsorSegments.length > 0) {
-            const currentTime = video.currentTime;
-            for (const segment of sponsorSegments) {
-                if (currentTime >= segment[0] && currentTime < segment[1]) {
-                    video.currentTime = segment[1];
-                    console.log(`[YT Suite] Sponsored segment skipped to ${segment[1]}`);
-                    break;
-                }
-            }
-        }
-    }
-    // --- End SponsorBlock Logic ---
-
 
     const features = [
         // Group: Header
@@ -317,6 +272,18 @@
                 const logoLink = document.querySelector('ytd-topbar-logo-renderer a#logo');
                 if (logoLink) logoLink.href = '/';
             }
+        },
+        {
+            id: 'widenSearchBar',
+            name: 'Widen Search Bar',
+            description: 'Stretches the search bar to fill more of the header space.',
+            group: 'Header',
+            _styleElement: null,
+            init() {
+                const css = `yt-searchbox[center-search-bar] { flex: 1 !important; max-width: unset !important; }`;
+                this._styleElement = injectStyle(css, this.id, true);
+            },
+            destroy() { this._styleElement?.remove(); }
         },
 
         // Group: Sidebar
@@ -406,6 +373,18 @@
             destroy() {
                 this._styleElement?.remove();
             }
+        },
+        {
+            id: 'squarify',
+            name: 'Squarify',
+            description: 'Removes rounded corners from most elements for a sharper look.',
+            group: 'Themes',
+            _styleElement: null,
+            init() {
+                const css = `* { border-radius: 0 !important; }`;
+                this._styleElement = injectStyle(css, this.id, true);
+            },
+            destroy() { this._styleElement?.remove(); }
         },
 
         // Group: Progress Bar Themes
@@ -551,6 +530,46 @@
             init() { this._styleElement = injectStyle('ytd-paid-content-overlay-renderer, ytm-paid-content-overlay-renderer', this.id); },
             destroy() { this._styleElement?.remove(); }
         },
+        // --- Start of Youtube channels open to "Videos" tab Integration ---
+        {
+            id: 'redirectToVideosTab',
+            name: 'Open Channel Pages on "Videos" Tab',
+            description: 'Redirects channel homepages to their "Videos" tab by default.',
+            group: 'General Content',
+            _mousedownListener: null,
+            init() {
+                const RX_CHANNEL_HOME = /^(https?:\/\/www\.youtube\.com)((\/(user|channel|c)\/[^/]+)(\/?$|\/featured[^/])|(\/@(?!.*\/)[^/]+))/;
+                const DEFAULT_TAB_HREF = "/videos";
+
+                // This handles navigation from an external site or direct URL entry
+                const handleDirectNavigation = () => {
+                    if (RX_CHANNEL_HOME.test(location.href)) {
+                        const newUrl = RegExp.$2 + DEFAULT_TAB_HREF;
+                        if (location.href !== newUrl) {
+                            location.href = newUrl;
+                        }
+                    }
+                };
+                handleDirectNavigation(); // Run once on script load
+                addNavigateRule('channelRedirectorNav', handleDirectNavigation); // Run on YT navigation
+
+                // This handles clicks on channel links within YouTube
+                this._mousedownListener = (event) => {
+                    const anchorTag = event.target.closest('a');
+                    if (anchorTag && RX_CHANNEL_HOME.test(anchorTag.href)) {
+                        anchorTag.href = RegExp.$2 + DEFAULT_TAB_HREF;
+                    }
+                };
+                document.addEventListener('mousedown', this._mousedownListener, true);
+            },
+            destroy() {
+                if (this._mousedownListener) {
+                    document.removeEventListener('mousedown', this._mousedownListener, true);
+                }
+                removeNavigateRule('channelRedirectorNav');
+            }
+        },
+        // --- End of Youtube channels open to "Videos" tab Integration ---
 
         // Group: Watch Page - Layout
         {
@@ -566,7 +585,6 @@
                 document.body.classList.toggle('yt-suite-fit-to-window', isWatchPage);
 
                 if (isWatchPage) {
-                    // Add a delay to ensure the player is ready for the click
                     setTimeout(() => {
                         const watchFlexy = document.querySelector('ytd-watch-flexy:not([theater])');
                         if (watchFlexy) {
@@ -666,6 +684,15 @@
                 this._element = null;
             }
         },
+        {
+            id: 'hideDescriptionRow',
+            name: 'Hide Video Description Row',
+            description: 'Hides the entire video description, including view count, date, and hashtags.',
+            group: 'Watch Page - Layout',
+            _styleElement: null,
+            init() { this._styleElement = injectStyle('ytd-watch-metadata #bottom-row', this.id); },
+            destroy() { this._styleElement?.remove(); }
+        },
 
         // Group: Watch Page - Behavior
         {
@@ -687,7 +714,7 @@
                 window.addEventListener('yt-navigate-finish', () => setTimeout(pauseRule, 500));
                 setTimeout(pauseRule, 500);
             },
-            destroy() { /* No cleanup needed as it's a one-time action on load */ }
+            destroy() { /* No cleanup needed */ }
         },
         {
             id: 'autoExpandDescription',
@@ -739,28 +766,183 @@
                 removeNavigateRule(this.id);
             }
         },
+        // --- Start of sb.js Integration ---
         {
             id: 'skipSponsors',
-            name: 'Skip Sponsored Segments',
-            description: 'Automatically skips sponsored sections and self-promotion in videos using the SponsorBlock API.',
+            name: 'SponsorBlock (Enhanced)',
+            description: 'Automatically skips sponsored segments and other annoying parts of videos. (Based on sb.js)',
             group: 'Watch Page - Behavior',
+            // sb.js internal state
+            _video: null,
+            _videoID: null,
+            _muteEndTime: 0,
+            _skipSegments: new Map(),
+            _muteSegments: new Map(),
+            _poi_listener: null,
+            _timeUpdateListener: null,
+
             init() {
-                if (window.location.pathname.startsWith('/watch')) {
-                    fetchSponsorSegments();
-                }
-                window.addEventListener('yt-navigate-finish', fetchSponsorSegments);
-                sponsorCheckInterval = setInterval(checkSponsorSegment, 500);
+                this._timeUpdateListener = this.skipOrMute.bind(this);
+                document.addEventListener("yt-navigate-start", this.reset.bind(this));
+                document.addEventListener("yt-navigate-finish", this.setup.bind(this));
+                this.setup();
             },
+
             destroy() {
-                window.removeEventListener('yt-navigate-finish', fetchSponsorSegments);
-                if (sponsorCheckInterval) {
-                    clearInterval(sponsorCheckInterval);
-                    sponsorCheckInterval = null;
+                document.removeEventListener("yt-navigate-start", this.reset.bind(this));
+                document.removeEventListener("yt-navigate-finish", this.setup.bind(this));
+                if (this._video && this._timeUpdateListener) {
+                    this._video.removeEventListener("timeupdate", this._timeUpdateListener);
                 }
-                sponsorSegments = [];
-                sponsorVideoId = null;
+                document.querySelectorAll('[id^="sbjs-label-"]').forEach(e => e.remove());
+                this.reset();
+            },
+
+            setup() {
+                const getVideoID = () => new URL(window.location.href).searchParams.get("v");
+                if (this._videoID === getVideoID()) return;
+
+                console.log(`[YT Suite] SponsorBlock module loaded.`);
+                if (document.querySelector("#previewbar"))
+                    return console.log("[YT Suite] SponsorBlock detected another SB instance, exiting.");
+
+                this.reset();
+                this._video = document.querySelector("video");
+                this._videoID = getVideoID();
+                this.fetchSegments(this._videoID);
+                if (!this._video) return console.log("[YT Suite] SponsorBlock: No video found.");
+                this._video.addEventListener("timeupdate", this._timeUpdateListener);
+            },
+
+            reset() {
+                if (this._video && this._timeUpdateListener) this._video.removeEventListener("timeupdate", this._timeUpdateListener);
+                this._video = null;
+                this._videoID = null;
+                this._muteEndTime = 0;
+                this._skipSegments = new Map();
+                this._muteSegments = new Map();
+                document.querySelectorAll('[id^="sbjs-label-"]').forEach(e => e.remove());
+                if (this._poi_listener) document.removeEventListener("keydown", this._poi_listener);
+            },
+
+            fetchSegments(videoID) {
+                const categories = ["sponsor", "selfpromo", "interaction", "intro", "outro", "preview", "music_offtopic", "exclusive_access", "poi_highlight"];
+                const actionTypes = ["skip", "mute", "full", "poi"];
+                const serverEndpoint = "https://sponsor.ajay.app";
+                const url = `${serverEndpoint}/api/skipSegments?videoID=${videoID}&categories=${JSON.stringify(categories)}&actionTypes=${JSON.stringify(actionTypes)}`;
+
+                GM.xmlHttpRequest({
+                    method: 'GET',
+                    url: url,
+                    onload: (response) => {
+                        if (response.status !== 200) return console.error("[YT Suite] SponsorBlock: Error fetching segments", response.status);
+                        const data = JSON.parse(response.responseText);
+                        const convertSegment = s => [s.segment[0], { end: s.segment[1], uuid: s.UUID }];
+                        data.forEach(s => {
+                            if (s.actionType === "skip") this._skipSegments.set(...convertSegment(s));
+                            else if (s.actionType === "mute") this._muteSegments.set(...convertSegment(s));
+                            else if (s.actionType === "full") this.createVideoLabel(s);
+                            else if (s.actionType === "poi") this.createPOILabel(s);
+                        });
+                        console.log("[YT Suite] SponsorBlock: Segments loaded.");
+                    }
+                });
+            },
+
+            trackSkip(uuid) {
+                const serverEndpoint = "https://sponsor.ajay.app";
+                GM.xmlHttpRequest({
+                    method: 'POST',
+                    url: `${serverEndpoint}/api/viewedVideoSponsorTime?UUID=${uuid}`
+                });
+            },
+
+            skipOrMute() {
+                if (!this._video) return;
+                const currentTime = this._video.currentTime;
+                if (this._video.muted && currentTime >= this._muteEndTime) {
+                    this._video.muted = false;
+                    this._muteEndTime = 0;
+                }
+
+                const skipEnd = this.findEndTime(currentTime, this._skipSegments);
+                if (skipEnd) this._video.currentTime = skipEnd;
+
+                const muteEnd = this.findEndTime(currentTime, this._muteSegments);
+                if (muteEnd) {
+                    this._video.muted = true;
+                    this._muteEndTime = muteEnd;
+                }
+            },
+
+            findEndTime(now, map) {
+                const skipThreshold = [0.2, 1];
+                let endTime;
+                for (const startTime of map.keys()) {
+                    if (now + skipThreshold[0] >= startTime && now - startTime <= skipThreshold[1]) {
+                        const segment = map.get(startTime);
+                        endTime = segment.end;
+                        this.trackSkip(segment.uuid);
+                        map.delete(startTime);
+                        for (const overlapStart of map.keys()) {
+                            if (endTime >= overlapStart && overlapStart >= now) {
+                                const overSegment = map.get(overlapStart);
+                                endTime = overSegment.end;
+                                this.trackSkip(overSegment.uuid);
+                                map.delete(overlapStart);
+                            }
+                        }
+                        return endTime;
+                    }
+                }
+                return endTime;
+            },
+
+            createPOILabel(poiLabel) {
+                this.createVideoLabel(poiLabel, "poi");
+                const highlightKey = "Enter";
+                this._poi_listener = e => {
+                    if (e.key === highlightKey) {
+                        this._video.currentTime = poiLabel.segment[1];
+                        this.trackSkip(poiLabel.UUID);
+                        const label = document.querySelector("#sbjs-label-poi");
+                        if (label) label.style.display = "none";
+                        document.removeEventListener("keydown", this._poi_listener);
+                        this._poi_listener = null;
+                    }
+                };
+                document.addEventListener("keydown", this._poi_listener);
+            },
+
+            createVideoLabel(videoLabel, type = "full") {
+                const check = () => {
+                    const title = document.querySelector("#title h1, h1.title.ytd-video-primary-info-renderer");
+                    if (title) {
+                        const highlightKey = "Enter";
+                        const category = videoLabel.category;
+                        const fvString = cat => `The entire video is ${cat} and is too tightly integrated to be able to seperate`;
+                        const styles = {
+                            sponsor: ["#0d0", "#111", fvString("sponsor")],
+                            selfpromo: ["#ff0", "#111", fvString("selfpromo")],
+                            exclusive_access: ["#085", "#fff", "This video showcases a product, service or location that they've received free or subsidized access to"],
+                            poi_highlight: ["#f18", "#fff", `Press ${highlightKey} to skip to the highlight`],
+                        };
+                        const style = styles[category] || ["#ccc", "#111", fvString(category)];
+                        const label = document.createElement("span");
+                        label.title = style[2];
+                        label.innerText = category;
+                        label.id = `sbjs-label-${type}`;
+                        label.style = `color: ${style[1]}; background-color: ${style[0]}; display: flex; margin: 0 5px; padding: 2px 6px; font-size: 12px; font-weight: bold; border-radius: 4px;`;
+                        title.style.display = "flex";
+                        title.prepend(label);
+                    } else {
+                        setTimeout(check, 200);
+                    }
+                };
+                check();
             }
         },
+        // --- End of sb.js Integration ---
 
 
         // Group: Watch Page - Other Elements
@@ -922,7 +1104,7 @@
             init() {
                 const ytLiker = () => {
                     const subscribeButton = document.querySelector('#subscribe-button-shape .yt-core-attributed-string--white-space-no-wrap');
-                    const likeButton = document.querySelector('button.yt-spec-button-shape-next--segmented-start');
+                    const likeButton = document.querySelector('ytd-watch-metadata like-button-view-model button');
                     if (!subscribeButton || subscribeButton.innerHTML !== 'Subscribed') return;
                     if (likeButton && likeButton.ariaPressed === 'false') likeButton.click();
                 };
@@ -964,70 +1146,52 @@
             _lastUrl: '',
             _navigateListener: null,
             _styleElement: null,
-
             _INSTANCE: { protocol: 'https', apiHost : 'cobalt-api.meowing.de', frontend: 'cobalt.meowing.de' },
             _API_KEY: 'e4d331cc8267e6d04ecad6a5e22da9c7b31e97df',
             _getApiUrl() { return `${this._INSTANCE.protocol}://${this._INSTANCE.apiHost}/`; },
             _getFrontendUrl() { return `${this._INSTANCE.protocol}://${this._INSTANCE.frontend}/#`; },
-
             _isWatchPage() { return window.location.href.includes('/watch?'); },
             _removeElement(sel) { const e = document.querySelector(sel); if (e) e.remove(); },
-
             async _cobaltApiCall(videoUrl, audio = false, quality = '1080', format = 'webm') {
                 const codec = format === 'webm' ? 'vp9' : 'h264';
                 const body = { url: videoUrl, videoQuality: quality.replace('p',''), youtubeVideoCodec: codec, filenameStyle: 'pretty', downloadMode: audio ? 'audio' : 'auto' };
                 try {
-                    const resp = await window.fetch(this._getApiUrl(), {
-                        method: 'POST', credentials: 'include',
-                        headers: { 'Content-Type': 'application/json', 'X-API-Key': this._API_KEY },
-                        body: JSON.stringify(body)
+                    const resp = await GM.xmlHttpRequest({
+                        method: 'POST', url: this._getApiUrl(),
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-API-Key': this._API_KEY },
+                        data: JSON.stringify(body)
                     });
-                    const data = await resp.json();
+                    const data = JSON.parse(resp.responseText);
                     if (data.status === 'error') {
                         const c = data.error?.code || '';
-                        GM_notification(c.includes('no_matching_format') ? 'Format unavailable – try a lower quality' : 'Cobalt error: ' + (data.error.message || data.error));
+                        GM_notification(c.includes('no_matching_format') ? 'Format unavailable – try a lower quality' : 'Cobalt error: ' + (data.text || data.error));
                         return null;
                     }
-                    return data.url || data.downloadUrl || null;
+                    return data.url || null;
                 } catch(err) {
                     console.error('Cobalt request failed', err);
                     return null;
                 }
             },
-
             async _listQualities() {
                 const set = new Set();
                 const fmts = window.ytInitialPlayerResponse?.streamingData?.adaptiveFormats;
-                if (fmts) {
-                    fmts.forEach(f => { if (f.qualityLabel) { const m = f.qualityLabel.match(/^(\d+)/); if (m) set.add(m[1]); } });
-                } else {
-                    let html = ''; try { html = await (await fetch(location.href)).text() } catch {}
-                    let m; const re = /"qualityLabel":"(\d+)p\d*"/g;
-                    while ((m = re.exec(html)) !== null) set.add(m[1]);
-                }
+                if (fmts) fmts.forEach(f => { if (f.qualityLabel) { const m = f.qualityLabel.match(/^(\d+)/); if (m) set.add(m[1]); } });
                 return [...set].map(Number).sort((a, b) => b - a);
             },
-
             async _listFormats() {
                 const set = new Set();
                 const fmts = window.ytInitialPlayerResponse?.streamingData?.adaptiveFormats;
-                if (fmts) {
-                    fmts.forEach(f => { const m = f.mimeType.match(/\/([^;]+)/); if (m) set.add(m[1]); });
-                } else {
-                    let html = ''; try { html = await (await fetch(location.href)).text() } catch {}
-                    let m; const re = /"mimeType":"video\/([^;]+);/g;
-                    while ((m = re.exec(html)) !== null) set.add(m[1]);
-                }
+                if (fmts) fmts.forEach(f => { const m = f.mimeType.match(/\/([^;]+)/); if (m) set.add(m[1]); });
                 set.add('mp3');
                 const arr = [...set];
                 const idx = arr.indexOf('webm');
                 if (idx > -1) { arr.splice(idx, 1); arr.unshift('webm'); }
                 return arr;
             },
-
             _showPopup(videoUrl) {
                 this._removeElement('#cobalt-popup');
-                const dark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+                const dark = document.documentElement.hasAttribute('dark');
                 const c = document.createElement('div');
                 c.id = 'cobalt-popup';
                 c.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999;padding:16px;border-radius:8px;background:${dark?'#1e1e1e':'#fff'};color:${dark?'#ddd':'#000'};border:2px solid ${dark?'#444':'#888'};box-shadow:0 4px 12px rgba(0,0,0,0.5);width:300px;max-height:80vh;overflow:auto;font-family:sans-serif;font-size:14px;`;
@@ -1071,7 +1235,6 @@
                     GM_download({ url: link, name, saveAs: true });
                 });
             },
-
             _injectButton() {
                 if (!this._isWatchPage() || document.querySelector('button[id^="cobaltBtn"]')) return;
                 const id = 'cobaltBtn' + Math.random().toString(36).substr(2, 5);
@@ -1085,21 +1248,18 @@
                 const parent = document.querySelector('#actions-inner #end-buttons, #top-level-buttons-computed');
                 if (parent) parent.appendChild(btn);
             },
-
             _runInitLogic() {
                 if (window.location.href === this._lastUrl) return;
                 this._lastUrl = window.location.href;
                 this._injectButton();
                 this._removeElement('#cobalt-popup');
             },
-
             init() {
                 this._styleElement = injectStyle('ytd-download-button-renderer', 'hideNativeDownload');
-                this._navigateListener = () => setTimeout(() => this._runInitLogic(), 1000);
+                this._navigateListener = () => setTimeout(() => this._runInitLogic.bind(this)(), 1000);
                 window.addEventListener('yt-navigate-finish', this._navigateListener);
-                setTimeout(() => this._runInitLogic(), 2000);
+                setTimeout(this._runInitLogic.bind(this), 2000);
             },
-
             destroy() {
                 if (this._navigateListener) window.removeEventListener('yt-navigate-finish', this._navigateListener);
                 this._removeElement('button[id^="cobaltBtn"]');
@@ -1111,35 +1271,253 @@
         { id: 'hideSponsorButton', name: 'Hide Join/Sponsor Button', description: 'Hides the channel membership "Join" button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#sponsor-button', this.id); }, destroy() { this._styleElement?.remove(); }},
         { id: 'hideMoreActionsButton', name: 'Hide "More actions" (3-dot) Button', description: 'Hides the three-dots "More actions" menu button.', group: 'Watch Page - Action Buttons', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner #button-shape > button[aria-label="More actions"]', this.id); }, destroy() { this._styleElement?.remove(); }},
 
+        // Group: Player Enhancements
+        // --- Start of YouTube Enhancer Integration ---
+        {
+            id: 'playerEnhancements',
+            name: 'Add Loop & Screenshot Buttons',
+            description: 'Adds buttons to loop the video, save a screenshot, or copy a screenshot to the clipboard.',
+            group: 'Player Enhancements',
+            _styleElement: null,
+            _observer: null,
+            _contextMenuListener: null,
+
+            // --- Start of YouTube Enhancer: iconUtils ---
+            _iconUtils: {
+                createGradientDefs(isShortsButton = false) {
+                    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                    const hoverGradient = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+                    hoverGradient.setAttribute('id', isShortsButton ? 'shortsButtonGradient' : 'buttonGradient');
+                    hoverGradient.setAttribute('x1', '0%'); hoverGradient.setAttribute('y1', '0%');
+                    hoverGradient.setAttribute('x2', '100%'); hoverGradient.setAttribute('y2', '100%');
+                    const hoverStop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+                    hoverStop1.setAttribute('offset', '0%'); hoverStop1.setAttribute('style', 'stop-color:#f03');
+                    const hoverStop2 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+                    hoverStop2.setAttribute('offset', '100%'); hoverStop2.setAttribute('style', 'stop-color:#ff2791');
+                    hoverGradient.appendChild(hoverStop1); hoverGradient.appendChild(hoverStop2);
+                    defs.appendChild(hoverGradient);
+                    const successGradient = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+                    successGradient.setAttribute('id', isShortsButton ? 'shortsSuccessGradient' : 'successGradient');
+                    successGradient.setAttribute('x1', '0%'); successGradient.setAttribute('y1', '0%');
+                    successGradient.setAttribute('x2', '100%'); successGradient.setAttribute('y2', '100%');
+                    const successStop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+                    successStop1.setAttribute('offset', '0%'); successStop1.setAttribute('style', 'stop-color:#0f9d58');
+                    const successStop2 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+                    successStop2.setAttribute('offset', '100%'); successStop2.setAttribute('style', 'stop-color:#00c853');
+                    successGradient.appendChild(successStop1); successGradient.appendChild(successStop2);
+                    defs.appendChild(successGradient);
+                    return defs;
+                },
+                createBaseSVG(viewBox, fill = '#e8eaed', isShortsButton = false) {
+                    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    svg.setAttribute('viewBox', viewBox);
+                    svg.setAttribute('fill', fill);
+                    svg.appendChild(this.createGradientDefs(isShortsButton));
+                    return svg;
+                },
+                paths: {
+                    loopPath: 'M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z',
+                    screenshotPath: 'M20 5h-3.17L15 3.17V2H9v1.17L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-3 12H7a.5.5 0 0 1-.4-.8l2-2.67c.2-.27.6-.27.8 0L11.25 16l2.6-3.47c.2-.27.6-.27.8 0l2.75 3.67a.5.5 0 0 1-.4.8',
+                    copyScreenshotPath: 'M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z'
+                },
+                createLoopIcon() {
+                    const svg = this.createBaseSVG('0 0 24 24');
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('d', this.paths.loopPath);
+                    svg.appendChild(path);
+                    return svg;
+                },
+                createSaveScreenshotIcon() {
+                    const svg = this.createBaseSVG('0 0 24 24');
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('d', this.paths.screenshotPath);
+                    svg.appendChild(path);
+                    return svg;
+                },
+                createCopyScreenshotIcon() {
+                    const svg = this.createBaseSVG('0 0 24 24');
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('d', this.paths.copyScreenshotPath);
+                    svg.appendChild(path);
+                    return svg;
+                }
+            },
+            // --- End of YouTube Enhancer: iconUtils ---
+
+            // --- Start of YouTube Enhancer: buttonUtils ---
+            _buttonUtils: {
+                getVideoId() {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    return urlParams.get('v') || window.location.pathname.split('/').pop();
+                },
+                async getVideoTitle() {
+                    try {
+                        const videoId = this.getVideoId();
+                        // Leveraging existing player data if available
+                        if (window.ytInitialPlayerResponse?.videoDetails?.title) {
+                            return window.ytInitialPlayerResponse.videoDetails.title;
+                        }
+                        return 'YouTube_Screenshot';
+                    } catch (error) {
+                        return 'YouTube_Screenshot';
+                    }
+                },
+                formatTime(time) {
+                    const date = new Date();
+                    const dateString = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+                    const timeString = [Math.floor(time / 3600), Math.floor((time % 3600) / 60), Math.floor(time % 60)].map(v => String(v).padStart(2, '0')).join('-');
+                    return `${dateString}_${timeString}`;
+                },
+                async captureScreenshot(action = 'download') {
+                    const player = document.querySelector('.html5-main-video');
+                    if (!player) return;
+
+                    const canvas = document.createElement("canvas");
+                    canvas.width = player.videoWidth;
+                    canvas.height = player.videoHeight;
+                    canvas.getContext('2d').drawImage(player, 0, 0, canvas.width, canvas.height);
+
+                    const title = await this.getVideoTitle();
+                    const filename = `${title}_${this.formatTime(player.currentTime)}.png`;
+
+                    canvas.toBlob(async (blob) => {
+                        if (action === 'copy') {
+                            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                        } else {
+                            GM_download({ url: URL.createObjectURL(blob), name: filename, saveAs: true });
+                        }
+                    }, 'image/png');
+                }
+            },
+            // --- End of YouTube Enhancer: buttonUtils ---
+
+            init() {
+                const buttonCSS = `
+                    .yt-suite-enhancer-btn { display: flex; align-items: center; justify-content: center; }
+                    .yt-suite-enhancer-btn svg { width: 24px; height: 24px; transition: fill 0.1s ease; fill: #fff; }
+                    .yt-suite-enhancer-btn:hover svg { fill: #ff0000; }
+                    .yt-suite-enhancer-btn.active svg { fill: #3ea6ff; }
+                    .yt-suite-enhancer-btn.clicked svg { animation: suite-enhancer-click-anim 0.5s; }
+                    @keyframes suite-enhancer-click-anim { 0%, 100% { fill: #fff; } 50% { fill: #0f9d58; } }
+                `;
+                this._styleElement = injectStyle(buttonCSS, 'playerEnhancements-style', true);
+                addNavigateRule('playerEnhancementsNav', this.insertButtons.bind(this));
+            },
+
+            destroy() {
+                this._styleElement?.remove();
+                this._observer?.disconnect();
+                this._observer = null;
+                const video = document.querySelector('.html5-main-video');
+                if (video && this._contextMenuListener) video.removeEventListener('contextmenu', this._contextMenuListener);
+                this._contextMenuListener = null;
+                document.querySelector('.yt-suite-enhancer-loop-btn')?.remove();
+                document.querySelector('.yt-suite-enhancer-save-btn')?.remove();
+                document.querySelector('.yt-suite-enhancer-copy-btn')?.remove();
+                removeNavigateRule('playerEnhancementsNav');
+            },
+
+            insertButtons() {
+                if (!window.location.pathname.startsWith('/watch')) return;
+                const controls = document.querySelector('div.ytp-left-controls');
+                if (!controls || document.querySelector('.yt-suite-enhancer-loop-btn')) return;
+
+                // Loop Button
+                const loopBtn = document.createElement('button');
+                loopBtn.className = 'ytp-button yt-suite-enhancer-btn yt-suite-enhancer-loop-btn';
+                loopBtn.title = 'Loop Video';
+                loopBtn.appendChild(this._iconUtils.createLoopIcon());
+                loopBtn.addEventListener('click', this.toggleLoopState.bind(this));
+                controls.appendChild(loopBtn);
+
+                // Save Screenshot Button
+                const saveBtn = document.createElement('button');
+                saveBtn.className = 'ytp-button yt-suite-enhancer-btn yt-suite-enhancer-save-btn';
+                saveBtn.title = 'Save Screenshot';
+                saveBtn.appendChild(this._iconUtils.createSaveScreenshotIcon());
+                saveBtn.addEventListener('click', this.handleScreenshotClick.bind(this, 'download'));
+                controls.appendChild(saveBtn);
+
+                // Copy Screenshot Button
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'ytp-button yt-suite-enhancer-btn yt-suite-enhancer-copy-btn';
+                copyBtn.title = 'Copy Screenshot to Clipboard';
+                copyBtn.appendChild(this._iconUtils.createCopyScreenshotIcon());
+                copyBtn.addEventListener('click', this.handleScreenshotClick.bind(this, 'copy'));
+                controls.appendChild(copyBtn);
+
+                this.addLoopObserver();
+            },
+
+            toggleLoopState() {
+                const video = document.querySelector('.html5-main-video');
+                if (!video) return;
+                video.loop = !video.loop;
+                this.updateLoopControls();
+            },
+
+            updateLoopControls() {
+                const video = document.querySelector('.html5-main-video');
+                const loopButton = document.querySelector('.yt-suite-enhancer-loop-btn');
+                if (!video || !loopButton) return;
+
+                const isActive = video.loop;
+                loopButton.classList.toggle('active', isActive);
+                loopButton.setAttribute('title', isActive ? 'Stop Looping' : 'Loop Video');
+            },
+
+            addLoopObserver() {
+                const video = document.querySelector('.html5-main-video');
+                if (!video) return;
+
+                this._observer = new MutationObserver(() => this.updateLoopControls());
+                this._observer.observe(video, { attributes: true, attributeFilter: ['loop'] });
+
+                this._contextMenuListener = () => {
+                    setTimeout(() => {
+                        const checkbox = document.querySelector('.ytp-menuitem[role="menuitemcheckbox"]');
+                        if (checkbox) {
+                            checkbox.setAttribute('aria-checked', video.loop);
+                            checkbox.addEventListener('click', () => this.toggleLoopState(), { once: true });
+                        }
+                    }, 50);
+                };
+                video.addEventListener('contextmenu', this._contextMenuListener);
+            },
+
+            handleScreenshotClick(action, event) {
+                const button = event.currentTarget;
+                button.classList.add('clicked');
+                setTimeout(() => button.classList.remove('clicked'), 500);
+                this._buttonUtils.captureScreenshot(action);
+            }
+        },
+        // --- End of YouTube Enhancer Integration ---
+
         // Group: Watch Page - Player Controls
         {
             id: 'autoMaxResolution',
             name: 'Auto Max Resolution',
             description: 'Automatically sets the video quality to the highest available resolution.',
             group: 'Watch Page - Player Controls',
-            _onPlayerUpdated: null,
-            _onNavigateFinish: null,
+            _onPlayerUpdated: null, _onNavigateFinish: null,
             init() {
                 const setMaxQuality = (player) => {
                     if (!player || typeof player.getAvailableQualityLevels !== 'function') return;
                     const levels = player.getAvailableQualityLevels();
                     if (!levels || !levels.length) return;
-                    const best = levels.map(l => ({ l, n: parseInt((l.match(/\d+/) || [])[0], 10) || 0 })).sort((a, b) => b.n - a.n)[0].l;
+                    const best = levels[0];
                     try {
                         player.setPlaybackQualityRange(best);
                     } catch (e) {
                         console.warn('[YT Suite AutoMaxRes] Could not set quality', e);
                     }
 
-                    if (best === 'hd1080' && appState.settings.useEnhancedBitrate) {
+                    if (best.includes('1080') && appState.settings.useEnhancedBitrate) {
                         const settingsButton = document.querySelector('.ytp-settings-button');
                         if (!settingsButton) return;
 
-                        const tempStyle = document.createElement('style');
-                        tempStyle.id = 'yt-suite-temp-hide-menu';
-                        tempStyle.textContent = '.ytp-popup.ytp-settings-menu { opacity: 0 !important; pointer-events: none !important; }';
-                        document.head.appendChild(tempStyle);
-
+                        const tempStyle = injectStyle('.ytp-popup.ytp-settings-menu { opacity: 0 !important; pointer-events: none !important; }', 'temp-hide-menu', true);
                         try {
                             settingsButton.click();
                             setTimeout(() => {
@@ -1151,15 +1529,21 @@
                                         if (premiumOption) {
                                             premiumOption.parentElement.click();
                                         } else {
-                                            settingsButton.click();
+                                            settingsButton.click(); // Close menu if premium not found
                                         }
                                     }, 400);
                                 } else {
-                                    settingsButton.click();
+                                    settingsButton.click(); // Close menu if quality option not found
                                 }
                             }, 400);
                         } finally {
-                            setTimeout(() => tempStyle.remove(), 1500);
+                            setTimeout(() => {
+                                // Final check to ensure the menu is closed
+                                if (document.querySelector('.ytp-popup.ytp-settings-menu')) {
+                                    settingsButton.click();
+                                }
+                                tempStyle.remove();
+                            }, 1500);
                         }
                     }
                 };
@@ -1276,9 +1660,10 @@
         svg.setAttribute("fill", "currentColor");
         svg.setAttribute("width", "24");
         svg.setAttribute("height", "24");
-        const path1 = document.createElementNS(svgNS, "path");
-        path1.setAttribute("d", "M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69-.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22-.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z");
-        svg.appendChild(path1);
+        const path = document.createElementNS(svgNS, "path");
+        // Using Material Design 'Settings' icon path
+        path.setAttribute("d", "M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41h-3.84 c-0.24,0-0.44,0.17-0.48,0.41L9.22,5.72C8.63,5.96,8.1,6.29,7.6,6.67L5.21,5.71C4.99,5.62,4.74,5.69,4.62,5.91L2.7,9.23 c-0.11,0.2-0.06,0.47,0.12,0.61l2.03,1.58C4.8,11.69,4.78,12,4.78,12.31c0,0.31,0.02,0.62,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.04,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.48-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0.01,0.59-0.22l1.92-3.32c0.11-0.2,0.06-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z");
+        svg.appendChild(path);
         return svg;
     }
 
@@ -1352,11 +1737,11 @@
         title.textContent = 'YouTube Customization Suite';
         const version = document.createElement('span');
         version.className = 'version';
-        version.textContent = 'v3.19.1';
+        version.textContent = 'v3.20';
         header.append(title, version);
 
         const main = document.createElement('main');
-        const groupOrder = [ 'Header', 'Sidebar', 'Themes', 'Progress Bar Themes', 'General Content', 'Watch Page - Layout', 'Watch Page - Behavior', 'Watch Page - Other Elements', 'Watch Page - Live Chat', 'Watch Page - Action Buttons', 'Watch Page - Player Controls' ];
+        const groupOrder = [ 'Header', 'Sidebar', 'Themes', 'Progress Bar Themes', 'General Content', 'Watch Page - Layout', 'Watch Page - Behavior', 'Watch Page - Other Elements', 'Watch Page - Live Chat', 'Watch Page - Action Buttons', 'Player Enhancements', 'Watch Page - Player Controls' ];
 
         const createSubSetting = (subFeatureId, parentInput) => {
             const subFeat = features.find(x => x.id === subFeatureId);
@@ -1629,10 +2014,10 @@
             #yt-masthead-cog button { background: transparent; border: none; width: 40px; height: 40px; cursor: pointer; padding: 8px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
             #yt-masthead-cog svg { fill: var(--yt-spec-icon-inactive); }
             #yt-masthead-cog button:hover { background-color: var(--yt-spec-badge-chip-background); }
-            body:not(.yt-suite-fit-to-window) ytd-watch-metadata.watch-active-metadata.style-scope.ytd-watch-flexy.style-scope.ytd-watch-flexy {
+            ytd-watch-metadata.watch-active-metadata {
                 margin-top: 180px !important;
             }
-            body:not(.yt-suite-fit-to-window) ytd-live-chat-frame {
+            ytd-live-chat-frame {
                 margin-top: -57px !important;
                 width: 402px !important;
             }
