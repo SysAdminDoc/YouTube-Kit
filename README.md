@@ -14,8 +14,6 @@ The YouTube interface, while functional, can often feel cluttered with features 
 
 The script is organized into logical groups of features.
 
-Of course. Here is a condensed, easy-to-read list of all the features available in the YouTube Customization Suite, based on the provided README file.
-
 ### Feature Overview
 
 #### **Header**
