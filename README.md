@@ -4,6 +4,8 @@ A powerful userscript for ultimate YouTube customization, allowing you to hide e
 
 ## BETA: Working out small bugs, still adding additional features. Script is stable.
 
+## [Install Here](https://github.com/SysAdminDoc/Youtube_Customization_Suite/blob/main/YouTube%20Customization%20Suite.user.js)
+
 ## Introduction
 
 The YouTube interface, while functional, can often feel cluttered with features you don't use or lack options you wish you had. The **YouTube Customization Suite** was created to solve this problem by providing a single, comprehensive script to take back control. Its core purpose is to allow users to meticulously tailor their viewing experience, from decluttering the UI to automating common actions and redesigning page layouts. All features are modular and can be toggled on or off from a clean, integrated settings panel.
