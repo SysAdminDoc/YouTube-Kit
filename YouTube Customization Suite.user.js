@@ -30,7 +30,6 @@
 //  ~ CHANGELOG ~
 //
 //  v3.20
-//  - INTEGRATED: Features from multiple userscripts.
 //  - ADDED: 'Widen Search Bar' feature in Header group.
 //  - ADDED: 'Squarify' theme option to remove all border-radius.
 //  - ADDED: 'Hide Video Description Row' option in Watch Page - Layout.
