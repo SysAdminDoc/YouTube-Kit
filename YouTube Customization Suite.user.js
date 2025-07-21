@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         YouTube Customization Suite
 // @namespace    https://github.com/user/yt-enhancement-suite
-// @version      3.19
+// @version      3.19.1
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
-// @exclude      https://music.youtube.com/*
-// @exclude      https://studio.youtube.com/*
+// @exclude      https://*.youtube.com/embed/*
+// @exclude      https://*.youtube.com/shorts/*
 // @icon         https://raw.githubusercontent.com/SysAdminDoc/Youtube_Customization_Suite/refs/heads/main/ytlogo.png
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -28,6 +28,10 @@
 
 // ——————————————————————————————————————————————————————————————————————————
 //  ~ CHANGELOG ~
+//
+//  v3.19.1
+//  - FIXED: Race condition on watch pages where the player would sometimes fail to expand. Added a delay to the theater mode click to ensure the player is ready.
+//  - FIXED: Conflicting CSS rule that could cause layout issues when "Fit Player to Window" is active. The rule is now conditional.
 //
 //  v3.19
 //  - ADDED: New option "Hide Clarify Boxes" to hide informational panels on sensitive topics below videos.
@@ -562,10 +566,13 @@
                 document.body.classList.toggle('yt-suite-fit-to-window', isWatchPage);
 
                 if (isWatchPage) {
-                    const watchFlexy = document.querySelector('ytd-watch-flexy:not([theater])');
-                    if (watchFlexy) {
-                         document.querySelector('button.ytp-size-button')?.click();
-                    }
+                    // Add a delay to ensure the player is ready for the click
+                    setTimeout(() => {
+                        const watchFlexy = document.querySelector('ytd-watch-flexy:not([theater])');
+                        if (watchFlexy) {
+                             document.querySelector('button.ytp-size-button')?.click();
+                        }
+                    }, 500);
                 }
             },
             init() {
@@ -1345,7 +1352,7 @@
         title.textContent = 'YouTube Customization Suite';
         const version = document.createElement('span');
         version.className = 'version';
-        version.textContent = 'v3.19';
+        version.textContent = 'v3.19.1';
         header.append(title, version);
 
         const main = document.createElement('main');
@@ -1622,10 +1629,10 @@
             #yt-masthead-cog button { background: transparent; border: none; width: 40px; height: 40px; cursor: pointer; padding: 8px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
             #yt-masthead-cog svg { fill: var(--yt-spec-icon-inactive); }
             #yt-masthead-cog button:hover { background-color: var(--yt-spec-badge-chip-background); }
-            ytd-watch-metadata.watch-active-metadata.style-scope.ytd-watch-flexy.style-scope.ytd-watch-flexy {
+            body:not(.yt-suite-fit-to-window) ytd-watch-metadata.watch-active-metadata.style-scope.ytd-watch-flexy.style-scope.ytd-watch-flexy {
                 margin-top: 180px !important;
             }
-            ytd-live-chat-frame {
+            body:not(.yt-suite-fit-to-window) ytd-live-chat-frame {
                 margin-top: -57px !important;
                 width: 402px !important;
             }
