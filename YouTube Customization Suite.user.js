@@ -3,7 +3,7 @@
 // @namespace    https://github.com/user/yt-enhancement-suite
 // @version      5.0
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience with a modern UI.
-// @author       Matthew Parker & Gemini
+// @author       Matthew Parker
 // @match        https://*.youtube.com/*
 // @exclude      https://*.youtube.com/embed/*
 // @exclude      https://music.youtube.com/*
