@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         YouTube Customization Suite
-// @namespace    https://github.com/user/yt-enhancement-suite
+// @name         YTKit: YouTube Customization Suite
+// @namespace    https://github.com/SysAdminDoc/YTKit
 // @version      5.0
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience with a modern UI.
 // @author       Matthew Parker
@@ -10,7 +10,7 @@
 // @exclude      https://www.youtube.com/shorts/*
 // @exclude      https://m.youtube.com/*
 // @exclude      https://www.youtube.com/playlist?list=*
-// @icon         https://raw.githubusercontent.com/SysAdminDoc/Youtube_Customization_Suite/refs/heads/main/ytlogo.png
+// @icon         https://github.com/SysAdminDoc/YTKit/blob/main/assets/ytlogo.png?raw=true
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_getResourceText
@@ -19,9 +19,9 @@
 // @grant        GM.xmlHttpRequest
 // @grant        GM_addStyle
 // @connect      sponsor.ajay.app
-// @resource     betterDarkMode https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/Themes/youtube-dark-theme.css
-// @resource     catppuccinMocha https://github.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/Themes/youtube-catppuccin-theme.css
-// @resource     nyanCatProgressBar https://raw.githubusercontent.com/SysAdminDoc/Youtube_Customization_Suite/raw/refs/heads/main/Themes/nyan-cat-progress-bar.css
+// @resource     betterDarkMode https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/youtube-dark-theme.css
+// @resource     catppuccinMocha https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/youtube-catppuccin-theme.css
+// @resource     nyanCatProgressBar https://raw.githubusercontent.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/nyan-cat-progress-bar.css
 // @run-at       document-end
 // ==/UserScript==
 
