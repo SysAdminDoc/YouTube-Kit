@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YTKit
-// @version      5.2
+// @version      5.3
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience with a modern UI.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
@@ -33,200 +33,141 @@
 // @require      https://raw.githubusercontent.com/SysAdminDoc/YTKit/refs/heads/main/features/general.js
 // @require      https://raw.githubusercontent.com/SysAdminDoc/YTKit/refs/heads/main/features/watch-page.js
 // @require      https://raw.githubusercontent.com/SysAdminDoc/YTKit/refs/heads/main/features/modules.js
-// @run-at       document-end
+// @run-at       document-start
 // ==/UserScript==
 
+// -----------------------------------------------------------------------------
+// YTKit Global Object
+// Defines the core engine and makes it available to all feature modules.
+// This must be defined before the main IIFE and before modules are loaded.
+// -----------------------------------------------------------------------------
 (function() {
     'use strict';
 
-    // Initialize a global object to hold feature modules.
-    window.YTKitFeatures = {};
-
-    // This array will be populated by the required feature files.
-    const features = [];
-
-    // ——————————————————————————————————————————————————————————————————————————
-    // SECTION 0: DYNAMIC CONTENT/STYLE ENGINE
-    // ——————————————————————————————————————————————————————————————————————————
+    // --- Engine Setup ---
     let mutationObserver = null;
     const mutationRules = new Map();
     const navigateRules = new Map();
     let isNavigateListenerAttached = false;
 
-    function waitForElement(selector, callback, timeout = 10000) {
-        const intervalTime = 100;
-        let elapsedTime = 0;
-        const interval = setInterval(() => {
-            const element = document.querySelector(selector);
-            if (element) {
-                clearInterval(interval);
-                callback(element);
-            }
-            elapsedTime += intervalTime;
-            if (elapsedTime >= timeout) {
-                clearInterval(interval);
-            }
-        }, intervalTime);
-    }
-
     const runNavigateRules = () => {
         for (const rule of navigateRules.values()) {
-            try { rule(document.body); } catch (e) { console.error('[YT Suite] Error applying navigate rule:', e); }
+            try { rule(document.body); } catch (e) { console.error('[YTKit] Error applying navigate rule:', e); }
         }
     };
+
     const ensureNavigateListener = () => {
         if (isNavigateListenerAttached) return;
         window.addEventListener('yt-navigate-finish', runNavigateRules);
         isNavigateListenerAttached = true;
     };
-    function addNavigateRule(id, ruleFn) {
-        ensureNavigateListener();
-        navigateRules.set(id, ruleFn);
-        ruleFn(document.body);
-    }
-    function removeNavigateRule(id) {
-        navigateRules.delete(id);
-    }
 
     const runMutationRules = (targetNode) => {
         for (const rule of mutationRules.values()) {
-            try { rule(targetNode); } catch (e) { console.error('[YT Suite] Error applying mutation rule:', e); }
+            try { rule(targetNode); } catch (e) { console.error('[YTKit] Error applying mutation rule:', e); }
         }
     };
+
     const observerCallback = () => {
         runMutationRules(document.body);
     };
-    function startObserver() {
-        if (mutationObserver) return;
-        mutationObserver = new MutationObserver(observerCallback);
-        mutationObserver.observe(document.documentElement, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['theater', 'fullscreen', 'hidden', 'video-id', 'page-subtype']
-        });
-    }
-    function stopObserver() {
-        if (mutationObserver) {
-            mutationObserver.disconnect();
-            mutationObserver = null;
+
+    // --- Global YTKit Object ---
+    window.YTKit = {
+        features: [],
+        appState: {},
+
+        waitForElement: function(selector, callback, timeout = 10000) {
+            const intervalTime = 100;
+            let elapsedTime = 0;
+            const interval = setInterval(() => {
+                const element = document.querySelector(selector);
+                if (element) {
+                    clearInterval(interval);
+                    callback(element);
+                }
+                elapsedTime += intervalTime;
+                if (elapsedTime >= timeout) {
+                    clearInterval(interval);
+                }
+            }, intervalTime);
+        },
+
+        addNavigateRule: function(id, ruleFn) {
+            ensureNavigateListener();
+            navigateRules.set(id, ruleFn);
+            if (document.body) {
+                ruleFn(document.body);
+            } else {
+                window.addEventListener('DOMContentLoaded', () => ruleFn(document.body));
+            }
+        },
+
+        removeNavigateRule: function(id) {
+            navigateRules.delete(id);
+        },
+
+        startObserver: function() {
+            if (mutationObserver) return;
+            mutationObserver = new MutationObserver(observerCallback);
+            mutationObserver.observe(document.documentElement, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['theater', 'fullscreen', 'hidden', 'video-id', 'page-subtype']
+            });
+        },
+
+        stopObserver: function() {
+            if (mutationObserver) {
+                mutationObserver.disconnect();
+                mutationObserver = null;
+            }
+        },
+
+        addMutationRule: function(id, ruleFn) {
+            if (mutationRules.size === 0) this.startObserver();
+            mutationRules.set(id, ruleFn);
+            if (document.body) {
+                ruleFn(document.body);
+            } else {
+                window.addEventListener('DOMContentLoaded', () => ruleFn(document.body));
+            }
+        },
+
+        removeMutationRule: function(id) {
+            mutationRules.delete(id);
+            if (mutationRules.size === 0) this.stopObserver();
+        },
+
+        injectStyle: function(selector, featureId, isRawCss = false) {
+            const style = document.createElement('style');
+            style.id = `yt-suite-style-${featureId}`;
+            style.textContent = isRawCss ? selector : `${selector} { display: none !important; }`;
+            (document.head || document.documentElement).appendChild(style);
+            return style;
         }
-    }
-    function addMutationRule(id, ruleFn) {
-        if (mutationRules.size === 0) startObserver();
-        mutationRules.set(id, ruleFn);
-        ruleFn(document.body);
-    }
-    function removeMutationRule(id) {
-        mutationRules.delete(id);
-        if (mutationRules.size === 0) stopObserver();
-    }
+    };
+})();
 
-    function injectStyle(selector, featureId, isRawCss = false) {
-        const style = document.createElement('style');
-        style.id = `yt-suite-style-${featureId}`;
-        style.textContent = isRawCss ? selector : `${selector} { display: none !important; }`;
-        document.head.appendChild(style);
-        return style;
-    }
 
+// -----------------------------------------------------------------------------
+// Main Script Logic (UI and Bootstrap)
+// This runs after the YTKit global object is ready and after all feature
+// modules have been loaded and have pushed their data to YTKit.features.
+// -----------------------------------------------------------------------------
+(function() {
+    'use strict';
+
+    // Destructure from the global object for convenience
+    const { features, appState, waitForElement, addNavigateRule } = window.YTKit;
 
     // ——————————————————————————————————————————————————————————————————————————
     // SECTION 1: SETTINGS MANAGER
     // ——————————————————————————————————————————————————————————————————————————
     const settingsManager = {
         defaults: {
-            // Original Settings
-            panelTheme: "dark",
-            hideCreateButton: true,
-            hideVoiceSearch: true,
-            logoToSubscriptions: true,
-            widenSearchBar: true,
-            hideSidebar: true,
-            nativeDarkMode: true,
-            betterDarkMode: true,
-            catppuccinMocha: false,
-            squarify: true,
-            nyanCatProgressBar: false,
-            removeAllShorts: true,
-            redirectShorts: true,
-            disablePlayOnHover: true,
-            fullWidthSubscriptions: true,
-            hideSubscriptionOptions: true,
-            fiveVideosPerRow: true,
-            hidePaidContentOverlay: true,
-            redirectToVideosTab: true,
-            fitPlayerToWindow: true,
-            hideRelatedVideos: true,
-            expandVideoWidth: true,
-            floatingLogoOnWatch: true,
-            hideDescriptionRow: false,
-            preventAutoplay: false,
-            autoExpandDescription: false,
-            sortCommentsNewestFirst: false,
-            skipSponsors: true,
-            hideSponsorBlockLabels: true,
-            hideMerchShelf: true,
-            hideClarifyBoxes: true,
-            hideDescriptionExtras: true,
-            hideHashtags: true,
-            hidePinnedComments: true,
-            hideCommentActionMenu: true,
-            hideLiveChatEngagement: true,
-            hidePaidPromotionWatch: true,
-            hideVideoEndCards: true,
-            hideVideoEndScreen: true,
-            hideLiveChatHeader: true,
-            hideChatMenu: true,
-            hidePopoutChatButton: true,
-            hideChatReactionsButton: true,
-            hideChatTimestampsButton: true,
-            hideChatPolls: true,
-            hideChatPollBanner: true,
-            hideChatTicker: true,
-            hideViewerLeaderboard: true,
-            hideChatSupportButtons: true,
-            hideChatBanner: true,
-            hideChatEmojiButton: true,
-            hideTopFanIcons: true,
-            hideSuperChats: true,
-            hideLevelUp: true,
-            hideChatBots: true,
-            keywordFilterList: "",
-            autolikeVideos: true,
-            hideLikeButton: true,
-            hideDislikeButton: true,
-            hideShareButton: true,
-            hideAskButton: true,
-            hideClipButton: true,
-            hideThanksButton: true,
-            hideSaveButton: true,
-            replaceWithCobaltDownloader: true,
-            hideSponsorButton: true,
-            hideMoreActionsButton: true,
-            playerEnhancements: false,
-            autoMaxResolution: true,
-            useEnhancedBitrate: true,
-            hideQualityPopup: true,
-            hideSponsorBlockButton: true,
-            hideNextButton: true,
-            hideAutoplayToggle: true,
-            hideSubtitlesToggle: true,
-            hideCaptionsContainer: true,
-            hideMiniplayerButton: true,
-            hidePipButton: true,
-            hideTheaterButton: true,
-            hideFullscreenButton: true,
-
-            // New Integrated Modules
-            enableAdblock: false,
-            enableCPU_Tamer: false,
-            enableHandleRevealer: false,
-            enableYoutubetoYout_ube: false,
-            yout_ube_redirectShorts: true,
-            yout_ube_redirectEmbed: true,
-            yout_ube_redirectNoCookie: true,
-            yout_ube_rewriteLinks: true,
+            panelTheme: "dark", hideCreateButton: true, hideVoiceSearch: true, logoToSubscriptions: true, widenSearchBar: true, hideSidebar: true, nativeDarkMode: true, betterDarkMode: true, catppuccinMocha: false, squarify: true, nyanCatProgressBar: false, removeAllShorts: true, redirectShorts: true, disablePlayOnHover: true, fullWidthSubscriptions: true, hideSubscriptionOptions: true, fiveVideosPerRow: true, hidePaidContentOverlay: true, redirectToVideosTab: true, fitPlayerToWindow: true, hideRelatedVideos: true, expandVideoWidth: true, floatingLogoOnWatch: true, hideDescriptionRow: false, preventAutoplay: false, autoExpandDescription: false, sortCommentsNewestFirst: false, skipSponsors: true, hideSponsorBlockLabels: true, hideMerchShelf: true, hideClarifyBoxes: true, hideDescriptionExtras: true, hideHashtags: true, hidePinnedComments: true, hideCommentActionMenu: true, hideLiveChatEngagement: true, hidePaidPromotionWatch: true, hideVideoEndCards: true, hideVideoEndScreen: true, hideLiveChatHeader: true, hideChatMenu: true, hidePopoutChatButton: true, hideChatReactionsButton: true, hideChatTimestampsButton: true, hideChatPolls: true, hideChatPollBanner: true, hideChatTicker: true, hideViewerLeaderboard: true, hideChatSupportButtons: true, hideChatBanner: true, hideChatEmojiButton: true, hideTopFanIcons: true, hideSuperChats: true, hideLevelUp: true, hideChatBots: true, keywordFilterList: "", autolikeVideos: true, hideLikeButton: true, hideDislikeButton: true, hideShareButton: true, hideAskButton: true, hideClipButton: true, hideThanksButton: true, hideSaveButton: true, replaceWithCobaltDownloader: true, hideSponsorButton: true, hideMoreActionsButton: true, playerEnhancements: false, autoMaxResolution: true, useEnhancedBitrate: true, hideQualityPopup: true, hideSponsorBlockButton: true, hideNextButton: true, hideAutoplayToggle: true, hideSubtitlesToggle: true, hideCaptionsContainer: true, hideMiniplayerButton: true, hidePipButton: true, hideTheaterButton: true, hideFullscreenButton: true, enableAdblock: false, enableCPU_Tamer: false, enableHandleRevealer: false, enableYoutubetoYout_ube: false, yout_ube_redirectShorts: true, yout_ube_redirectEmbed: true, yout_ube_redirectNoCookie: true, yout_ube_rewriteLinks: true,
         },
         async load() {
             let savedSettings = await GM_getValue('ytSuiteSettings', {});
@@ -243,60 +184,8 @@
         }
     };
 
-
     // ——————————————————————————————————————————————————————————————————————————
-    // SECTION 3: DOM HELPERS & CORE UI LOGIC
-    // ——————————————————————————————————————————————————————————————————————————
-    let appState = {};
-
-    function applyBotFilter() {
-        if (!window.location.pathname.startsWith('/watch')) return;
-        const messages = document.querySelectorAll('yt-live-chat-text-message-renderer:not(.yt-suite-hidden-bot)');
-
-        messages.forEach(msg => {
-            const authorName = msg.querySelector('#author-name')?.textContent.toLowerCase() || '';
-            if (authorName.includes('bot')) {
-                msg.style.display = 'none';
-                msg.classList.add('yt-suite-hidden-bot');
-            }
-        });
-    }
-
-    function applyKeywordFilter() {
-        if (!window.location.pathname.startsWith('/watch')) return;
-        const keywordsRaw = appState.settings.keywordFilterList;
-        const messages = document.querySelectorAll('yt-live-chat-text-message-renderer');
-
-        if (!keywordsRaw || !keywordsRaw.trim()) {
-            messages.forEach(el => {
-                if (el.classList.contains('yt-suite-hidden-keyword')) {
-                    el.style.display = '';
-                    el.classList.remove('yt-suite-hidden-keyword');
-                }
-            });
-            return;
-        }
-
-        const keywords = keywordsRaw.toLowerCase().split(',').map(k => k.trim()).filter(Boolean);
-
-        messages.forEach(msg => {
-            const messageText = msg.querySelector('#message')?.textContent.toLowerCase() || '';
-            const authorText = msg.querySelector('#author-name')?.textContent.toLowerCase() || '';
-            const shouldHide = keywords.some(k => messageText.includes(k) || authorText.includes(k));
-
-            if (shouldHide) {
-                msg.style.display = 'none';
-                msg.classList.add('yt-suite-hidden-keyword');
-            } else if (msg.classList.contains('yt-suite-hidden-keyword')) {
-                msg.style.display = '';
-                msg.classList.remove('yt-suite-hidden-keyword');
-            }
-        });
-    }
-
-
-    // ——————————————————————————————————————————————————————————————————————————
-    // SECTION 4: UI & SETTINGS PANEL
+    // SECTION 2: UI & SETTINGS PANEL
     // ——————————————————————————————————————————————————————————————————————————
     const ICONS = {
         cog: { viewBox: '0 0 24 24', paths: ['M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41h-3.84 c-0.24,0-0.44,0.17-0.48,0.41L9.22,5.72C8.63,5.96,8.1,6.29,7.6,6.67L5.21,5.71C4.99,5.62,4.74,5.69,4.62,5.91L2.7,9.23 c-0.11,0.2-0.06,0.47,0.12,0.61l2.03,1.58C4.8,11.69,4.78,12,4.78,12.31c0,0.31,0.02,0.62,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.04,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.48-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0.01,0.59-0.22l1.92-3.32c0.11-0.2,0.06-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z'], },
@@ -328,36 +217,24 @@
             svg.setAttribute('stroke-linecap', 'round');
             svg.setAttribute('stroke-linejoin', 'round');
         }
-
         iconData.paths.forEach(pathData => {
             const path = document.createElementNS(svgNS, 'path');
             path.setAttribute('d', pathData);
             svg.appendChild(path);
         });
-
-        if (iconData.circle) {
-            const circle = document.createElementNS(svgNS, 'circle');
-            circle.setAttribute('cx', iconData.circle.cx);
-            circle.setAttribute('cy', iconData.circle.cy);
-            circle.setAttribute('r', iconData.circle.r);
-            svg.appendChild(circle);
-        }
         return svg;
     }
 
     function injectSettingsButton() {
         const handleDisplay = () => {
             const isWatch = window.location.pathname.startsWith('/watch');
-
             document.getElementById('ycs-masthead-cog')?.remove();
             document.getElementById('ycs-watch-cog')?.remove();
-
             const cogButton = document.createElement('button');
             cogButton.title = 'YouTube Customization Suite Settings (Ctrl+Alt+Y)';
             const cogIcon = createIcon(ICONS.cog);
             if (cogIcon) cogButton.appendChild(cogIcon);
             cogButton.onclick = () => document.body.classList.toggle('ycs-panel-open');
-
             if (isWatch) {
                 waitForElement('#top-row #owner', (ownerDiv) => {
                     if (document.getElementById('ycs-watch-cog')) return;
@@ -365,7 +242,6 @@
                     cogContainer.id = 'ycs-watch-cog';
                     cogButton.id = 'ycs-settings-button-watch';
                     cogContainer.appendChild(cogButton);
-
                     const logo = document.getElementById('yt-suite-watch-logo');
                     if (logo && logo.parentElement === ownerDiv) {
                         ownerDiv.insertBefore(cogContainer, logo.nextSibling);
@@ -385,27 +261,17 @@
     }
 
     function buildSettingsPanel() {
-        // Collect all features from the global object
-        for (const key in window.YTKitFeatures) {
-            if (Array.isArray(window.YTKitFeatures[key])) {
-                features.push(...window.YTKitFeatures[key]);
-            }
-        }
-
         const panelContainer = document.createElement('div');
         panelContainer.id = 'ycs-panel-container';
         document.body.appendChild(panelContainer);
-
         const overlay = document.createElement('div');
         overlay.id = 'ycs-panel-overlay';
         overlay.onclick = () => document.body.classList.remove('ycs-panel-open');
-
         const panel = document.createElement('div');
         panel.id = 'ycs-settings-panel';
         panel.setAttribute('role', 'dialog');
         panel.setAttribute('aria-modal', 'true');
         panel.setAttribute('aria-labelledby', 'ycs-panel-title');
-
         const header = document.createElement('div');
         header.className = 'ycs-settings-header';
         const headerTitle = document.createElement('div');
@@ -414,17 +280,16 @@
         const headerIcon = createIcon(ICONS.cog);
         const headerH2 = document.createElement('h2');
         headerH2.textContent = 'YouTube Customization Suite';
-        if(headerIcon) headerTitle.appendChild(headerIcon);
+        if (headerIcon) headerTitle.appendChild(headerIcon);
         headerTitle.appendChild(headerH2);
         const closeButton = document.createElement('button');
         closeButton.id = 'ycs-close-settings';
         closeButton.className = 'ycs-header-button';
         closeButton.title = 'Close (Esc)';
         const closeIcon = createIcon(ICONS.close);
-        if(closeIcon) closeButton.appendChild(closeIcon);
+        if (closeIcon) closeButton.appendChild(closeIcon);
         header.appendChild(headerTitle);
         header.appendChild(closeButton);
-
         const body = document.createElement('div');
         body.className = 'ycs-settings-body';
         const tabsContainer = document.createElement('div');
@@ -436,13 +301,12 @@
         contentContainer.appendChild(contentInner);
         body.appendChild(tabsContainer);
         body.appendChild(contentContainer);
-
         const footer = document.createElement('div');
         footer.className = 'ycs-settings-footer';
         const versionSpan = document.createElement('span');
         versionSpan.className = 'ycs-version';
         versionSpan.title = 'Keyboard Shortcut: Ctrl+Alt+Y';
-        versionSpan.textContent = 'v5.1';
+        versionSpan.textContent = 'v5.3';
         const themeLabel = document.createElement('label');
         themeLabel.className = 'ycs-theme-select';
         const themeSpan = document.createElement('span');
@@ -463,24 +327,18 @@
         themeLabel.appendChild(themeSelect);
         footer.appendChild(versionSpan);
         footer.appendChild(themeLabel);
-
         panel.appendChild(header);
         panel.appendChild(body);
         panel.appendChild(footer);
-
-        const groupOrder = [ 'Header', 'Sidebar', 'Themes', 'Progress Bar Themes', 'General Content', 'Watch Page - Layout', 'Watch Page - Behavior', 'Watch Page - Other Elements', 'Watch Page - Live Chat', 'Watch Page - Action Buttons', 'Player Enhancements', 'Watch Page - Player Controls', 'Modules' ];
-        const categoryIcons = {
-            'Header': ICONS.header, 'Sidebar': ICONS.sidebar, 'Themes': ICONS.themes, 'Progress Bar Themes': ICONS.progressBar, 'General Content': ICONS.general, 'Watch Page - Layout': ICONS.watchLayout, 'Watch Page - Behavior': ICONS.watchBehavior, 'Watch Page - Other Elements': ICONS.watchElements, 'Watch Page - Live Chat': ICONS.liveChat, 'Watch Page - Action Buttons': ICONS.actionButtons, 'Player Enhancements': ICONS.playerEnhancements, 'Watch Page - Player Controls': ICONS.playerControls, 'Modules': ICONS.modules
-        };
+        const groupOrder = ['Header', 'Sidebar', 'Themes', 'Progress Bar Themes', 'General Content', 'Watch Page - Layout', 'Watch Page - Behavior', 'Watch Page - Other Elements', 'Watch Page - Live Chat', 'Watch Page - Action Buttons', 'Player Enhancements', 'Watch Page - Player Controls', 'Modules'];
+        const categoryIcons = { 'Header': ICONS.header, 'Sidebar': ICONS.sidebar, 'Themes': ICONS.themes, 'Progress Bar Themes': ICONS.progressBar, 'General Content': ICONS.general, 'Watch Page - Layout': ICONS.watchLayout, 'Watch Page - Behavior': ICONS.watchBehavior, 'Watch Page - Other Elements': ICONS.watchElements, 'Watch Page - Live Chat': ICONS.liveChat, 'Watch Page - Action Buttons': ICONS.actionButtons, 'Player Enhancements': ICONS.playerEnhancements, 'Watch Page - Player Controls': ICONS.playerControls, 'Modules': ICONS.modules };
         const featuresByGroup = features.reduce((acc, f) => {
             (acc[f.group] = acc[f.group] || []).push(f);
             return acc;
         }, {});
-
         groupOrder.forEach((groupName, index) => {
             const groupFeatures = featuresByGroup[groupName];
             if (!groupFeatures || groupFeatures.length === 0) return;
-
             const groupId = groupName.replace(/ /g, '-').toLowerCase();
             const tabBtn = document.createElement('button');
             tabBtn.className = 'ycs-tab-btn';
@@ -489,21 +347,17 @@
             const tabIcon = createIcon(categoryIcons[groupName]);
             const tabSpan = document.createElement('span');
             tabSpan.textContent = groupName;
-            if(tabIcon) tabBtn.appendChild(tabIcon);
+            if (tabIcon) tabBtn.appendChild(tabIcon);
             tabBtn.appendChild(tabSpan);
             tabsContainer.appendChild(tabBtn);
-
             const pane = document.createElement('div');
             pane.id = `ycs-pane-${groupId}`;
             pane.className = 'ycs-settings-pane';
             if (index === 0) pane.classList.add('active');
-
             pane.appendChild(buildToggleAllRow(groupId, groupName));
-
             const managementFeatures = groupFeatures.filter(f => f.isManagement);
             const regularFeatures = groupFeatures.filter(f => !f.isManagement && !f.isSubFeature);
             const subFeatures = groupFeatures.filter(f => f.isSubFeature);
-
             managementFeatures.forEach(f => {
                 pane.appendChild(buildSettingRow(f));
                 const relatedSubFeatures = subFeatures.filter(sf => {
@@ -511,10 +365,9 @@
                     if (f.id === 'skipSponsors' && sf.id === 'hideSponsorBlockLabels') return true;
                     if (f.id === 'autoMaxResolution' && (sf.id === 'useEnhancedBitrate' || sf.id === 'hideQualityPopup')) return true;
                     if (f.id === 'hideRelatedVideos' && sf.id === 'expandVideoWidth') return true;
-                    if (f.id === 'enableYoutubetoYout_ube') return true; // Special case for new module
+                    if (f.id === 'enableYoutubetoYout_ube' && (sf.id.startsWith('yout_ube_'))) return true;
                     return false;
                 });
-
                 if (relatedSubFeatures.length > 0) {
                     const subPanel = document.createElement('div');
                     subPanel.className = 'ycs-sub-panel';
@@ -523,17 +376,14 @@
                     pane.appendChild(subPanel);
                 }
             });
-
-             if (regularFeatures.length > 0 && managementFeatures.length > 0) {
-                 const divider = document.createElement('div');
-                 divider.className = 'ycs-pane-divider';
-                 pane.appendChild(divider);
+            if (regularFeatures.length > 0 && managementFeatures.length > 0) {
+                const divider = document.createElement('div');
+                divider.className = 'ycs-pane-divider';
+                pane.appendChild(divider);
             }
-
             regularFeatures.forEach(f => pane.appendChild(buildSettingRow(f)));
             contentInner.appendChild(pane);
         });
-
         panelContainer.appendChild(overlay);
         panelContainer.appendChild(panel);
     }
@@ -542,7 +392,6 @@
         const row = document.createElement('div');
         row.className = 'ycs-setting-row ycs-toggle-all-row';
         row.dataset.categoryId = groupId;
-
         const textDiv = document.createElement('div');
         textDiv.className = 'ycs-setting-row-text';
         const label = document.createElement('label');
@@ -553,7 +402,6 @@
         textDiv.appendChild(label);
         textDiv.appendChild(small);
         row.appendChild(textDiv);
-
         const switchLabel = document.createElement('label');
         switchLabel.className = 'ycs-switch';
         switchLabel.htmlFor = `ycs-toggle-all-${groupId}`;
@@ -566,7 +414,6 @@
         switchLabel.appendChild(input);
         switchLabel.appendChild(slider);
         row.appendChild(switchLabel);
-
         return row;
     }
 
@@ -574,7 +421,6 @@
         const row = document.createElement('div');
         row.className = f.isManagement ? 'ycs-management-row' : (f.isSubFeature ? 'ycs-setting-row ycs-sub-setting' : 'ycs-setting-row');
         row.dataset.featureId = f.id;
-
         const textDiv = document.createElement('div');
         textDiv.className = 'ycs-setting-row-text';
         const label = document.createElement('label');
@@ -585,7 +431,6 @@
         textDiv.appendChild(label);
         textDiv.appendChild(small);
         row.appendChild(textDiv);
-
         if (f.type === 'textarea') {
             const textarea = document.createElement('textarea');
             textarea.id = `ycs-input-${f.id}`;
@@ -614,7 +459,6 @@
     function createToast(message, type = 'success', duration = 3000) {
         const existingToast = document.querySelector('.ycs-toast');
         if (existingToast) existingToast.remove();
-
         const toast = document.createElement('div');
         toast.className = `ycs-toast ${type}`;
         toast.textContent = message;
@@ -658,7 +502,6 @@
                 }
             }
         });
-
         doc.addEventListener('keydown', (e) => {
             if (e.key === "Escape" && doc.body.classList.contains('ycs-panel-open')) {
                 doc.body.classList.remove('ycs-panel-open');
@@ -669,16 +512,13 @@
                 doc.body.classList.toggle('ycs-panel-open');
             }
         });
-
         doc.addEventListener('change', async (e) => {
             if (e.target.matches('.ycs-feature-cb')) {
                 const row = e.target.closest('[data-feature-id]');
                 const featureId = row.dataset.featureId;
                 const isEnabled = e.target.checked;
-
                 appState.settings[featureId] = isEnabled;
                 await settingsManager.save(appState.settings);
-
                 const feature = features.find(f => f.id === featureId);
                 if (feature) {
                     if (isEnabled) {
@@ -688,7 +528,6 @@
                     }
                     createToast(`${feature.name} ${isEnabled ? 'Enabled' : 'Disabled'}`);
                 }
-
                 const subPanel = doc.querySelector(`.ycs-sub-panel[data-parent-feature="${featureId}"]`);
                 if (subPanel) {
                     subPanel.style.display = isEnabled ? 'flex' : 'none';
@@ -717,7 +556,6 @@
                 }
             }
         });
-
         doc.addEventListener('input', async (e) => {
             if (e.target.matches('.ycs-input')) {
                 const featureId = e.target.closest('[data-feature-id]').dataset.featureId;
@@ -732,30 +570,20 @@
         });
     }
 
-
-    // ——————————————————————————————————————————————————————————————————————————
-    // SECTION 5: STYLES
-    // ——————————————————————————————————————————————————————————————————————————
     function injectPanelStyles() {
         GM_addStyle(`
 :root { --ycs-font: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
 html[data-ycs-theme='dark'] { --ycs-bg-primary: #181a1b; --ycs-bg-secondary: #25282a; --ycs-bg-tertiary: #34383b; --ycs-bg-hover: #3d4245; --ycs-text-primary: #e8e6e3; --ycs-text-secondary: #b3b0aa; --ycs-border-color: #454a4d; --ycs-accent: #ff4500; --ycs-accent-hover: #ff6a33; --ycs-accent-glow: rgba(255, 69, 0, 0.3); --ycs-success: #22c55e; --ycs-error: #ef4444; --ycs-error-hover: #ff5252; --ycs-info: #3b82f6; --ycs-header-icon-color: var(--yt-spec-icon-inactive); --ycs-header-icon-hover-bg: var(--yt-spec-badge-chip-background); }
 html[data-ycs-theme='light'] { --ycs-bg-primary: #ffffff; --ycs-bg-secondary: #f1f3f5; --ycs-bg-tertiary: #e9ecef; --ycs-bg-hover: #dee2e6; --ycs-text-primary: #212529; --ycs-text-secondary: #6c757d; --ycs-border-color: #ced4da; --ycs-accent: #d9480f; --ycs-accent-hover: #e8591a; --ycs-accent-glow: rgba(217, 72, 15, 0.25); --ycs-success: #198754; --ycs-error: #dc3545; --ycs-error-hover: #e44d5b; --ycs-info: #0ea5e9; --ycs-header-icon-color: var(--yt-spec-icon-inactive); --ycs-header-icon-hover-bg: var(--yt-spec-badge-chip-background); }
-
-/* === Global Controls === */
 #ycs-settings-button-masthead, #ycs-settings-button-watch { background: transparent; border: none; cursor: pointer; padding: 6px; margin: 0 8px; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: background-color 0.2s ease, transform 0.2s ease; }
 #ycs-settings-button-masthead:hover, #ycs-settings-button-watch:hover { background-color: var(--ycs-header-icon-hover-bg); transform: scale(1.1) rotate(15deg); }
 #ycs-settings-button-masthead svg, #ycs-settings-button-watch svg { width: 26px; height: 26px; color: var(--ycs-header-icon-color); }
 #ycs-watch-cog { margin: 0 8px 0 16px; display: flex; align-items: center; }
 ytd-masthead #end { position: relative; }
-
-/* === Settings Panel: Overlay & Container === */
 #ycs-panel-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); z-index: 99998; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
 #ycs-settings-panel { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.95); z-index: 99999; opacity: 0; pointer-events: none; transition: opacity 0.3s ease, transform 0.3s ease; display: flex; flex-direction: column; width: 95%; max-width: 900px; height: 90vh; max-height: 750px; background: var(--ycs-bg-primary); color: var(--ycs-text-primary); box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7); font-family: var(--ycs-font); border-radius: 16px; border: 1px solid var(--ycs-border-color); overflow: hidden; }
 body.ycs-panel-open #ycs-panel-overlay { opacity: 1; pointer-events: auto; }
 body.ycs-panel-open #ycs-settings-panel { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1); }
-
-/* === Settings Panel: Header, Body, Footer === */
 .ycs-settings-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 12px 24px; border-bottom: 1px solid var(--ycs-border-color); flex-shrink: 0; }
 .ycs-header-title { display: flex; align-items: center; gap: 14px; }
 .ycs-header-title svg { color: var(--ycs-accent); }
@@ -778,8 +606,6 @@ body.ycs-panel-open #ycs-settings-panel { opacity: 1; pointer-events: auto; tran
 .ycs-theme-select { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .ycs-theme-select select { background: var(--ycs-bg-tertiary); color: var(--ycs-text-primary); border: 1px solid var(--ycs-border-color); border-radius: 6px; padding: 6px 8px; font-family: var(--ycs-font); font-size: 14px; }
 .ycs-version { font-size: 12px; color: var(--ycs-text-secondary); cursor: help; }
-
-/* === Settings Panel: Setting Rows & Toggles === */
 .ycs-setting-row, .ycs-management-row { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px; background: var(--ycs-bg-secondary); border: 1px solid var(--ycs-border-color); border-radius: 12px; transition: box-shadow .2s, border-color .2s; }
 .ycs-setting-row:hover, .ycs-management-row:hover { border-color: color-mix(in srgb, var(--ycs-border-color) 50%, var(--ycs-text-secondary)); }
 .ycs-toggle-all-row { background: transparent; border-style: dashed; }
@@ -793,57 +619,35 @@ body.ycs-panel-open #ycs-settings-panel { opacity: 1; pointer-events: auto; tran
 .ycs-switch input:checked + .ycs-slider { background-color: var(--ycs-accent); border-color: var(--ycs-accent); box-shadow: 0 0 10px var(--ycs-accent-glow); }
 .ycs-switch input:checked + .ycs-slider:before { background-color: white; transform: translateX(20px); }
 .ycs-pane-divider { height: 1px; background-color: var(--ycs-border-color); margin: 8px 0; }
-
-/* === Buttons & Inputs === */
-.ycs-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; font-size: 14px; font-weight: 500; border-radius: 8px; border: 1px solid var(--ycs-border-color); cursor: pointer; transition: all .2s; background-color: var(--ycs-bg-tertiary); color: var(--ycs-text-primary); }
-.ycs-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,0,0,0.2); border-color: var(--ycs-text-secondary); }
-.ycs-button-primary { background-color: var(--ycs-accent); border-color: var(--ycs-accent); color: white; }
-.ycs-button-primary:hover:not(:disabled) { background-color: var(--ycs-accent-hover); border-color: var(--ycs-accent-hover); }
-.ycs-button-danger { background-color: var(--ycs-error); border-color: var(--ycs-error); color: white; }
-.ycs-button-danger:hover:not(:disabled) { background-color: var(--ycs-error-hover); border-color: var(--ycs-error-hover); }
 .ycs-input { background: var(--ycs-bg-primary); color: var(--ycs-text-primary); border: 1px solid var(--ycs-border-color); border-radius: 6px; padding: 8px 10px; font-family: var(--ycs-font); font-size: 14px; width: 100%; transition: border-color .2s, box-shadow .2s; flex-shrink: 0; max-width: 50%; }
 .ycs-input:focus { outline: none; border-color: var(--ycs-accent); box-shadow: 0 0 0 3px var(--ycs-accent-glow); }
-.ycs-input:disabled { background-color: var(--ycs-bg-tertiary); opacity: 0.7; cursor: not-allowed; }
-
-/* === Management & Sub-Panels === */
 .ycs-management-row { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom: none; }
 .ycs-sub-panel { background: var(--ycs-bg-secondary); border: 1px solid var(--ycs-border-color); border-radius: 0 0 12px 12px; padding: 16px; display: none; flex-direction: column; gap: 12px; margin-top: -17px; }
 .ycs-sub-setting { margin-left: 20px; }
-
-/* === Toast Notifications === */
-@keyframes ycs-spin { to { transform: rotate(360deg); } }
-.ycs-spinner-svg { animation: ycs-spin 1.2s cubic-bezier(0.5, 0.15, 0.5, 0.85) infinite; }
 .ycs-toast { position: fixed; bottom: -100px; left: 50%; transform: translateX(-50%); color: white; padding: 12px 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-family: var(--ycs-font); font-size: 15px; font-weight: 500; z-index: 100002; transition: all 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55); border-radius: 8px; }
 .ycs-toast.show { bottom: 20px; }
 .ycs-toast.success { background-color: var(--ycs-success); }
 .ycs-toast.error { background-color: var(--ycs-error); }
 .ycs-toast.info { background-color: var(--ycs-info); }
-
-/* === Logo injection on watch page (v3.23) === */
 #yt-suite-watch-logo { display: flex; align-items: center; }
 #yt-suite-watch-logo a { display: flex; align-items: center; }
 #yt-suite-watch-logo ytd-logo { width: 90px; height: auto; }
-
-/* === Custom rules from v3.23 for layout fixes === */
-ytd-watch-metadata.watch-active-metadata {
-    margin-top: 180px !important;
-}
-ytd-live-chat-frame {
-    margin-top: -57px !important;
-    width: 402px !important;
-}
+ytd-watch-metadata.watch-active-metadata { margin-top: 180px !important; }
+ytd-live-chat-frame { margin-top: -57px !important; width: 402px !important; }
 `);
     }
 
-
     // ——————————————————————————————————————————————————————————————————————————
-    // SECTION 6: MAIN BOOTSTRAP
+    // SECTION 3: MAIN BOOTSTRAP
     // ——————————————————————————————————————————————————————————————————————————
     async function main() {
-        appState.settings = await settingsManager.load();
-        document.documentElement.setAttribute('data-ycs-theme', appState.settings.panelTheme);
+        window.YTKit.appState.settings = await settingsManager.load();
         
-        // The feature files have loaded now, so we can build the UI
+        // Local alias for convenience within this scope
+        const localAppState = window.YTKit.appState;
+
+        document.documentElement.setAttribute('data-ycs-theme', localAppState.settings.panelTheme);
+
         injectPanelStyles();
         buildSettingsPanel();
         injectSettingsButton();
@@ -851,18 +655,18 @@ ytd-live-chat-frame {
         updateAllToggleStates();
 
         features.forEach(f => {
-            if (appState.settings[f.id]) {
+            if (localAppState.settings[f.id]) {
                 try {
                     f.init?.();
                 } catch (error) {
-                    console.error(`[YT Suite] Error initializing feature "${f.id}":`, error);
+                    console.error(`[YTKit] Error initializing feature "${f.id}":`, error);
                 }
             }
         });
 
         document.querySelectorAll('.ycs-feature-cb:checked').forEach(cb => {
             const row = cb.closest('[data-feature-id]');
-            if(row) {
+            if (row) {
                 const featureId = row.dataset.featureId;
                 const subPanel = document.querySelector(`.ycs-sub-panel[data-parent-feature="${featureId}"]`);
                 if (subPanel) subPanel.style.display = 'flex';
@@ -876,10 +680,11 @@ ytd-live-chat-frame {
         }
     }
 
-    if (document.readyState === 'complete' || document.readyState === 'interactive') {
-        main();
-    } else {
+    // Wait for the DOM to be ready before executing the script.
+    if (document.readyState === 'loading') {
         window.addEventListener('DOMContentLoaded', main);
+    } else {
+        main();
     }
 
 })();
