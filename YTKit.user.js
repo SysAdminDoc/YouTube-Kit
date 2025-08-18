@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YTKit
-// @version      5.5
+// @version      5.6
 // @description  Ultimate YouTube customization. Hide elements, control layout, and enhance your viewing experience with a modern UI.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
@@ -36,25 +36,12 @@
     // ——————————————————————————————————————————————————————————————————————————
     //  ~ CHANGELOG ~
     //
+    //  v5.6 - Watch Page Button Fix
+    //  - FIXED: Re-implemented the logic to display the settings gear icon on video watch pages, next to the uploader's channel info. The button now correctly appears in either the main header or on the watch page as you navigate.
+    //
     //  v5.5 - Full Code Merge
     //  - MAJOR: Thoroughly compared version 5.0 and the newer script.
     //  - ADDED: Re-integrated all missing functions, features, UI logic, and CSS from v5.0.
-    //  - FIXED: Restored complete functionality of the old version while keeping the new settings panel design.
-    //
-    //  v5.4 - Live Chat Height Fix
-    //  - FIXED: Added a `height: 100vh` property to the adaptive live chat layout CSS.
-    //
-    //  v5.3 - Final Audit & Patch
-    //  - FIXED: Conducted a full audit comparing the 5.0 script and the new script.
-    //
-    //  v5.2 - Layout & Video Sizing Hotfix
-    //  - FIXED: Re-implemented the CSS logic from v5.0 for the "Fit Player to Window" feature.
-    //
-    //  v5.1 - Integrated Modules Release
-    //  - ADDED: A new "Modules" tab in the settings panel for integrated, third-party scripts.
-    //
-    //  v5.0 - The Polished Public Release
-    //  - MAJOR: Implemented a professional, modern, and tabbed settings UI.
     //
     // ——————————————————————————————————————————————————————————————————————————
 
@@ -2173,25 +2160,51 @@ function createIcon(iconData) {
 }
 
 function injectSettingsButton() {
-    const createButton = () => {
-        const btn = document.createElement('button');
-        btn.id = 'ytkit-settings-button';
-        btn.title = 'YTKit Settings (Ctrl+Alt+Y)';
-        btn.appendChild(createIcon(ICONS.cog));
-        btn.onclick = () => document.body.classList.toggle('ytkit-panel-open');
-        return btn;
-    };
+    const handleDisplay = () => {
+        // First, remove any buttons from the previous page view
+        document.getElementById('ytkit-masthead-button-container')?.remove();
+        document.getElementById('ytkit-watch-button-container')?.remove();
 
-    const placeButton = () => {
-        if (document.getElementById('ytkit-settings-button')) return;
-        waitForElement('ytd-masthead #end', (masthead) => {
-            if (!document.getElementById('ytkit-settings-button')) {
-                 masthead.prepend(createButton());
-            }
-        });
+        const isWatchPage = window.location.pathname.startsWith('/watch');
+
+        const createButton = () => {
+            const btn = document.createElement('button');
+            btn.className = 'ytkit-settings-button'; // Use a class for styling
+            btn.title = 'YTKit Settings (Ctrl+Alt+Y)';
+            btn.appendChild(createIcon(ICONS.cog));
+            btn.onclick = () => document.body.classList.toggle('ytkit-panel-open');
+            return btn;
+        };
+
+        if (isWatchPage) {
+            waitForElement('#top-row #owner', (ownerDiv) => {
+                if (document.getElementById('ytkit-watch-button-container')) return;
+                const container = document.createElement('div');
+                container.id = 'ytkit-watch-button-container';
+                container.appendChild(createButton());
+
+                const logo = document.getElementById('yt-suite-watch-logo');
+                if (logo && logo.parentElement === ownerDiv) {
+                    // Insert after the floating logo
+                    ownerDiv.insertBefore(container, logo.nextSibling);
+                } else {
+                    // Otherwise, put it at the start
+                    ownerDiv.prepend(container);
+                }
+            });
+        } else {
+            waitForElement('ytd-masthead #end', (mastheadEnd) => {
+                if (document.getElementById('ytkit-masthead-button-container')) return;
+                const container = document.createElement('div');
+                container.id = 'ytkit-masthead-button-container';
+                container.appendChild(createButton());
+                mastheadEnd.prepend(container);
+            });
+        }
     };
-    addNavigateRule("settingsButtonRule", placeButton);
+    addNavigateRule("settingsButtonRule", handleDisplay);
 }
+
 
 function buildSettingsPanel() {
     if (document.getElementById('ytkit-settings-panel')) return;
@@ -2332,7 +2345,7 @@ function buildSettingsPanel() {
     const versionSpan = document.createElement('span');
     versionSpan.className = 'ytkit-version';
     versionSpan.title = 'Keyboard Shortcut: Ctrl+Alt+Y';
-    versionSpan.textContent = 'v5.5';
+    versionSpan.textContent = 'v5.6';
     footerLeft.appendChild(githubLink);
     footerLeft.appendChild(versionSpan);
 
@@ -2590,15 +2603,21 @@ function injectPanelStyles() {
     to { opacity: 1; transform: translateX(0); }
 }
 
-#ytkit-settings-button { background: transparent; border: none; cursor: pointer; padding: 8px; margin: 0 4px; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: background-color 0.2s ease, transform 0.2s ease; }
-#ytkit-settings-button:hover { background-color: var(--yt-spec-badge-chip-background); transform: scale(1.1) rotate(15deg); }
-#ytkit-settings-button svg { width: 24px; height: 24px; color: var(--yt-spec-icon-inactive); }
+/* === Global Controls === */
+.ytkit-settings-button { background: transparent; border: none; cursor: pointer; padding: 8px; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: background-color 0.2s ease, transform 0.2s ease; }
+.ytkit-settings-button:hover { background-color: var(--yt-spec-badge-chip-background); transform: scale(1.1) rotate(15deg); }
+.ytkit-settings-button svg { width: 24px; height: 24px; color: var(--yt-spec-icon-inactive); }
+#ytkit-watch-button-container { margin: 0 8px 0 16px; display: flex; align-items: center; }
+#ytkit-masthead-button-container { margin: 0 4px; }
 
+
+/* === Settings Panel: Overlay & Container === */
 #ytkit-panel-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); z-index: 99998; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
 #ytkit-settings-panel { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.95); z-index: 99999; opacity: 0; pointer-events: none; transition: opacity 0.3s ease, transform 0.3s ease; display: flex; flex-direction: column; width: 95%; max-width: 1024px; max-height: 90vh; background: var(--ytkit-bg-primary); color: var(--ytkit-text-primary); box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7); font-family: var(--ytkit-font); border-radius: 16px; border: 1px solid var(--ytkit-border-color); overflow: hidden; }
 body.ytkit-panel-open #ytkit-panel-overlay { opacity: 1; pointer-events: auto; }
 body.ytkit-panel-open #ytkit-settings-panel { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1); }
 
+/* === Settings Panel: Header, Body, Footer === */
 .ytkit-settings-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 12px 24px; border-bottom: 1px solid var(--ytkit-border-color); flex-shrink: 0; }
 .ytkit-header-title { display: flex; align-items: center; gap: 14px; }
 .ytkit-header-title h2 { font-size: 22px; font-weight: 700; margin: 0; }
@@ -2622,6 +2641,7 @@ body.ytkit-panel-open #ytkit-settings-panel { opacity: 1; pointer-events: auto; 
 .ytkit-footer-right { display: flex; align-items: center; gap: 16px; }
 .ytkit-version { font-size: 12px; color: var(--ytkit-text-secondary); cursor: help; }
 
+/* === Settings Panel: Setting Rows & Toggles === */
 .ytkit-setting-row, .ytkit-management-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 20px; padding: 16px; background: var(--ytkit-bg-secondary); border: 1px solid var(--ytkit-border-color); border-radius: 12px; transition: box-shadow .2s; }
 .ytkit-setting-row:hover, .ytkit-management-row:hover { box-shadow: 0 0 15px rgba(0,0,0,0.1); }
 .ytkit-toggle-all-row { background: var(--ytkit-bg-primary); border-style: dashed; }
@@ -2639,6 +2659,7 @@ body.ytkit-panel-open #ytkit-settings-panel { opacity: 1; pointer-events: auto; 
 .ytkit-sub-setting { margin-left: 20px; }
 
 
+/* === Buttons & Inputs === */
 .ytkit-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; font-size: 14px; font-weight: 500; border-radius: 8px; border: 1px solid var(--ytkit-border-color); cursor: pointer; transition: all .2s; background-color: var(--ytkit-bg-tertiary); color: var(--ytkit-text-primary); }
 .ytkit-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
 .ytkit-button svg { width: 16px; height: 16px; }
@@ -2646,11 +2667,13 @@ body.ytkit-panel-open #ytkit-settings-panel { opacity: 1; pointer-events: auto; 
 .ytkit-input { background: var(--ytkit-bg-primary); color: var(--ytkit-text-primary); border: 1px solid var(--ytkit-border-color); border-radius: 6px; padding: 8px 10px; font-family: var(--ytkit-font); font-size: 14px; width: auto; transition: border-color .2s, box-shadow .2s; }
 .ytkit-input:focus { outline: none; border-color: var(--ytkit-accent); box-shadow: 0 0 0 3px var(--ytkit-accent-glow); }
 
+/* === Toast Notifications === */
 .ytkit-toast { position: fixed; bottom: -100px; left: 50%; transform: translateX(-50%); color: white; padding: 12px 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-family: var(--ytkit-font); font-size: 15px; font-weight: 500; z-index: 100002; transition: all 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55); border-radius: 8px; }
 .ytkit-toast.show { bottom: 20px; }
 .ytkit-toast.success { background-color: var(--ytkit-success); }
 .ytkit-toast.error { background-color: var(--ytkit-error); }
 
+/* === Logo injection on watch page === */
 #yt-suite-watch-logo { display: flex; align-items: center; margin-right: 16px; }
 #yt-suite-watch-logo a { display: flex; align-items: center; }
 #yt-suite-watch-logo ytd-logo { width: 90px; height: auto; }
