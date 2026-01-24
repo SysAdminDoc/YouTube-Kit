@@ -878,6 +878,66 @@ while ($listener.IsListening) {
                     cacheSize = $cache.Count
                 }
             }
+            "/vlc-queue" {
+                $videoId = $query["id"]
+                $videoUrl = $query["url"]
+                
+                if (-not $videoId -and -not $videoUrl) {
+                    $result = @{ success = $false; error = "Missing id or url parameter" }
+                } else {
+                    if ($videoId -and -not $videoUrl) {
+                        $videoUrl = "https://www.youtube.com/watch?v=$videoId"
+                    }
+                    if (-not $videoId -and $videoUrl -match '[?&]v=([^&]+)') {
+                        $videoId = $matches[1]
+                    }
+                    
+                    try {
+                        # Get video title
+                        $title = & $config.YtDlpPath --get-title --no-playlist $videoUrl 2>$null
+                        if (-not $title) { $title = "YouTube Video" }
+                        
+                        # Check if VLC is running
+                        $vlcProcess = Get-Process -Name "vlc" -ErrorAction SilentlyContinue
+                        
+                        # Get stream URL
+                        $formatString = "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+                        $streams = & $config.YtDlpPath -f $formatString -g --no-playlist $videoUrl 2>$null
+                        
+                        if ($streams) {
+                            $streamArray = $streams -split "`n" | Where-Object { $_ -match "^http" }
+                            
+                            if ($vlcProcess) {
+                                # VLC running - enqueue
+                                $vlcArgs = @("--playlist-enqueue", "--no-video-title-show", "--meta-title=`"$title`"")
+                                if ($streamArray.Count -ge 2) {
+                                    $vlcArgs += "`"$($streamArray[0])`""
+                                    $vlcArgs += "--input-slave=`"$($streamArray[1])`""
+                                } else {
+                                    $vlcArgs += "`"$($streamArray[0])`""
+                                }
+                                Start-Process -FilePath $config.VlcPath -ArgumentList $vlcArgs
+                                $result = @{ success = $true; action = "queued"; title = $title; videoId = $videoId }
+                            } else {
+                                # VLC not running - start it
+                                $vlcArgs = @("--no-video-title-show", "--meta-title=`"$title`"")
+                                if ($streamArray.Count -ge 2) {
+                                    $vlcArgs += "`"$($streamArray[0])`""
+                                    $vlcArgs += "--input-slave=`"$($streamArray[1])`""
+                                } else {
+                                    $vlcArgs += "`"$($streamArray[0])`""
+                                }
+                                Start-Process -FilePath $config.VlcPath -ArgumentList $vlcArgs
+                                $result = @{ success = $true; action = "started"; title = $title; videoId = $videoId }
+                            }
+                        } else {
+                            $result = @{ success = $false; error = "Failed to get stream URL"; videoId = $videoId }
+                        }
+                    } catch {
+                        $result = @{ success = $false; error = $_.Exception.Message; videoId = $videoId }
+                    }
+                }
+            }
             default {
                 $result = @{ success = $false; error = "Unknown endpoint: $path" }
             }
