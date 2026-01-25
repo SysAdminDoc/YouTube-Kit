@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YTKit
-// @version      9.5
-// @description  Ultimate YouTube customization with VLC streaming, video/channel hiding with bulk hide support, playback enhancements, Return YouTube Dislike, and more.
+// @version      12.1
+// @description  Ultimate YouTube customization with VLC streaming, video/channel hiding, playback enhancements, and more. Optimized for performance.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
 // @match        https://*.youtube-nocookie.com/*
@@ -23,7 +23,6 @@
 // @grant        GM_addStyle
 // @grant        GM_openInTab
 // @connect      sponsor.ajay.app
-// @connect      returnyoutubedislikeapi.com
 // @resource     betterDarkMode https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/youtube-dark-theme.css
 // @resource     catppuccinMocha https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/youtube-catppuccin-theme.css
 // @updateURL    https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js
@@ -35,7 +34,743 @@
     'use strict';
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  SECTION 0: DYNAMIC CONTENT/STYLE ENGINE
+    //  SECTION 0A: CORE UTILITIES & UNIFIED STORAGE
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Settings version for migrations
+    const SETTINGS_VERSION = 3;
+
+    // Page type detection for lazy-loading features
+    const PageTypes = {
+        HOME: 'home',
+        WATCH: 'watch',
+        SEARCH: 'search',
+        CHANNEL: 'channel',
+        SUBSCRIPTIONS: 'subscriptions',
+        PLAYLIST: 'playlist',
+        SHORTS: 'shorts',
+        HISTORY: 'history',
+        LIBRARY: 'library',
+        OTHER: 'other'
+    };
+
+    function getCurrentPage() {
+        const path = window.location.pathname;
+        if (path === '/' || path === '/feed/trending') return PageTypes.HOME;
+        if (path.startsWith('/watch')) return PageTypes.WATCH;
+        if (path.startsWith('/results')) return PageTypes.SEARCH;
+        if (path.startsWith('/shorts')) return PageTypes.SHORTS;
+        if (path.startsWith('/feed/subscriptions')) return PageTypes.SUBSCRIPTIONS;
+        if (path.startsWith('/feed/history')) return PageTypes.HISTORY;
+        if (path.startsWith('/feed/library') || path.startsWith('/playlist')) return PageTypes.LIBRARY;
+        if (path.startsWith('/@') || path.startsWith('/channel') || path.startsWith('/c/') || path.startsWith('/user/')) return PageTypes.CHANNEL;
+        return PageTypes.OTHER;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  Trusted Types Safe HTML Helper
+    // ══════════════════════════════════════════════════════════════════════════
+    // YouTube enforces Trusted Types which blocks direct innerHTML assignments
+    const TrustedHTML = (() => {
+        let policy = null;
+        
+        // Try to create a Trusted Types policy
+        if (typeof window.trustedTypes !== 'undefined' && window.trustedTypes.createPolicy) {
+            try {
+                policy = window.trustedTypes.createPolicy('ytkit-policy', {
+                    createHTML: (string) => string
+                });
+            } catch (e) {
+                // Policy already exists or can't be created
+                console.log('[YTKit] Trusted Types policy creation failed, using fallback');
+            }
+        }
+        
+        return {
+            // Set innerHTML safely
+            setHTML(element, html) {
+                if (policy) {
+                    element.innerHTML = policy.createHTML(html);
+                } else {
+                    // Fallback: use DOMParser to parse HTML safely
+                    try {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(`<template>${html}</template>`, 'text/html');
+                        const template = doc.querySelector('template');
+                        element.innerHTML = '';
+                        if (template && template.content) {
+                            element.appendChild(template.content.cloneNode(true));
+                        }
+                    } catch (e) {
+                        // Last resort: use Range.createContextualFragment
+                        try {
+                            const range = document.createRange();
+                            range.selectNode(document.body);
+                            const fragment = range.createContextualFragment(html);
+                            element.innerHTML = '';
+                            element.appendChild(fragment);
+                        } catch (e2) {
+                            console.error('[YTKit] Failed to set HTML:', e2);
+                        }
+                    }
+                }
+            },
+            
+            // Create HTML string (for cases where we need TrustedHTML)
+            create(html) {
+                if (policy) {
+                    return policy.createHTML(html);
+                }
+                return html;
+            }
+        };
+    })();
+
+    // Unified Storage Manager
+    const StorageManager = {
+        _cache: {},
+        _dirty: new Set(),
+        _saveTimeout: null,
+
+        async get(key, defaultVal = null) {
+            if (this._cache.hasOwnProperty(key)) {
+                return this._cache[key];
+            }
+            try {
+                const val = await GM_getValue(key, defaultVal);
+                this._cache[key] = val;
+                return val;
+            } catch (e) {
+                console.warn('[YTKit Storage] Failed to get:', key, e);
+                return defaultVal;
+            }
+        },
+
+        async set(key, value) {
+            this._cache[key] = value;
+            this._dirty.add(key);
+            this._scheduleSave();
+        },
+
+        _scheduleSave() {
+            if (this._saveTimeout) return;
+            this._saveTimeout = setTimeout(() => this._flush(), 500);
+        },
+
+        async _flush() {
+            this._saveTimeout = null;
+            const toSave = [...this._dirty];
+            this._dirty.clear();
+            for (const key of toSave) {
+                try {
+                    await GM_setValue(key, this._cache[key]);
+                } catch (e) {
+                    console.error('[YTKit Storage] Failed to save:', key, e);
+                }
+            }
+        },
+
+        async getSync(key, defaultVal = null) {
+            try {
+                return GM_getValue(key, defaultVal);
+            } catch (e) {
+                return defaultVal;
+            }
+        },
+
+        setSync(key, value) {
+            this._cache[key] = value;
+            try {
+                GM_setValue(key, value);
+            } catch (e) {
+                console.error('[YTKit Storage] Sync save failed:', key, e);
+            }
+        }
+    };
+
+    // Settings Migration System
+    const SettingsMigration = {
+        migrations: {
+            // Migration from version 1 to 2
+            1: (settings) => {
+                // Rename old setting keys if needed
+                if (settings.hideYouTubeShorts !== undefined) {
+                    settings.removeAllShorts = settings.hideYouTubeShorts;
+                    delete settings.hideYouTubeShorts;
+                }
+                return settings;
+            },
+            // Migration from version 2 to 3
+            2: (settings) => {
+                // Add keyboard shortcuts defaults if missing
+                if (!settings.keyboardShortcuts) {
+                    settings.keyboardShortcuts = {
+                        openSettings: 'ctrl+alt+y',
+                        hideVideo: 'shift+h',
+                        downloadVideo: 'ctrl+shift+d'
+                    };
+                }
+                return settings;
+            }
+        },
+
+        async migrate(settings) {
+            let currentVersion = settings._version || 1;
+            let migrated = { ...settings };
+
+            while (currentVersion < SETTINGS_VERSION) {
+                const migrationFn = this.migrations[currentVersion];
+                if (migrationFn) {
+                    try {
+                        migrated = migrationFn(migrated);
+                        console.log(`[YTKit] Migrated settings from v${currentVersion} to v${currentVersion + 1}`);
+                    } catch (e) {
+                        console.error(`[YTKit] Migration ${currentVersion} failed:`, e);
+                    }
+                }
+                currentVersion++;
+            }
+
+            migrated._version = SETTINGS_VERSION;
+            return migrated;
+        }
+    };
+
+    // Undo System for Video Hiding
+    const UndoManager = {
+        _stack: [],
+        _maxItems: 10,
+
+        push(action) {
+            this._stack.push({
+                ...action,
+                timestamp: Date.now()
+            });
+            if (this._stack.length > this._maxItems) {
+                this._stack.shift();
+            }
+        },
+
+        pop() {
+            return this._stack.pop();
+        },
+
+        peek() {
+            return this._stack[this._stack.length - 1];
+        },
+
+        canUndo() {
+            return this._stack.length > 0;
+        },
+
+        clear() {
+            this._stack = [];
+        }
+    };
+
+    // Keyboard Shortcuts Manager
+    const KeyboardManager = {
+        _shortcuts: new Map(),
+        _enabled: true,
+        _initialized: false,
+
+        init() {
+            if (this._initialized) return;
+            this._initialized = true;
+
+            document.addEventListener('keydown', (e) => {
+                if (!this._enabled) return;
+                // Don't trigger shortcuts when typing in inputs
+                if (e.target.matches('input, textarea, [contenteditable]')) return;
+
+                const combo = this._getCombo(e);
+                const handler = this._shortcuts.get(combo);
+                if (handler) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handler();
+                }
+            });
+        },
+
+        _getCombo(e) {
+            const parts = [];
+            if (e.ctrlKey || e.metaKey) parts.push('ctrl');
+            if (e.altKey) parts.push('alt');
+            if (e.shiftKey) parts.push('shift');
+            parts.push(e.key.toLowerCase());
+            return parts.join('+');
+        },
+
+        register(combo, handler, description = '') {
+            const normalized = combo.toLowerCase().split('+').sort().join('+');
+            this._shortcuts.set(normalized, handler);
+        },
+
+        unregister(combo) {
+            const normalized = combo.toLowerCase().split('+').sort().join('+');
+            this._shortcuts.delete(normalized);
+        },
+
+        setEnabled(enabled) {
+            this._enabled = enabled;
+        },
+
+        getRegistered() {
+            return [...this._shortcuts.keys()];
+        }
+    };
+
+    // Debug Mode Manager
+    const DebugManager = {
+        _enabled: false,
+        _logs: [],
+        _maxLogs: 100,
+
+        enable() {
+            this._enabled = true;
+            this._expose();
+            console.log('[YTKit Debug] Debug mode enabled');
+        },
+
+        disable() {
+            this._enabled = false;
+            delete window.YTKit;
+        },
+
+        log(category, message, data = null) {
+            if (!this._enabled) return;
+            const entry = {
+                time: new Date().toISOString(),
+                category,
+                message,
+                data
+            };
+            this._logs.push(entry);
+            if (this._logs.length > this._maxLogs) this._logs.shift();
+            console.log(`[YTKit ${category}]`, message, data || '');
+        },
+
+        _expose() {
+            window.YTKit = {
+                version: '12.0',
+                debug: this,
+                getSettings: () => appState.settings,
+                getFeatures: () => features.map(f => ({
+                    id: f.id,
+                    name: f.name,
+                    enabled: !!appState.settings[f.id],
+                    group: f.group
+                })),
+                getLogs: () => [...this._logs],
+                clearLogs: () => { this._logs = []; },
+                storage: StorageManager,
+                undo: UndoManager,
+                getCurrentPage: getCurrentPage,
+                forceRefresh: () => location.reload(),
+                resetSettings: async () => {
+                    if (confirm('Reset all YTKit settings to defaults?')) {
+                        await StorageManager.set('ytSuiteSettings', {});
+                        location.reload();
+                    }
+                },
+                exportDiagnostics: () => {
+                    return JSON.stringify({
+                        version: '10.0',
+                        userAgent: navigator.userAgent,
+                        url: location.href,
+                        page: getCurrentPage(),
+                        settings: appState.settings,
+                        features: features.map(f => ({ id: f.id, enabled: !!appState.settings[f.id] })),
+                        logs: this._logs
+                    }, null, 2);
+                }
+            };
+        }
+    };
+
+    // Statistics Tracker
+    const StatsTracker = {
+        _STORAGE_KEY: 'ytkit-statistics',
+        _stats: null,
+        _sessionStart: Date.now(),
+
+        async load() {
+            if (this._stats) return this._stats;
+            this._stats = await StorageManager.get(this._STORAGE_KEY, {
+                videosWatched: 0,
+                videosHidden: 0,
+                channelsBlocked: 0,
+                sponsorTimeSkipped: 0,
+                introOutroSkipped: 0,
+                totalTimeOnYouTube: 0,
+                downloadsInitiated: 0,
+                vlcStreams: 0,
+                firstUsed: Date.now(),
+                lastUsed: Date.now(),
+                sessionsCount: 0
+            });
+            this._stats.sessionsCount++;
+            this._stats.lastUsed = Date.now();
+            await this.save();
+            return this._stats;
+        },
+
+        async save() {
+            if (!this._stats) return;
+            await StorageManager.set(this._STORAGE_KEY, this._stats);
+        },
+
+        async increment(stat, amount = 1) {
+            await this.load();
+            if (this._stats.hasOwnProperty(stat)) {
+                this._stats[stat] += amount;
+                await this.save();
+            }
+        },
+
+        async get(stat) {
+            await this.load();
+            return this._stats[stat];
+        },
+
+        async getAll() {
+            await this.load();
+            // Add session time
+            const sessionTime = Math.floor((Date.now() - this._sessionStart) / 1000);
+            return {
+                ...this._stats,
+                currentSessionTime: sessionTime
+            };
+        },
+
+        async reset() {
+            this._stats = {
+                videosWatched: 0,
+                videosHidden: 0,
+                channelsBlocked: 0,
+                sponsorTimeSkipped: 0,
+                introOutroSkipped: 0,
+                totalTimeOnYouTube: 0,
+                downloadsInitiated: 0,
+                vlcStreams: 0,
+                firstUsed: Date.now(),
+                lastUsed: Date.now(),
+                sessionsCount: 1
+            };
+            await this.save();
+        },
+
+        formatTime(seconds) {
+            if (seconds < 60) return `${seconds}s`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            return `${hours}h ${mins}m`;
+        }
+    };
+
+    // Settings Profiles Manager
+    const ProfilesManager = {
+        _STORAGE_KEY: 'ytkit-profiles',
+        _profiles: null,
+
+        _builtInProfiles: {
+            minimal: {
+                name: 'Minimal',
+                description: 'Clean, distraction-free experience',
+                icon: 'minimize',
+                settings: {
+                    hideCreateButton: true, hideVoiceSearch: true, hideSidebar: true,
+                    removeAllShorts: true, hideMerchShelf: true, hideVideoEndCards: true,
+                    hideVideoEndScreen: true, hideHashtags: true, hidePinnedComments: true,
+                    hideRelatedVideos: true, hideDescriptionExtras: true, hideInfoPanels: true
+                }
+            },
+            privacy: {
+                name: 'Privacy',
+                description: 'Maximum privacy protection',
+                icon: 'shield-off',
+                settings: {
+                    disablePlayOnHover: true, preventAutoplay: true, hideNotificationButton: true,
+                    hideNotificationBadge: true, hideLiveChatEngagement: true, hidePaidPromotionWatch: true
+                }
+            },
+            powerUser: {
+                name: 'Power User',
+                description: 'All productivity features enabled',
+                icon: 'zap-off',
+                settings: {
+                    playbackSpeedPresets: true, rememberPlaybackSpeed: true,
+                    showWatchProgress: true, timestampBookmarks: true, skipSponsors: true,
+                    autoMaxResolution: true, autoExpandDescription: true, fiveVideosPerRow: true,
+                    hideVideosFromHome: true, keyboardShortcutsFeature: true
+                }
+            },
+            download: {
+                name: 'Download Mode',
+                description: 'All download buttons visible',
+                icon: 'download',
+                settings: {
+                    showVlcButton: true, showVlcQueueButton: true, showLocalDownloadButton: true,
+                    showTranscriptButton: true, videoContextMenu: true, replaceWithCobaltDownloader: true
+                }
+            },
+            binge: {
+                name: 'Binge Mode',
+                description: 'Optimized for long viewing sessions',
+                icon: 'tv',
+                settings: {
+                    autoTheaterMode: true, fitPlayerToWindow: true, hideRelatedVideos: false,
+                    preventAutoplay: false, autoSkipStillWatching: true, skipSponsors: true,
+                    autoSkipIntroOutro: true
+                }
+            }
+        },
+
+        async load() {
+            if (this._profiles) return this._profiles;
+            this._profiles = await StorageManager.get(this._STORAGE_KEY, {});
+            return this._profiles;
+        },
+
+        async save() {
+            if (!this._profiles) return;
+            await StorageManager.set(this._STORAGE_KEY, this._profiles);
+        },
+
+        async getAll() {
+            await this.load();
+            return {
+                builtIn: this._builtInProfiles,
+                custom: this._profiles
+            };
+        },
+
+        async saveCustomProfile(name, settings) {
+            await this.load();
+            this._profiles[name] = {
+                name: name,
+                description: 'Custom profile',
+                icon: 'user-square',
+                settings: { ...settings },
+                createdAt: Date.now()
+            };
+            await this.save();
+        },
+
+        async deleteCustomProfile(name) {
+            await this.load();
+            delete this._profiles[name];
+            await this.save();
+        },
+
+        async applyProfile(profileKey, isBuiltIn = true) {
+            const profiles = isBuiltIn ? this._builtInProfiles : this._profiles;
+            const profile = profiles[profileKey];
+            if (!profile) return false;
+
+            // Merge profile settings with current settings
+            Object.assign(appState.settings, profile.settings);
+            await settingsManager.save(appState.settings);
+            return true;
+        }
+    };
+
+    // Per-Channel Settings Manager
+    const ChannelSettingsManager = {
+        _STORAGE_KEY: 'ytkit-channel-settings',
+        _settings: null,
+
+        async load() {
+            if (this._settings) return this._settings;
+            this._settings = await StorageManager.get(this._STORAGE_KEY, {});
+            return this._settings;
+        },
+
+        async save() {
+            if (!this._settings) return;
+            await StorageManager.set(this._STORAGE_KEY, this._settings);
+        },
+
+        async getForChannel(channelId) {
+            await this.load();
+            return this._settings[channelId] || null;
+        },
+
+        async setForChannel(channelId, settings) {
+            await this.load();
+            this._settings[channelId] = {
+                ...this._settings[channelId],
+                ...settings,
+                updatedAt: Date.now()
+            };
+            await this.save();
+        },
+
+        async removeChannel(channelId) {
+            await this.load();
+            delete this._settings[channelId];
+            await this.save();
+        },
+
+        async getAllChannels() {
+            await this.load();
+            return Object.entries(this._settings).map(([id, settings]) => ({
+                id,
+                ...settings
+            }));
+        },
+
+        getCurrentChannelId() {
+            // Try to extract channel ID from various sources
+            const channelLink = document.querySelector('#owner #channel-name a, #upload-info #channel-name a, ytd-video-owner-renderer a');
+            if (channelLink) {
+                const href = channelLink.href;
+                const match = href.match(/\/@([^\/\?]+)|\/channel\/([^\/\?]+)/);
+                if (match) return match[1] || match[2];
+            }
+            return null;
+        },
+
+        getCurrentChannelName() {
+            const channelName = document.querySelector('#owner #channel-name, #upload-info #channel-name, ytd-video-owner-renderer #channel-name');
+            return channelName?.textContent?.trim() || null;
+        }
+    };
+
+    // IntersectionObserver Helper for Performance
+    const VisibilityObserver = {
+        _observer: null,
+        _callbacks: new Map(),
+        _options: {
+            root: null,
+            rootMargin: '200px',
+            threshold: 0
+        },
+
+        init() {
+            if (this._observer) return;
+            this._observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    const callback = this._callbacks.get(entry.target);
+                    if (callback) {
+                        callback(entry.isIntersecting, entry);
+                    }
+                });
+            }, this._options);
+        },
+
+        observe(element, callback) {
+            this.init();
+            this._callbacks.set(element, callback);
+            this._observer.observe(element);
+        },
+
+        unobserve(element) {
+            if (!this._observer) return;
+            this._callbacks.delete(element);
+            this._observer.unobserve(element);
+        },
+
+        disconnect() {
+            if (this._observer) {
+                this._observer.disconnect();
+                this._callbacks.clear();
+            }
+        }
+    };
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  Unified Tick Manager - Consolidates all intervals into single loop
+    // ══════════════════════════════════════════════════════════════════════════
+    const TickManager = {
+        _handlers: new Map(),
+        _running: false,
+        _lastTick: 0,
+        _frameId: null,
+
+        register(id, callback, intervalMs) {
+            this._handlers.set(id, {
+                callback,
+                interval: intervalMs,
+                lastRun: 0
+            });
+            if (!this._running) this._start();
+        },
+
+        unregister(id) {
+            this._handlers.delete(id);
+            if (this._handlers.size === 0) this._stop();
+        },
+
+        _start() {
+            if (this._running) return;
+            this._running = true;
+            this._tick();
+        },
+
+        _stop() {
+            this._running = false;
+            if (this._frameId) {
+                cancelAnimationFrame(this._frameId);
+                this._frameId = null;
+            }
+        },
+
+        _tick() {
+            if (!this._running) return;
+
+            const now = performance.now();
+            
+            for (const [id, handler] of this._handlers) {
+                if (now - handler.lastRun >= handler.interval) {
+                    try {
+                        handler.callback();
+                    } catch (e) {
+                        console.error(`[YTKit Tick] Error in ${id}:`, e);
+                    }
+                    handler.lastRun = now;
+                }
+            }
+
+            this._frameId = requestAnimationFrame(() => this._tick());
+        }
+    };
+
+    // Throttle utility for expensive operations
+    function throttle(fn, limit) {
+        let inThrottle = false;
+        let lastArgs = null;
+        
+        return function(...args) {
+            if (!inThrottle) {
+                fn.apply(this, args);
+                inThrottle = true;
+                setTimeout(() => {
+                    inThrottle = false;
+                    if (lastArgs) {
+                        fn.apply(this, lastArgs);
+                        lastArgs = null;
+                    }
+                }, limit);
+            } else {
+                lastArgs = args;
+            }
+        };
+    }
+
+    // Debounce utility
+    function debounce(fn, delay) {
+        let timeoutId;
+        return function(...args) {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => fn.apply(this, args), delay);
+        };
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  SECTION 0B: DYNAMIC CONTENT/STYLE ENGINE
     // ══════════════════════════════════════════════════════════════════════════
     let mutationObserver = null;
     const mutationRules = new Map();
@@ -56,10 +791,13 @@
         }, intervalTime);
     }
 
-    // Global toast notification function
-    function showToast(message, color = '#22c55e') {
+    // Global toast notification function with optional action button
+    function showToast(message, color = '#22c55e', options = {}) {
+        // Remove existing toast if present
+        document.querySelector('.ytkit-global-toast')?.remove();
+
         const toast = document.createElement('div');
-        toast.textContent = message;
+        toast.className = 'ytkit-global-toast';
         toast.style.cssText = `
             position: fixed;
             bottom: 80px;
@@ -74,8 +812,40 @@
             font-weight: 500;
             z-index: 999999;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            animation: ytkit-toast-fade 2.5s ease-out forwards;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: ytkit-toast-fade ${options.duration || 2.5}s ease-out forwards;
         `;
+
+        const textSpan = document.createElement('span');
+        textSpan.textContent = message;
+        toast.appendChild(textSpan);
+
+        // Add action button if provided (e.g., for Undo)
+        if (options.action) {
+            const actionBtn = document.createElement('button');
+            actionBtn.textContent = options.action.text || 'Undo';
+            actionBtn.style.cssText = `
+                background: rgba(255,255,255,0.2);
+                border: 1px solid rgba(255,255,255,0.3);
+                color: white;
+                padding: 4px 12px;
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.2s;
+            `;
+            actionBtn.onmouseenter = () => { actionBtn.style.background = 'rgba(255,255,255,0.3)'; };
+            actionBtn.onmouseleave = () => { actionBtn.style.background = 'rgba(255,255,255,0.2)'; };
+            actionBtn.onclick = (e) => {
+                e.stopPropagation();
+                toast.remove();
+                options.action.onClick?.();
+            };
+            toast.appendChild(actionBtn);
+        }
 
         // Add animation keyframes if not exists
         if (!document.getElementById('ytkit-toast-animation')) {
@@ -93,7 +863,10 @@
         }
 
         document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 2500);
+        const duration = (options.duration || 2.5) * 1000;
+        setTimeout(() => toast.remove(), duration);
+
+        return toast;
     }
 
     // Aggressive button injection system with MutationObserver
@@ -460,7 +1233,7 @@
     // ══════════════════════════════════════════════════════════════════════════
     const settingsManager = {
         defaults: {
-            // Interface
+            // ═══ Interface ═══
             hideCreateButton: true,
             hideVoiceSearch: true,
             logoToSubscriptions: true,
@@ -468,17 +1241,15 @@
             hideSidebar: true,
             hideNotificationButton: false,
             hideNotificationBadge: false,
-            squareSearchBar: false,
-            // Appearance
-            nativeDarkMode: true,
-            betterDarkMode: true,
-            catppuccinMocha: false,
-            squarify: false,
-            squareAvatars: false,
-            noAmbientMode: false,
-            noFrostedGlass: false,
-            compactLayout: false,
-            // Content
+            
+            // ═══ Appearance ═══
+            theme: 'betterDark',
+            uiStyle: 'square',
+            noAmbientMode: true,
+            noFrostedGlass: true,
+            compactLayout: true,
+            
+            // ═══ Content ═══
             removeAllShorts: true,
             redirectShorts: true,
             disablePlayOnHover: true,
@@ -487,11 +1258,12 @@
             fiveVideosPerRow: true,
             hidePaidContentOverlay: true,
             redirectToVideosTab: true,
-            hidePlayables: false,
-            hideMembersOnly: false,
-            hideNewsHome: false,
-            hidePlaylistsHome: false,
-            // Video Hider (Enhanced)
+            hidePlayables: true,
+            hideMembersOnly: true,
+            hideNewsHome: true,
+            hidePlaylistsHome: true,
+            
+            // ═══ Video Hider ═══
             hideVideosFromHome: true,
             hideVideosBlockChannels: true,
             hideVideosKeywordFilter: '',
@@ -499,7 +1271,8 @@
             hideVideosBlockedChannels: [],
             hideVideosSubsLoadLimit: true,
             hideVideosSubsLoadThreshold: 3,
-            // Video Player Layout
+            
+            // ═══ Video Player ═══
             fitPlayerToWindow: true,
             hideRelatedVideos: true,
             adaptiveLiveLayout: true,
@@ -508,86 +1281,75 @@
             hideDescriptionRow: false,
             autoTheaterMode: false,
             persistentProgressBar: false,
-            // Playback
+            hideVideoEndContent: true,
+            
+            // ═══ Playback ═══
             preventAutoplay: false,
             autoExpandDescription: false,
             sortCommentsNewestFirst: false,
             autoOpenChapters: false,
             autoOpenTranscript: false,
             chronologicalNotifications: false,
-            // Playback Enhancements
+            autoSkipStillWatching: true,
+            
+            // ═══ Playback Enhancements ═══
             playbackSpeedPresets: true,
             defaultPlaybackSpeed: 1,
             rememberPlaybackSpeed: false,
-            channelPlaybackSpeeds: {},
-            returnYouTubeDislike: true,
             showWatchProgress: true,
             timestampBookmarks: true,
             autoSkipIntroOutro: false,
-            // SponsorBlock
+            enablePerChannelSettings: true,
+            
+            // ═══ SponsorBlock ═══
             skipSponsors: true,
             hideSponsorBlockLabels: true,
-            // Video Quality
+            
+            // ═══ Video Quality ═══
             autoMaxResolution: true,
             useEnhancedBitrate: true,
             hideQualityPopup: true,
-            // Clutter
+            
+            // ═══ Clutter ═══
             hideMerchShelf: true,
-            hideClarifyBoxes: true,
+            hideInfoPanel: true,
+            hideInfoPanels: true,
             hideDescriptionExtras: true,
             hideHashtags: true,
             hidePinnedComments: true,
-            hideCommentActionMenu: true,
+            hideCommentActionMenu: false,
             condenseComments: true,
             hideLiveChatEngagement: true,
             hidePaidPromotionWatch: true,
-            hideVideoEndCards: true,
-            hideVideoEndScreen: true,
-            hideEndVideoStills: true,
-            hideInfoPanel: false,
-            hideFundraiser: false,
+            hideFundraiser: true,
             hideLatestPosts: false,
-            // Live Chat
-            hideLiveChatHeader: true,
-            hideChatMenu: true,
-            hidePopoutChatButton: true,
-            hideChatReactionsButton: true,
-            hideChatTimestampsButton: true,
-            hideChatPolls: true,
-            hideChatPollBanner: true,
-            hideChatTicker: true,
-            hideViewerLeaderboard: true,
-            hideChatSupportButtons: true,
-            hideChatBanner: true,
-            hideChatEmojiButton: true,
-            hideTopFanIcons: true,
-            hideSuperChats: true,
-            hideLevelUp: true,
-            hideChatBots: true,
-            keywordFilterList: "",
-            // Action Buttons
+            
+            // ═══ Live Chat - Consolidated into array ═══
+            hiddenChatElements: [
+                'header', 'menu', 'popout', 'reactions', 'timestamps',
+                'polls', 'ticker', 'leaderboard', 'support', 'banner',
+                'emoji', 'topFan', 'superChats', 'levelUp', 'bots'
+            ],
+            chatKeywordFilter: '',
+            
+            // ═══ Action Buttons - Consolidated into array ═══
+            hiddenActionButtons: [
+                'like', 'dislike', 'share', 'ask', 'clip', 
+                'thanks', 'save', 'sponsor', 'moreActions'
+            ],
             autolikeVideos: true,
-            hideLikeButton: true,
-            hideDislikeButton: true,
-            hideShareButton: true,
-            hideAskButton: true,
-            hideClipButton: true,
-            hideThanksButton: true,
-            hideSaveButton: true,
             replaceWithCobaltDownloader: true,
-            hideSponsorButton: true,
-            hideMoreActionsButton: true,
-            // Player Controls
-            hideSponsorBlockButton: true,
-            hideNextButton: true,
-            hideAutoplayToggle: true,
-            hideSubtitlesToggle: true,
-            hideCaptionsContainer: true,
-            hideMiniplayerButton: true,
-            hidePipButton: true,
-            hideTheaterButton: true,
-            hideFullscreenButton: true,
-            // Downloads (YouTube Tools Integration)
+            
+            // ═══ Player Controls - Consolidated into array ═══
+            hiddenPlayerControls: [
+                'sponsorBlock', 'next', 'autoplay', 'subtitles',
+                'captions', 'miniplayer', 'pip', 'theater', 'fullscreen'
+            ],
+            
+            // ═══ Watch Page Elements ═══
+            hiddenWatchElements: [],
+            
+            // ═══ Downloads ═══
             showVlcButton: true,
             showVlcQueueButton: false,
             showLocalDownloadButton: true,
@@ -599,47 +1361,185 @@
             autoEmbedOnVisit: false,
             videoContextMenu: true,
             autoDownloadOnVisit: false,
-            downloadQuality: '1080',
+            downloadQuality: 'best',
             preferredMediaPlayer: 'vlc',
-            // Advanced
             downloadProvider: 'cobalt',
-            hideCollaborations: false,
+            
+            // ═══ Advanced ═══
+            hideCollaborations: true,
+            keyboardShortcuts: {
+                openSettings: 'ctrl+alt+y',
+                hideVideo: 'shift+h',
+                downloadVideo: 'ctrl+shift+d'
+            },
+            debugMode: false,
+            showStatisticsDashboard: true,
+            customCssEnabled: false,
+            customCssCode: '',
+            useIntersectionObserver: true,
+            _version: 3,
         },
+
+        // Migration map for old settings to new
+        _migrationMap: {
+            // Theme consolidation
+            'nativeDarkMode': (val, settings) => { if (val && !settings.betterDarkMode) settings.theme = 'dark'; },
+            'betterDarkMode': (val, settings) => { if (val) settings.theme = 'betterDark'; },
+            'catppuccinMocha': (val, settings) => { if (val) settings.theme = 'catppuccin'; },
+            // UI style consolidation
+            'squarify': (val, settings) => { if (val) settings.uiStyle = 'square'; },
+            'squareAvatars': (val, settings) => { if (val) settings.uiStyle = 'square'; },
+            'squareSearchBar': (val, settings) => { if (val) settings.uiStyle = 'square'; },
+            // Video end consolidation
+            'hideVideoEndCards': (val, settings) => { settings.hideVideoEndContent = val; },
+            'hideVideoEndScreen': (val, settings) => { if (val) settings.hideVideoEndContent = true; },
+            'hideEndVideoStills': (val, settings) => { if (val) settings.hideVideoEndContent = true; },
+            // Info panel consolidation
+            'hideClarifyBoxes': (val, settings) => { if (val) settings.hideInfoPanel = true; },
+            // Regex filter consolidation
+            'useRegexKeywordFilter': () => {}, // No longer needed - auto-detected
+            'hideVideosRegexFilter': (val, settings) => { 
+                if (val) settings.hideVideosKeywordFilter = val; 
+            },
+        },
+
         async load() {
-            let savedSettings = await GM_getValue('ytSuiteSettings', {});
+            let savedSettings = await StorageManager.get('ytSuiteSettings', {});
+            
+            // Migrate old settings to new format
+            savedSettings = this._migrateOldSettings(savedSettings);
+            
+            // Run version migrations if needed
+            if (!savedSettings._version || savedSettings._version < SETTINGS_VERSION) {
+                savedSettings = await SettingsMigration.migrate(savedSettings);
+                await this.save(savedSettings);
+            }
             return { ...this.defaults, ...savedSettings };
         },
+
+        _migrateOldSettings(saved) {
+            const migrated = { ...saved };
+            
+            // Migrate action buttons to array format
+            if (saved.hideLikeButton !== undefined) {
+                const hidden = [];
+                if (saved.hideLikeButton) hidden.push('like');
+                if (saved.hideDislikeButton) hidden.push('dislike');
+                if (saved.hideShareButton) hidden.push('share');
+                if (saved.hideAskButton) hidden.push('ask');
+                if (saved.hideClipButton) hidden.push('clip');
+                if (saved.hideThanksButton) hidden.push('thanks');
+                if (saved.hideSaveButton) hidden.push('save');
+                if (saved.hideSponsorButton) hidden.push('sponsor');
+                if (saved.hideMoreActionsButton) hidden.push('moreActions');
+                migrated.hiddenActionButtons = hidden;
+                // Clean up old keys
+                delete migrated.hideLikeButton; delete migrated.hideDislikeButton;
+                delete migrated.hideShareButton; delete migrated.hideAskButton;
+                delete migrated.hideClipButton; delete migrated.hideThanksButton;
+                delete migrated.hideSaveButton; delete migrated.hideSponsorButton;
+                delete migrated.hideMoreActionsButton;
+            }
+            
+            // Migrate player controls to array format
+            if (saved.hideSponsorBlockButton !== undefined) {
+                const hidden = [];
+                if (saved.hideSponsorBlockButton) hidden.push('sponsorBlock');
+                if (saved.hideNextButton) hidden.push('next');
+                if (saved.hideAutoplayToggle) hidden.push('autoplay');
+                if (saved.hideSubtitlesToggle) hidden.push('subtitles');
+                if (saved.hideCaptionsContainer) hidden.push('captions');
+                if (saved.hideMiniplayerButton) hidden.push('miniplayer');
+                if (saved.hidePipButton) hidden.push('pip');
+                if (saved.hideTheaterButton) hidden.push('theater');
+                if (saved.hideFullscreenButton) hidden.push('fullscreen');
+                migrated.hiddenPlayerControls = hidden;
+                // Clean up old keys
+                delete migrated.hideSponsorBlockButton; delete migrated.hideNextButton;
+                delete migrated.hideAutoplayToggle; delete migrated.hideSubtitlesToggle;
+                delete migrated.hideCaptionsContainer; delete migrated.hideMiniplayerButton;
+                delete migrated.hidePipButton; delete migrated.hideTheaterButton;
+                delete migrated.hideFullscreenButton;
+            }
+            
+            // Migrate chat elements to array format
+            if (saved.hideLiveChatHeader !== undefined) {
+                const hidden = [];
+                if (saved.hideLiveChatHeader) hidden.push('header');
+                if (saved.hideChatMenu) hidden.push('menu');
+                if (saved.hidePopoutChatButton) hidden.push('popout');
+                if (saved.hideChatReactionsButton) hidden.push('reactions');
+                if (saved.hideChatTimestampsButton) hidden.push('timestamps');
+                if (saved.hideChatPolls || saved.hideChatPollBanner) hidden.push('polls');
+                if (saved.hideChatTicker) hidden.push('ticker');
+                if (saved.hideViewerLeaderboard) hidden.push('leaderboard');
+                if (saved.hideChatSupportButtons) hidden.push('support');
+                if (saved.hideChatBanner) hidden.push('banner');
+                if (saved.hideChatEmojiButton) hidden.push('emoji');
+                if (saved.hideTopFanIcons) hidden.push('topFan');
+                if (saved.hideSuperChats) hidden.push('superChats');
+                if (saved.hideLevelUp) hidden.push('levelUp');
+                if (saved.hideChatBots) hidden.push('bots');
+                migrated.hiddenChatElements = hidden;
+                migrated.chatKeywordFilter = saved.keywordFilterList || '';
+                // Clean up old keys
+                delete migrated.hideLiveChatHeader; delete migrated.hideChatMenu;
+                delete migrated.hidePopoutChatButton; delete migrated.hideChatReactionsButton;
+                delete migrated.hideChatTimestampsButton; delete migrated.hideChatPolls;
+                delete migrated.hideChatPollBanner; delete migrated.hideChatTicker;
+                delete migrated.hideViewerLeaderboard; delete migrated.hideChatSupportButtons;
+                delete migrated.hideChatBanner; delete migrated.hideChatEmojiButton;
+                delete migrated.hideTopFanIcons; delete migrated.hideSuperChats;
+                delete migrated.hideLevelUp; delete migrated.hideChatBots;
+                delete migrated.keywordFilterList;
+            }
+            
+            // Apply other migrations
+            for (const [oldKey, migrateFn] of Object.entries(this._migrationMap)) {
+                if (saved[oldKey] !== undefined) {
+                    migrateFn(saved[oldKey], migrated);
+                    delete migrated[oldKey];
+                }
+            }
+            
+            // Remove returnYouTubeDislike completely
+            delete migrated.returnYouTubeDislike;
+            delete migrated.channelPlaybackSpeeds;
+            
+            return migrated;
+        },
+
         async save(settings) {
-            await GM_setValue('ytSuiteSettings', settings);
+            settings._version = SETTINGS_VERSION;
+            await StorageManager.set('ytSuiteSettings', settings);
         },
         async getFirstRunStatus() {
-            return await GM_getValue('ytSuiteHasRun', false);
+            return await StorageManager.get('ytSuiteHasRun', false);
         },
         async setFirstRunStatus(hasRun) {
-            await GM_setValue('ytSuiteHasRun', hasRun);
+            await StorageManager.set('ytSuiteHasRun', hasRun);
         },
         async exportAllSettings() {
             const settings = await this.load();
-            // Include hidden videos and blocked channels in export
+            // Include hidden videos, blocked channels, and bookmarks in export
             let hiddenVideos = [];
             let blockedChannels = [];
+            let bookmarks = {};
             try {
-                hiddenVideos = GM_getValue('ytkit-hidden-videos', []);
-                blockedChannels = GM_getValue('ytkit-blocked-channels', []);
+                hiddenVideos = await StorageManager.get('ytkit-hidden-videos', []);
+                blockedChannels = await StorageManager.get('ytkit-blocked-channels', []);
+                bookmarks = await StorageManager.get('ytkit-bookmarks', {});
             } catch(e) {
-                try {
-                    const hv = localStorage.getItem('ytkit-hidden-videos');
-                    const bc = localStorage.getItem('ytkit-blocked-channels');
-                    hiddenVideos = hv ? JSON.parse(hv) : [];
-                    blockedChannels = bc ? JSON.parse(bc) : [];
-                } catch(e2) {}
+                console.warn('[YTKit] Failed to load data for export:', e);
             }
             const exportData = {
                 settings: settings,
                 hiddenVideos: hiddenVideos,
                 blockedChannels: blockedChannels,
-                exportVersion: 2,
-                exportDate: new Date().toISOString()
+                bookmarks: bookmarks,
+                exportVersion: 3,
+                exportDate: new Date().toISOString(),
+                ytkitVersion: '10.0'
             };
             return JSON.stringify(exportData, null, 2);
         },
@@ -648,37 +1548,40 @@
                 const importedData = JSON.parse(jsonString);
                 if (typeof importedData !== 'object' || importedData === null) return false;
 
-                // Handle both old format (just settings) and new format (with hidden videos)
-                let settings, hiddenVideos, blockedChannels;
-                if (importedData.exportVersion >= 2) {
-                    // New format with hidden videos
+                // Handle different export versions
+                let settings, hiddenVideos, blockedChannels, bookmarks;
+                if (importedData.exportVersion >= 3) {
+                    // Version 3 format with bookmarks
                     settings = importedData.settings || {};
                     hiddenVideos = importedData.hiddenVideos || [];
                     blockedChannels = importedData.blockedChannels || [];
+                    bookmarks = importedData.bookmarks || {};
+                } else if (importedData.exportVersion >= 2) {
+                    // Version 2 format with hidden videos
+                    settings = importedData.settings || {};
+                    hiddenVideos = importedData.hiddenVideos || [];
+                    blockedChannels = importedData.blockedChannels || [];
+                    bookmarks = null;
                 } else {
-                    // Old format - just settings object
+                    // Version 1 format - just settings object
                     settings = importedData;
                     hiddenVideos = null;
                     blockedChannels = null;
+                    bookmarks = null;
                 }
 
                 const newSettings = { ...this.defaults, ...settings };
                 await this.save(newSettings);
 
-                // Import hidden videos and blocked channels if present
+                // Import hidden videos, blocked channels, and bookmarks if present
                 if (hiddenVideos !== null) {
-                    try {
-                        GM_setValue('ytkit-hidden-videos', hiddenVideos);
-                    } catch(e) {
-                        localStorage.setItem('ytkit-hidden-videos', JSON.stringify(hiddenVideos));
-                    }
+                    await StorageManager.set('ytkit-hidden-videos', hiddenVideos);
                 }
                 if (blockedChannels !== null) {
-                    try {
-                        GM_setValue('ytkit-blocked-channels', blockedChannels);
-                    } catch(e) {
-                        localStorage.setItem('ytkit-blocked-channels', JSON.stringify(blockedChannels));
-                    }
+                    await StorageManager.set('ytkit-blocked-channels', blockedChannels);
+                }
+                if (bookmarks !== null) {
+                    await StorageManager.set('ytkit-bookmarks', bookmarks);
                 }
 
                 return true;
@@ -813,91 +1716,95 @@
 
         // ─── Appearance ───
         {
-            id: 'nativeDarkMode',
-            name: 'Force Dark Theme',
-            description: 'Always use YouTube\'s dark theme',
+            // ═══ Consolidated Theme Feature ═══
+            id: 'themeManager',
+            name: 'Theme',
+            description: 'Choose your preferred color theme',
             group: 'Appearance',
             icon: 'moon',
-            isParent: true,
-            _ruleId: 'nativeDarkModeRule',
-            _applyTheme() { document.documentElement.setAttribute('dark', ''); },
-            init() {
-                this._applyTheme();
-                addMutationRule(this._ruleId, this._applyTheme.bind(this));
+            type: 'select',
+            options: {
+                'system': 'System Default',
+                'dark': 'Dark',
+                'betterDark': 'Enhanced Dark',
+                'catppuccin': 'Catppuccin Mocha'
             },
+            settingKey: 'theme',
+            _styleElement: null,
+            _ruleId: 'themeManagerRule',
+            
+            init() {
+                const theme = appState.settings.theme || 'betterDark';
+                this._applyTheme(theme);
+                addMutationRule(this._ruleId, () => this._applyTheme(theme));
+            },
+            
+            _applyTheme(theme) {
+                // Remove existing theme styles
+                document.getElementById('ytkit-theme-style')?.remove();
+                
+                // Always force dark mode for non-system themes
+                if (theme !== 'system') {
+                    document.documentElement.setAttribute('dark', '');
+                }
+                
+                // Apply specific theme CSS
+                if (theme === 'betterDark') {
+                    const customCss = GM_getResourceText('betterDarkMode');
+                    if (customCss) {
+                        const style = document.createElement('style');
+                        style.id = 'ytkit-theme-style';
+                        style.textContent = customCss;
+                        document.head.appendChild(style);
+                        this._styleElement = style;
+                    }
+                } else if (theme === 'catppuccin') {
+                    const customCss = GM_getResourceText('catppuccinMocha');
+                    if (customCss) {
+                        const style = document.createElement('style');
+                        style.id = 'ytkit-theme-style';
+                        style.textContent = customCss;
+                        document.head.appendChild(style);
+                        this._styleElement = style;
+                    }
+                }
+            },
+            
             destroy() {
                 document.documentElement.removeAttribute('dark');
+                this._styleElement?.remove();
+                document.getElementById('ytkit-theme-style')?.remove();
                 removeMutationRule(this._ruleId);
             }
         },
         {
-            id: 'betterDarkMode',
-            name: 'Enhanced Dark Theme',
-            description: 'Deeper blacks and better contrast for the dark theme',
-            group: 'Appearance',
-            icon: 'contrast',
-            isSubFeature: true,
-            parentId: 'nativeDarkMode',
-            _styleElement: null,
-            init() {
-                const customCss = GM_getResourceText('betterDarkMode');
-                if (customCss) {
-                    this._styleElement = document.createElement('style');
-                    this._styleElement.id = `yt-suite-style-${this.id}`;
-                    this._styleElement.textContent = customCss;
-                    document.head.appendChild(this._styleElement);
-                }
-            },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'catppuccinMocha',
-            name: 'Catppuccin Mocha',
-            description: 'Warm, soothing color palette for a cozy viewing experience',
-            group: 'Appearance',
-            icon: 'palette',
-            isSubFeature: true,
-            parentId: 'nativeDarkMode',
-            _styleElement: null,
-            init() {
-                const customCss = GM_getResourceText('catppuccinMocha');
-                if (customCss) {
-                    this._styleElement = document.createElement('style');
-                    this._styleElement.id = `yt-suite-style-${this.id}`;
-                    this._styleElement.textContent = customCss;
-                    document.head.appendChild(this._styleElement);
-                }
-            },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'squarify',
-            name: 'Square Corners',
-            description: 'Remove rounded corners for a sharper aesthetic',
+            // ═══ Consolidated UI Style Feature ═══
+            id: 'uiStyleManager',
+            name: 'UI Style',
+            description: 'Choose rounded or square UI elements',
             group: 'Appearance',
             icon: 'square',
-            _styleElement: null,
-            init() {
-                const css = `* { border-radius: 0 !important; }`;
-                this._styleElement = injectStyle(css, this.id, true);
+            type: 'select',
+            options: {
+                'rounded': 'Rounded (Default)',
+                'square': 'Square'
             },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'squareAvatars',
-            name: 'Square Avatars',
-            description: 'Make channel avatars square instead of round',
-            group: 'Appearance',
-            icon: 'user-square',
+            settingKey: 'uiStyle',
             _styleElement: null,
+            
             init() {
-                const css = `
-                    yt-img-shadow, #avatar-link, #author-thumbnail,
-                    ytd-channel-avatar-editor img, yt-img-shadow img,
-                    .yt-spec-avatar-shape--circle { border-radius: 0 !important; }
-                `;
-                this._styleElement = injectStyle(css, this.id, true);
+                const style = appState.settings.uiStyle || 'rounded';
+                if (style === 'square') {
+                    const css = `
+                        * { border-radius: 0 !important; }
+                        yt-img-shadow, #avatar-link, #author-thumbnail,
+                        ytd-channel-avatar-editor img, yt-img-shadow img,
+                        .yt-spec-avatar-shape--circle { border-radius: 0 !important; }
+                    `;
+                    this._styleElement = injectStyle(css, this.id, true);
+                }
             },
+            
             destroy() { this._styleElement?.remove(); }
         },
         {
@@ -967,7 +1874,7 @@
                         while (parent && (!parent.tagName.startsWith('YTD-') || parent.tagName === 'YTD-THUMBNAIL')) {
                             parent = parent.parentElement;
                         }
-                        if (parent) parent.style.display = 'none';
+                        if (parent instanceof HTMLElement) parent.style.display = 'none';
                     });
                 };
                 addMutationRule(this.id, removeShortsRule);
@@ -1185,11 +2092,125 @@
             },
             destroy() { this._styleElement?.remove(); }
         },
+        // ═══ Watch Page Elements Hiding ═══
+        {
+            id: 'hiddenWatchElementsManager',
+            name: 'Hide Watch Page Elements',
+            description: 'Choose which elements to hide below videos',
+            group: 'Content',
+            icon: 'eye-off',
+            type: 'multiSelect',
+            settingKey: 'hiddenWatchElements',
+            options: [
+                { value: 'title', label: 'Video Title' },
+                { value: 'views', label: 'View Count' },
+                { value: 'date', label: 'Upload Date' },
+                { value: 'channelAvatar', label: 'Channel Avatar' },
+                { value: 'channelName', label: 'Channel Name' },
+                { value: 'subCount', label: 'Subscriber Count' },
+                { value: 'joinButton', label: 'Join Button' },
+                { value: 'subscribeButton', label: 'Subscribe Button' },
+                { value: 'likeDislike', label: 'Like/Dislike Buttons' },
+                { value: 'shareButton', label: 'Share Button' },
+                { value: 'askButton', label: 'Ask Button' },
+                { value: 'saveButton', label: 'Save Button' },
+                { value: 'moreActions', label: 'More Actions (...)' },
+                { value: 'description', label: 'Description Box' },
+                { value: 'askAISection', label: 'Ask AI Section (in description)' },
+                { value: 'podcastSection', label: 'Podcast/Course Section' },
+                { value: 'transcriptSection', label: 'Transcript Section' },
+                { value: 'channelInfoCards', label: 'Channel Info Cards' }
+            ],
+            _styleElement: null,
+            _ruleId: 'watchElementsHider',
+            // CSS selectors for elements that can be hidden with pure CSS
+            _cssSelectors: {
+                title: 'ytd-watch-metadata #title',
+                views: 'ytd-watch-info-text #view-count',
+                date: 'ytd-watch-info-text #date-text',
+                channelAvatar: 'ytd-video-owner-renderer #avatar',
+                channelName: 'ytd-video-owner-renderer #channel-name',
+                subCount: 'ytd-video-owner-renderer #owner-sub-count',
+                joinButton: 'ytd-video-owner-renderer #sponsor-button',
+                subscribeButton: 'ytd-watch-metadata #subscribe-button',
+                likeDislike: 'segmented-like-dislike-button-view-model',
+                description: 'ytd-watch-metadata #description',
+                askAISection: 'yt-video-description-youchat-section-view-model',
+                podcastSection: 'ytd-video-description-course-section-renderer',
+                transcriptSection: 'ytd-video-description-transcript-section-renderer',
+                channelInfoCards: 'ytd-video-description-infocards-section-renderer'
+            },
+            // Button aria-labels for JS-based hiding (find parent yt-button-view-model)
+            _buttonAriaLabels: {
+                shareButton: 'Share',
+                askButton: 'Ask',
+                saveButton: 'Save to playlist',
+                moreActions: 'More actions'
+            },
+            _hideButtons() {
+                const hidden = appState.settings.hiddenWatchElements || [];
+                const metadata = document.querySelector('ytd-watch-metadata');
+                if (!metadata) return;
+                
+                // Hide buttons by finding them via aria-label
+                Object.entries(this._buttonAriaLabels).forEach(([key, ariaLabel]) => {
+                    if (hidden.includes(key)) {
+                        // Find button with this aria-label
+                        const btn = metadata.querySelector(`button[aria-label="${ariaLabel}"]`);
+                        if (btn) {
+                            // Hide the parent yt-button-view-model or yt-button-shape
+                            const parent = btn.closest('yt-button-view-model') || btn.closest('yt-button-shape');
+                            // Validate parent is an actual HTMLElement (YouTube's Polymer can return Symbol objects)
+                            if (parent instanceof HTMLElement && !parent.hasAttribute('ytkit-hidden')) {
+                                parent.style.display = 'none';
+                                parent.setAttribute('ytkit-hidden', key);
+                            }
+                        }
+                    }
+                });
+            },
+            init() {
+                const hidden = appState.settings.hiddenWatchElements || [];
+                if (hidden.length === 0) return;
+                
+                // Build CSS for elements that can use pure CSS hiding
+                const cssSelectors = hidden
+                    .filter(key => this._cssSelectors[key])
+                    .map(key => this._cssSelectors[key])
+                    .filter(Boolean);
+                
+                if (cssSelectors.length > 0) {
+                    this._styleElement = injectStyle(cssSelectors.join(', '), this.id);
+                }
+                
+                // Use mutation observer for button hiding (aria-label based)
+                const hasButtonsToHide = hidden.some(key => this._buttonAriaLabels[key]);
+                if (hasButtonsToHide) {
+                    // Initial hide attempt
+                    this._hideButtons();
+                    
+                    // Add mutation rule to catch dynamically loaded content
+                    addMutationRule(this._ruleId, () => this._hideButtons());
+                }
+            },
+            destroy() {
+                this._styleElement?.remove();
+                this._styleElement = null;
+                removeMutationRule(this._ruleId);
+                
+                // Restore hidden buttons
+                document.querySelectorAll('[ytkit-hidden]').forEach(el => {
+                    if (!(el instanceof HTMLElement)) return;
+                    el.style.display = '';
+                    el.removeAttribute('ytkit-hidden');
+                });
+            }
+        },
         {
             id: 'hideVideosFromHome',
             name: 'Video Hider',
             description: 'Hide videos/channels from feeds. Includes keyword filter, duration filter, and channel blocking.',
-            group: 'Content',
+            group: 'Video Hider',
             icon: 'eye-off',
             isParent: true,
             _styleElement: null,
@@ -1229,6 +2250,7 @@
                 // Hide the continuation spinner/trigger to prevent more loading
                 const continuations = document.querySelectorAll('ytd-continuation-item-renderer, #continuations, ytd-browse[page-subtype="subscriptions"] ytd-continuation-item-renderer');
                 continuations.forEach(cont => {
+                    if (!(cont instanceof HTMLElement)) return;
                     cont.style.display = 'none';
                     cont.dataset.ytkitBlocked = 'true';
                 });
@@ -1242,6 +2264,7 @@
                 this._subsLoadState.loadingBlocked = false;
                 // Restore continuation elements
                 document.querySelectorAll('[data-ytkit-blocked="true"]').forEach(el => {
+                    if (!(el instanceof HTMLElement)) return;
                     el.style.display = '';
                     delete el.dataset.ytkitBlocked;
                 });
@@ -1553,8 +2576,30 @@
                     if (idx > -1) { channels.splice(idx, 1); this._setBlockedChannels(channels); }
                     this._processAllVideos();
                 }
+                // Push to UndoManager for extended undo capability
+                UndoManager.push({
+                    type: 'video-restore',
+                    data: this._lastHidden
+                });
                 this._lastHidden = null;
                 document.getElementById('ytkit-hide-toast')?.classList.remove('show');
+            },
+
+            // Public method to unhide a specific video by ID
+            _unhideVideo(videoId) {
+                const hidden = this._getHiddenVideos();
+                const idx = hidden.indexOf(videoId);
+                if (idx > -1) {
+                    hidden.splice(idx, 1);
+                    this._setHiddenVideos(hidden);
+                    // Remove hidden class from any matching elements
+                    document.querySelectorAll(`[data-ytkit-video-id="${videoId}"]`)?.forEach(el => {
+                        el.classList.remove('ytkit-video-hidden');
+                    });
+                    this._processAllVideos(); // Refresh visibility
+                    return true;
+                }
+                return false;
             },
 
             _showManager() {
@@ -1577,11 +2622,30 @@
                 if (videoId && this._getHiddenVideos().includes(videoId)) return true;
                 const channelInfo = this._extractChannelInfo(element);
                 if (channelInfo && this._getBlockedChannels().find(c => c.id === channelInfo.id)) return true;
-                const keywords = (appState.settings.hideVideosKeywordFilter || '').toLowerCase().split(',').map(k => k.trim()).filter(Boolean);
-                if (keywords.length > 0) {
+                
+                // Unified keyword/regex filter - auto-detects regex if starts with /
+                const filterStr = (appState.settings.hideVideosKeywordFilter || '').trim();
+                if (filterStr) {
                     const title = this._extractTitle(element);
-                    if (keywords.some(k => title.includes(k))) return true;
+                    
+                    // Check if it's a regex pattern (starts with /)
+                    if (filterStr.startsWith('/')) {
+                        try {
+                            const regexMatch = filterStr.match(/^\/(.+)\/([gimsuy]*)$/);
+                            if (regexMatch) {
+                                const regex = new RegExp(regexMatch[1], regexMatch[2]);
+                                if (regex.test(title)) return true;
+                            }
+                        } catch (e) {
+                            DebugManager.log('Regex', 'Invalid regex pattern', e.message);
+                        }
+                    } else {
+                        // Plain comma-separated keywords
+                        const keywords = filterStr.toLowerCase().split(',').map(k => k.trim()).filter(Boolean);
+                        if (keywords.some(k => title.includes(k))) return true;
+                    }
                 }
+                
                 const minDuration = (appState.settings.hideVideosDurationFilter || 0) * 60;
                 if (minDuration > 0) {
                     const duration = this._extractDuration(element);
@@ -2285,78 +3349,7 @@
             init() { /* Handled by parent */ },
             destroy() { /* Handled by parent */ }
         },
-        {
-            id: 'returnYouTubeDislike',
-            name: 'Return YouTube Dislike',
-            description: 'Show dislike counts using the Return YouTube Dislike API',
-            group: 'Playback',
-            icon: 'thumbs-down',
-            _styleElement: null,
-            _lastVideoId: null,
-
-            async _fetchDislikes(videoId) {
-                return new Promise((resolve) => {
-                    GM.xmlHttpRequest({
-                        method: 'GET',
-                        url: `https://returnyoutubedislikeapi.com/votes?videoId=${videoId}`,
-                        headers: { Accept: 'application/json' },
-                        onload: (response) => {
-                            if (response.status === 200) {
-                                try { resolve(JSON.parse(response.responseText)); }
-                                catch { resolve(null); }
-                            } else { resolve(null); }
-                        },
-                        onerror: () => resolve(null)
-                    });
-                });
-            },
-
-            _formatNumber(num) {
-                if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
-                if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
-                return num.toString();
-            },
-
-            async _updateDislikeCount() {
-                if (!window.location.pathname.startsWith('/watch')) return;
-                const videoId = new URLSearchParams(window.location.search).get('v');
-                if (!videoId || videoId === this._lastVideoId) return;
-                this._lastVideoId = videoId;
-
-                const data = await this._fetchDislikes(videoId);
-                if (!data || typeof data.dislikes !== 'number') return;
-
-                const dislikeBtn = document.querySelector('ytd-menu-renderer button[aria-label*="islike"], dislike-button-view-model button, ytd-toggle-button-renderer:has([aria-label*="islike"])');
-                if (!dislikeBtn) return;
-
-                let countEl = document.querySelector('.ytkit-dislike-count');
-                if (!countEl) {
-                    countEl = document.createElement('span');
-                    countEl.className = 'ytkit-dislike-count';
-                    const container = dislikeBtn.closest('ytd-toggle-button-renderer, dislike-button-view-model, ytd-segmented-like-dislike-button-view-model');
-                    if (container) container.appendChild(countEl);
-                }
-                countEl.textContent = this._formatNumber(data.dislikes);
-            },
-
-            init() {
-                const css = `
-                    .ytkit-dislike-count { margin-left:6px;font-size:14px;color:#aaa;font-weight:500; }
-                `;
-                this._styleElement = injectStyle(css, this.id, true);
-                addNavigateRule(this.id, () => {
-                    this._lastVideoId = null;
-                    setTimeout(() => this._updateDislikeCount(), 1500);
-                });
-                setTimeout(() => this._updateDislikeCount(), 1500);
-            },
-
-            destroy() {
-                this._styleElement?.remove();
-                removeNavigateRule(this.id);
-                document.querySelector('.ytkit-dislike-count')?.remove();
-            }
-        },
+        // REMOVED: Return YouTube Dislike - API dependency removed for performance
         {
             id: 'showWatchProgress',
             name: 'Watch Progress Indicator',
@@ -3015,34 +4008,19 @@
             destroy() { this._styleElement?.remove(); }
         },
         {
-            id: 'hideVideoEndCards',
-            name: 'Hide End Cards',
-            description: 'Remove end-of-video card overlays',
+            // ═══ Consolidated Video End Content Feature ═══
+            id: 'hideVideoEndContent',
+            name: 'Hide Video End Content',
+            description: 'Remove end cards, end screen, and video grid when videos finish',
             group: 'Clutter',
             icon: 'square-x',
             _styleElement: null,
-            init() { this._styleElement = injectStyle('.ytp-ce-element', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideVideoEndScreen',
-            name: 'Hide End Screen',
-            description: 'Remove the end screen with video suggestions',
-            group: 'Clutter',
-            icon: 'layout-grid',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('.ytp-endscreen-content', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideEndVideoStills',
-            name: 'Hide End Video Grid',
-            description: 'Remove the fullscreen video grid that appears when a video ends',
-            group: 'Clutter',
-            icon: 'grid-3x3',
-            _styleElement: null,
             init() {
-                const css = `div.ytp-fullscreen-grid-stills-container { display: none !important; }`;
+                const css = `
+                    .ytp-ce-element,
+                    .ytp-endscreen-content,
+                    div.ytp-fullscreen-grid-stills-container { display: none !important; }
+                `;
                 this._styleElement = injectStyle(css, this.id, true);
             },
             destroy() { this._styleElement?.remove(); }
@@ -3099,173 +4077,79 @@
             destroy() { this._styleElement?.remove(); }
         },
 
-        // ─── Live Chat ───
+        // ═══ Consolidated Live Chat Feature ═══
         {
-            id: 'hideLiveChatHeader',
-            name: 'Hide Chat Header',
-            description: 'Remove the header bar from live chat',
+            id: 'hiddenChatElementsManager',
+            name: 'Hide Chat Elements',
+            description: 'Choose which live chat elements to hide',
             group: 'Live Chat',
-            icon: 'panel-top',
+            icon: 'eye-off',
+            type: 'multiSelect',
+            settingKey: 'hiddenChatElements',
+            options: [
+                { value: 'header', label: 'Chat Header' },
+                { value: 'menu', label: 'Chat Menu (...)' },
+                { value: 'popout', label: 'Popout Button' },
+                { value: 'reactions', label: 'Reactions' },
+                { value: 'timestamps', label: 'Timestamps' },
+                { value: 'polls', label: 'Polls & Poll Banner' },
+                { value: 'ticker', label: 'Super Chat Ticker' },
+                { value: 'leaderboard', label: 'Leaderboard' },
+                { value: 'support', label: 'Support Buttons' },
+                { value: 'banner', label: 'Chat Banner' },
+                { value: 'emoji', label: 'Emoji Button' },
+                { value: 'topFan', label: 'Fan Badges' },
+                { value: 'superChats', label: 'Super Chats' },
+                { value: 'levelUp', label: 'Level Up Messages' },
+                { value: 'bots', label: 'Bot Messages' }
+            ],
             _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-header-renderer', this.id); },
-            destroy() { this._styleElement?.remove(); }
+            _selectors: {
+                header: 'yt-live-chat-header-renderer',
+                menu: 'yt-live-chat-header-renderer #overflow',
+                popout: 'yt-live-chat-header-renderer button[aria-label="Popout chat"]',
+                reactions: 'yt-reaction-control-panel-overlay-view-model, yt-reaction-control-panel-view-model',
+                timestamps: '#show-hide-button.ytd-live-chat-frame',
+                polls: 'yt-live-chat-poll-renderer, yt-live-chat-banner-manager, yt-live-chat-action-panel-renderer:has(yt-live-chat-poll-renderer)',
+                ticker: 'yt-live-chat-ticker-renderer',
+                leaderboard: 'yt-live-chat-participant-list-renderer, yt-pdg-buy-flow-renderer',
+                support: 'yt-live-chat-message-buy-flow-renderer, #product-picker, .yt-live-chat-message-input-renderer[id="picker-buttons"]',
+                banner: 'yt-live-chat-banner-renderer',
+                emoji: '#emoji-picker-button, yt-live-chat-message-input-renderer #picker-buttons yt-icon-button',
+                topFan: 'yt-live-chat-author-badge-renderer[type="member"], yt-live-chat-author-badge-renderer[type="top-gifter"]',
+                superChats: 'yt-live-chat-paid-message-renderer, yt-live-chat-paid-sticker-renderer',
+                levelUp: 'yt-live-chat-viewer-engagement-message-renderer[engagement-type="VIEWER_ENGAGEMENT_MESSAGE_TYPE_LEVEL_UP"]'
+            },
+            init() {
+                const hidden = appState.settings.hiddenChatElements || [];
+                const selectors = hidden
+                    .filter(key => key !== 'bots') // bots handled separately via mutation rule
+                    .map(key => this._selectors[key])
+                    .filter(Boolean)
+                    .join(', ');
+                
+                if (selectors) {
+                    this._styleElement = injectStyle(selectors, this.id);
+                }
+                
+                // Bot filter uses mutation observer
+                if (hidden.includes('bots')) {
+                    addMutationRule('chatBotFilter', applyBotFilter);
+                }
+            },
+            destroy() {
+                this._styleElement?.remove();
+                removeMutationRule('chatBotFilter');
+            }
         },
         {
-            id: 'hideChatMenu',
-            name: 'Hide Chat Menu',
-            description: 'Remove the three-dot menu in chat',
-            group: 'Live Chat',
-            icon: 'menu',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-header-renderer #overflow', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hidePopoutChatButton',
-            name: 'Hide Popout Button',
-            description: 'Remove the "pop out chat" button',
-            group: 'Live Chat',
-            icon: 'external-link',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-header-renderer button[aria-label="Popout chat"]', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatReactionsButton',
-            name: 'Hide Reactions',
-            description: 'Remove the reactions button from chat',
-            group: 'Live Chat',
-            icon: 'smile',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-reaction-control-panel-overlay-view-model, yt-reaction-control-panel-view-model', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatTimestampsButton',
-            name: 'Hide Timestamps',
-            description: 'Remove timestamp toggles from chat',
-            group: 'Live Chat',
-            icon: 'timer',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('#show-hide-button.ytd-live-chat-frame', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatPolls',
-            name: 'Hide Polls',
-            description: 'Hide poll messages in chat',
-            group: 'Live Chat',
-            icon: 'bar-chart',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-poll-renderer', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatPollBanner',
-            name: 'Hide Poll Banner',
-            description: 'Hide the poll notification banner',
-            group: 'Live Chat',
-            icon: 'megaphone-off',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-banner-manager, yt-live-chat-action-panel-renderer:has(yt-live-chat-poll-renderer)', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatTicker',
-            name: 'Hide Super Chat Ticker',
-            description: 'Remove the scrolling Super Chat bar',
-            group: 'Live Chat',
-            icon: 'ticket',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-ticker-renderer', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideViewerLeaderboard',
-            name: 'Hide Leaderboard',
-            description: 'Remove the viewer leaderboard panel',
-            group: 'Live Chat',
-            icon: 'trophy',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-participant-list-renderer, yt-pdg-buy-flow-renderer', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatSupportButtons',
-            name: 'Hide Support Buttons',
-            description: 'Remove Super Chat and membership buttons',
-            group: 'Live Chat',
-            icon: 'heart',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-message-buy-flow-renderer, #product-picker, .yt-live-chat-message-input-renderer[id="picker-buttons"]', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatBanner',
-            name: 'Hide Chat Banner',
-            description: 'Remove announcement banners in chat',
-            group: 'Live Chat',
-            icon: 'flag-off',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-banner-renderer', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatEmojiButton',
-            name: 'Hide Emoji Button',
-            description: 'Remove the emoji picker button',
-            group: 'Live Chat',
-            icon: 'smile-plus',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('#emoji-picker-button, yt-live-chat-message-input-renderer #picker-buttons yt-icon-button', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideTopFanIcons',
-            name: 'Hide Fan Badges',
-            description: 'Remove top fan and membership badges',
-            group: 'Live Chat',
-            icon: 'award',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-author-badge-renderer[type="member"], yt-live-chat-author-badge-renderer[type="top-gifter"]', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideSuperChats',
-            name: 'Hide Super Chats',
-            description: 'Remove Super Chat messages from chat',
-            group: 'Live Chat',
-            icon: 'zap-off',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-paid-message-renderer, yt-live-chat-paid-sticker-renderer', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideLevelUp',
-            name: 'Hide Level Up',
-            description: 'Remove "level up" animations and messages',
-            group: 'Live Chat',
-            icon: 'trending-up',
-            _styleElement: null,
-            init() { this._styleElement = injectStyle('yt-live-chat-viewer-engagement-message-renderer[engagement-type="VIEWER_ENGAGEMENT_MESSAGE_TYPE_LEVEL_UP"]', this.id); },
-            destroy() { this._styleElement?.remove(); }
-        },
-        {
-            id: 'hideChatBots',
-            name: 'Hide Bot Messages',
-            description: 'Filter out messages from accounts with "bot" in their name',
-            group: 'Live Chat',
-            icon: 'bot',
-            init() { addMutationRule(this.id, applyBotFilter); },
-            destroy() { removeMutationRule(this.id); }
-        },
-        {
-            id: 'keywordFilterList',
-            name: 'Keyword Filter',
+            id: 'chatKeywordFilter',
+            name: 'Chat Keyword Filter',
             description: 'Hide chat messages containing these words (comma-separated)',
             group: 'Live Chat',
             icon: 'filter',
             type: 'textarea',
+            settingKey: 'chatKeywordFilter',
             init() { addMutationRule(this.id, applyKeywordFilter); },
             destroy() { removeMutationRule(this.id); }
         },
@@ -3289,13 +4173,48 @@
             },
             destroy() { removeNavigateRule(this.id); }
         },
-        { id: 'hideLikeButton', name: 'Hide Like Button', description: 'Remove the like button', group: 'Action Buttons', icon: 'thumbs-up', _styleElement: null, init() { this._styleElement = injectStyle('ytd-segmented-like-dislike-button-renderer like-button-view-model, #segmented-like-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideDislikeButton', name: 'Hide Dislike Button', description: 'Remove the dislike button', group: 'Action Buttons', icon: 'thumbs-down', _styleElement: null, init() { this._styleElement = injectStyle('ytd-segmented-like-dislike-button-renderer dislike-button-view-model, #segmented-dislike-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideShareButton', name: 'Hide Share Button', description: 'Remove the share button', group: 'Action Buttons', icon: 'share', _styleElement: null, init() { this._styleElement = injectStyle('ytd-watch-metadata button-view-model:has(button[aria-label="Share"]), #top-level-buttons-computed ytd-button-renderer:has(button[aria-label="Share"])', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideAskButton', name: 'Hide Ask Button', description: 'Remove the AI Ask button', group: 'Action Buttons', icon: 'message-square', _styleElement: null, init() { this._styleElement = injectStyle('#flexible-item-buttons yt-button-view-model:has(button[aria-label="Ask"]), ytd-watch-metadata button-view-model:has(button[aria-label*="AI"]), ytd-watch-metadata button-view-model:has(button[aria-label="Ask"]), conversational-ui-watch-metadata-button-view-model', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideClipButton', name: 'Hide Clip Button', description: 'Remove the clip button', group: 'Action Buttons', icon: 'scissors', _styleElement: null, init() { this._styleElement = injectStyle('ytd-watch-metadata button-view-model:has(button[aria-label="Clip"]), #top-level-buttons-computed ytd-button-renderer:has(button[aria-label="Clip"])', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideThanksButton', name: 'Hide Thanks Button', description: 'Remove the thanks/super thanks button', group: 'Action Buttons', icon: 'gift', _styleElement: null, init() { this._styleElement = injectStyle('ytd-watch-metadata button-view-model:has(button[aria-label="Thanks"]), #top-level-buttons-computed ytd-button-renderer:has(button[aria-label="Thanks"])', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideSaveButton', name: 'Hide Save Button', description: 'Remove the save to playlist button', group: 'Action Buttons', icon: 'bookmark', _styleElement: null, init() { this._styleElement = injectStyle('ytd-watch-metadata button-view-model:has(button[aria-label="Save to playlist"]), #top-level-buttons-computed ytd-button-renderer:has(button[aria-label="Save"])', this.id); }, destroy() { this._styleElement?.remove(); }},
+        
+        // ═══ Consolidated Action Buttons Feature ═══
+        {
+            id: 'hiddenActionButtonsManager',
+            name: 'Hide Action Buttons',
+            description: 'Choose which action buttons to hide below videos',
+            group: 'Action Buttons',
+            icon: 'eye-off',
+            type: 'multiSelect',
+            settingKey: 'hiddenActionButtons',
+            options: [
+                { value: 'like', label: 'Like Button' },
+                { value: 'dislike', label: 'Dislike Button' },
+                { value: 'share', label: 'Share Button' },
+                { value: 'ask', label: 'Ask/AI Button' },
+                { value: 'clip', label: 'Clip Button' },
+                { value: 'thanks', label: 'Thanks Button' },
+                { value: 'save', label: 'Save Button' },
+                { value: 'sponsor', label: 'Join/Sponsor Button' },
+                { value: 'moreActions', label: 'More Actions (...)' }
+            ],
+            _styleElement: null,
+            _selectors: {
+                like: 'ytd-segmented-like-dislike-button-renderer like-button-view-model, #segmented-like-button',
+                dislike: 'ytd-segmented-like-dislike-button-renderer dislike-button-view-model, #segmented-dislike-button',
+                share: 'ytd-watch-metadata button-view-model:has(button[aria-label="Share"]), #top-level-buttons-computed ytd-button-renderer:has(button[aria-label="Share"])',
+                ask: '#flexible-item-buttons yt-button-view-model:has(button[aria-label="Ask"]), ytd-watch-metadata button-view-model:has(button[aria-label*="AI"]), ytd-watch-metadata button-view-model:has(button[aria-label="Ask"]), conversational-ui-watch-metadata-button-view-model',
+                clip: 'ytd-watch-metadata button-view-model:has(button[aria-label="Clip"]), #top-level-buttons-computed ytd-button-renderer:has(button[aria-label="Clip"])',
+                thanks: 'ytd-watch-metadata button-view-model:has(button[aria-label="Thanks"]), #top-level-buttons-computed ytd-button-renderer:has(button[aria-label="Thanks"])',
+                save: 'ytd-watch-metadata button-view-model:has(button[aria-label="Save to playlist"]), #top-level-buttons-computed ytd-button-renderer:has(button[aria-label="Save"])',
+                sponsor: '#sponsor-button',
+                moreActions: '#actions-inner #button-shape > button[aria-label="More actions"]'
+            },
+            init() {
+                const hidden = appState.settings.hiddenActionButtons || [];
+                const selectors = hidden.map(key => this._selectors[key]).filter(Boolean).join(', ');
+                if (selectors) {
+                    this._styleElement = injectStyle(selectors, this.id);
+                }
+            },
+            destroy() { this._styleElement?.remove(); }
+        },
         {
             id: 'replaceWithCobaltDownloader',
             name: 'Download Button',
@@ -3304,7 +4223,7 @@
             icon: 'download',
             _styleElement: null,
             _providers: {
-                'cobalt': 'https://cobalt.tools/#',
+                'cobalt': 'https://cobalt.meowing.de/#',
                 'y2mate': 'https://www.y2mate.com/youtube/',
                 'savefrom': 'https://en.savefrom.net/1-youtube-video-downloader-',
                 'ssyoutube': 'https://ssyoutube.com/watch?v='
@@ -3349,19 +4268,61 @@
                 this._styleElement?.remove();
             }
         },
-        { id: 'hideSponsorButton', name: 'Hide Join Button', description: 'Remove the channel membership button', group: 'Action Buttons', icon: 'users', _styleElement: null, init() { this._styleElement = injectStyle('#sponsor-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideMoreActionsButton', name: 'Hide More Actions', description: 'Remove the three-dot menu button', group: 'Action Buttons', icon: 'more-vertical', _styleElement: null, init() { this._styleElement = injectStyle('#actions-inner #button-shape > button[aria-label="More actions"]', this.id); }, destroy() { this._styleElement?.remove(); }},
 
-        // ─── Player Controls ───
-        { id: 'hideSponsorBlockButton', name: 'Hide SponsorBlock Button', description: 'Remove the SponsorBlock button from controls', group: 'Player Controls', icon: 'shield-off', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-sb-button, .ytp-sponsorblock-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideNextButton', name: 'Hide Next Button', description: 'Remove the next video button', group: 'Player Controls', icon: 'skip-forward', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-next-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideAutoplayToggle', name: 'Hide Autoplay Toggle', description: 'Remove the autoplay switch', group: 'Player Controls', icon: 'repeat', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-autonav-toggle-button-container', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideSubtitlesToggle', name: 'Hide Subtitles Button', description: 'Remove the closed captions button', group: 'Player Controls', icon: 'captions-off', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-subtitles-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideCaptionsContainer', name: 'Hide Captions', description: 'Hide on-screen captions entirely', group: 'Player Controls', icon: 'subtitles', _styleElement: null, init() { this._styleElement = injectStyle('.caption-window', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideMiniplayerButton', name: 'Hide Miniplayer Button', description: 'Remove the miniplayer button', group: 'Player Controls', icon: 'pip', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-miniplayer-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hidePipButton', name: 'Hide PiP Button', description: 'Remove the picture-in-picture button', group: 'Player Controls', icon: 'picture-in-picture', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-pip-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideTheaterButton', name: 'Hide Theater Button', description: 'Remove the theater mode button', group: 'Player Controls', icon: 'monitor', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-size-button', this.id); }, destroy() { this._styleElement?.remove(); }},
-        { id: 'hideFullscreenButton', name: 'Hide Fullscreen Button', description: 'Remove the fullscreen button', group: 'Player Controls', icon: 'maximize', _styleElement: null, init() { this._styleElement = injectStyle('.ytp-fullscreen-button', this.id); }, destroy() { this._styleElement?.remove(); }},
+        // ═══ Consolidated Player Controls Feature ═══
+        {
+            id: 'hiddenPlayerControlsManager',
+            name: 'Hide Player Controls',
+            description: 'Choose which player control buttons to hide',
+            group: 'Player Controls',
+            icon: 'eye-off',
+            type: 'multiSelect',
+            settingKey: 'hiddenPlayerControls',
+            options: [
+                { value: 'sponsorBlock', label: 'SponsorBlock Button' },
+                { value: 'next', label: 'Next Video Button' },
+                { value: 'autoplay', label: 'Autoplay Toggle' },
+                { value: 'subtitles', label: 'Subtitles Button' },
+                { value: 'captions', label: 'Captions Display' },
+                { value: 'miniplayer', label: 'Miniplayer Button' },
+                { value: 'pip', label: 'Picture-in-Picture' },
+                { value: 'theater', label: 'Theater Mode Button' },
+                { value: 'fullscreen', label: 'Fullscreen Button' }
+            ],
+            _styleElement: null,
+            _selectors: {
+                sponsorBlock: '.ytp-sb-button, .ytp-sponsorblock-button',
+                next: '.ytp-next-button',
+                autoplay: '.ytp-autonav-toggle-button-container',
+                subtitles: '.ytp-subtitles-button',
+                captions: '.caption-window',
+                miniplayer: '.ytp-miniplayer-button',
+                pip: '.ytp-pip-button',
+                theater: '.ytp-size-button',
+                fullscreen: '.ytp-fullscreen-button'
+            },
+            init() {
+                const hidden = appState.settings.hiddenPlayerControls || [];
+                const selectors = hidden.map(key => this._selectors[key]).filter(Boolean).join(', ');
+                if (selectors) {
+                    this._styleElement = injectStyle(selectors, this.id);
+                }
+            },
+            destroy() { this._styleElement?.remove(); }
+        },
+        // Individual player control features removed - now consolidated in hiddenPlayerControlsManager
+
+        // ─── Downloads (YouTube Tools Integration) ───
+        {
+            id: 'youtubeToolsInfo',
+            name: '📦 YouTube Tools Setup',
+            description: 'VLC/MPV streaming, local downloads, and the Embed Player require the YouTube Tools helper. Click the orange/green button in the footer to download the installer. The embed server starts automatically on boot.',
+            group: 'Downloads',
+            icon: 'info',
+            type: 'info',
+            init() {},
+            destroy() {}
+        },
         {
             id: 'downloadProvider',
             name: 'Download Provider',
@@ -3370,13 +4331,13 @@
             icon: 'download-cloud',
             type: 'select',
             options: {
-                'cobalt': 'Cobalt (cobalt.tools)',
+                'cobalt': 'Cobalt (cobalt.meowing.de)',
                 'y2mate': 'Y2Mate',
                 'savefrom': 'SaveFrom.net',
                 'ssyoutube': 'SSYouTube'
             },
             _providers: {
-                'cobalt': 'https://cobalt.tools/#',
+                'cobalt': 'https://cobalt.meowing.de/#',
                 'y2mate': 'https://www.y2mate.com/youtube/',
                 'savefrom': 'https://en.savefrom.net/1-youtube-video-downloader-',
                 'ssyoutube': 'https://ssyoutube.com/watch?v='
@@ -3488,18 +4449,6 @@
                 this._observer?.disconnect();
                 removeNavigateRule(this.id);
             }
-        },
-
-        // ─── Downloads (YouTube Tools Integration) ───
-        {
-            id: 'youtubeToolsInfo',
-            name: '📦 YouTube Tools Setup',
-            description: 'VLC/MPV streaming, local downloads, and the Embed Player require the YouTube Tools helper. Click the orange/green button in the footer to download the installer. The embed server starts automatically on boot.',
-            group: 'Downloads',
-            icon: 'info',
-            type: 'info',
-            init() {},
-            destroy() {}
         },
         {
             id: 'showVlcButton',
@@ -3700,21 +4649,20 @@
                     const transcriptResponse = await fetch(trackUrl);
                     const transcriptXml = await transcriptResponse.text();
 
-                    // Parse XML to text
-                    const parser = new DOMParser();
-                    const xmlDoc = parser.parseFromString(transcriptXml, 'text/xml');
-                    const textElements = xmlDoc.getElementsByTagName('text');
+                    // Parse XML using regex (CSP-safe, avoids TrustedHTML requirement)
+                    const textRegex = /<text[^>]*start="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
+                    const matches = [...transcriptXml.matchAll(textRegex)];
 
                     let transcript = '';
-                    for (let i = 0; i < textElements.length; i++) {
-                        const node = textElements[i];
-                        const startSeconds = parseFloat(node.getAttribute('start'));
-                        const text = node.textContent
+                    for (const match of matches) {
+                        const startSeconds = parseFloat(match[1]);
+                        const text = match[2]
                             .replace(/&#39;/g, "'")
                             .replace(/&quot;/g, '"')
                             .replace(/&amp;/g, '&')
                             .replace(/&lt;/g, '<')
-                            .replace(/&gt;/g, '>');
+                            .replace(/&gt;/g, '>')
+                            .replace(/<[^>]*>/g, '');
 
                         // Format time as HH:MM:SS
                         const date = new Date(0);
@@ -5363,21 +6311,20 @@
                     const transcriptResponse = await fetch(trackUrl);
                     const transcriptXml = await transcriptResponse.text();
 
-                    // Parse XML to text
-                    const parser = new DOMParser();
-                    const xmlDoc = parser.parseFromString(transcriptXml, 'text/xml');
-                    const textElements = xmlDoc.getElementsByTagName('text');
+                    // Parse XML using regex (CSP-safe, avoids TrustedHTML requirement)
+                    const textRegex = /<text[^>]*start="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
+                    const matches = [...transcriptXml.matchAll(textRegex)];
 
                     let transcript = '';
-                    for (let i = 0; i < textElements.length; i++) {
-                        const node = textElements[i];
-                        const startSeconds = parseFloat(node.getAttribute('start'));
-                        const text = node.textContent
+                    for (const match of matches) {
+                        const startSeconds = parseFloat(match[1]);
+                        const text = match[2]
                             .replace(/&#39;/g, "'")
                             .replace(/&quot;/g, '"')
                             .replace(/&amp;/g, '&')
                             .replace(/&lt;/g, '<')
-                            .replace(/&gt;/g, '>');
+                            .replace(/&gt;/g, '>')
+                            .replace(/<[^>]*>/g, '');
 
                         // Format time as HH:MM:SS
                         const date = new Date(0);
@@ -5549,7 +6496,742 @@
                 this._styleElement = null;
             }
         },
+
+        // ─── Advanced ───
+        {
+            id: 'debugMode',
+            name: 'Debug Mode',
+            description: 'Enable diagnostic logging and expose window.YTKit for troubleshooting',
+            group: 'Advanced',
+            icon: 'bug',
+            init() {
+                DebugManager.enable();
+                DebugManager.log('Init', 'Debug mode enabled');
+            },
+            destroy() {
+                DebugManager.disable();
+            }
+        },
+        {
+            id: 'keyboardShortcutsFeature',
+            name: 'Keyboard Shortcuts',
+            description: 'Enable custom keyboard shortcuts (Ctrl+Alt+Y for settings, Shift+H to hide video)',
+            group: 'Advanced',
+            icon: 'keyboard',
+            init() {
+                KeyboardManager.init();
+                
+                // Register default shortcuts
+                const shortcuts = appState.settings.keyboardShortcuts || {};
+                
+                // Open settings panel
+                if (shortcuts.openSettings) {
+                    KeyboardManager.register(shortcuts.openSettings, () => {
+                        document.body.classList.toggle('ytkit-panel-open');
+                    }, 'Open YTKit Settings');
+                }
+                
+                // Hide current video (only on watch page)
+                if (shortcuts.hideVideo) {
+                    KeyboardManager.register(shortcuts.hideVideo, () => {
+                        if (!window.location.pathname.startsWith('/watch')) return;
+                        const videoId = new URLSearchParams(window.location.search).get('v');
+                        if (videoId) {
+                            const videoHiderFeature = features.find(f => f.id === 'hideVideosFromHome');
+                            if (videoHiderFeature && typeof videoHiderFeature._hideVideo === 'function') {
+                                const title = document.querySelector('h1.ytd-video-primary-info-renderer, h1.ytd-watch-metadata')?.textContent || 'Unknown';
+                                const channelName = document.querySelector('#owner #channel-name, #upload-info #channel-name')?.textContent?.trim() || 'Unknown';
+                                videoHiderFeature._hideVideo(videoId, title, channelName);
+                                showToast('Video hidden (Shift+H)', '#ef4444', {
+                                    duration: 4,
+                                    action: {
+                                        text: 'Undo',
+                                        onClick: () => {
+                                            if (typeof videoHiderFeature._unhideVideo === 'function') {
+                                                videoHiderFeature._unhideVideo(videoId);
+                                                showToast('Video restored', '#22c55e');
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }, 'Hide Current Video');
+                }
+                
+                // Download video shortcut
+                if (shortcuts.downloadVideo) {
+                    KeyboardManager.register(shortcuts.downloadVideo, () => {
+                        if (!window.location.pathname.startsWith('/watch')) return;
+                        showToast('Starting download...', '#22c55e');
+                        window.location.href = 'ytdl://' + encodeURIComponent(window.location.href);
+                    }, 'Download Video');
+                }
+            },
+            destroy() {
+                const shortcuts = appState.settings.keyboardShortcuts || {};
+                if (shortcuts.openSettings) KeyboardManager.unregister(shortcuts.openSettings);
+                if (shortcuts.hideVideo) KeyboardManager.unregister(shortcuts.hideVideo);
+                if (shortcuts.downloadVideo) KeyboardManager.unregister(shortcuts.downloadVideo);
+            }
+        },
+
+        // ─── Auto-Skip "Still Watching?" Prompt ───
+        {
+            id: 'autoSkipStillWatching',
+            name: 'Auto-Skip "Still Watching?"',
+            description: 'Automatically dismiss the "Video paused. Continue watching?" popup',
+            group: 'Playback',
+            icon: 'skip-forward',
+            _observer: null,
+            _checkInterval: null,
+            init() {
+                const dismissPopup = () => {
+                    // Look for the "Still watching?" / "Continue watching?" dialog
+                    const confirmButton = document.querySelector(
+                        'yt-confirm-dialog-renderer #confirm-button, ' +
+                        '.ytp-pause-overlay-container button, ' +
+                        'ytd-popup-container yt-confirm-dialog-renderer button.yt-spec-button-shape-next--filled, ' +
+                        'tp-yt-paper-dialog #confirm-button, ' +
+                        'ytd-enforcement-message-view-model button'
+                    );
+                    if (confirmButton) {
+                        const dialogText = confirmButton.closest('yt-confirm-dialog-renderer, tp-yt-paper-dialog')?.textContent?.toLowerCase() || '';
+                        if (dialogText.includes('still watching') || dialogText.includes('continue watching') || dialogText.includes('video paused')) {
+                            confirmButton.click();
+                            showToast('Auto-dismissed "Still watching?" popup', '#22c55e');
+                            StatsTracker.increment('stillWatchingDismissed');
+                            DebugManager.log('StillWatching', 'Dismissed popup');
+                        }
+                    }
+                    
+                    // Also check for the pause overlay
+                    const pauseOverlay = document.querySelector('.ytp-pause-overlay');
+                    if (pauseOverlay && pauseOverlay.style.display !== 'none') {
+                        const playButton = document.querySelector('.ytp-play-button');
+                        if (playButton) {
+                            playButton.click();
+                            showToast('Auto-resumed playback', '#22c55e');
+                        }
+                    }
+                };
+
+                // Check periodically
+                this._checkInterval = setInterval(dismissPopup, 2000);
+
+                // Also observe for new dialogs
+                this._observer = new MutationObserver((mutations) => {
+                    for (const mutation of mutations) {
+                        if (mutation.addedNodes.length > 0) {
+                            setTimeout(dismissPopup, 100);
+                        }
+                    }
+                });
+
+                this._observer.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+            },
+            destroy() {
+                if (this._checkInterval) clearInterval(this._checkInterval);
+                if (this._observer) this._observer.disconnect();
+            }
+        },
+
+        // ─── Per-Channel Settings ───
+        {
+            id: 'enablePerChannelSettings',
+            name: 'Per-Channel Settings',
+            description: 'Remember playback speed, volume, and quality per channel',
+            group: 'Playback',
+            icon: 'users',
+            _lastVideoId: null,
+            init() {
+                const applyChannelSettings = async () => {
+                    if (!window.location.pathname.startsWith('/watch')) return;
+
+                    const videoId = new URLSearchParams(window.location.search).get('v');
+                    if (videoId === this._lastVideoId) return;
+                    this._lastVideoId = videoId;
+
+                    const channelId = ChannelSettingsManager.getCurrentChannelId();
+                    if (!channelId) return;
+
+                    const settings = await ChannelSettingsManager.getForChannel(channelId);
+                    if (!settings) return;
+
+                    const video = document.querySelector('video');
+                    if (!video) return;
+
+                    // Apply playback speed
+                    if (settings.playbackSpeed && settings.playbackSpeed !== video.playbackRate) {
+                        video.playbackRate = settings.playbackSpeed;
+                        DebugManager.log('ChannelSettings', `Applied speed ${settings.playbackSpeed}x for channel ${channelId}`);
+                    }
+
+                    // Apply volume
+                    if (settings.volume !== undefined && settings.volume !== video.volume) {
+                        video.volume = settings.volume;
+                    }
+                };
+
+                // Save current settings for channel
+                const saveChannelSettings = async () => {
+                    if (!window.location.pathname.startsWith('/watch')) return;
+
+                    const channelId = ChannelSettingsManager.getCurrentChannelId();
+                    const channelName = ChannelSettingsManager.getCurrentChannelName();
+                    if (!channelId) return;
+
+                    const video = document.querySelector('video');
+                    if (!video) return;
+
+                    await ChannelSettingsManager.setForChannel(channelId, {
+                        name: channelName,
+                        playbackSpeed: video.playbackRate,
+                        volume: video.volume
+                    });
+                };
+
+                // Apply on navigation
+                addNavigateRule('perChannelSettings', () => {
+                    setTimeout(applyChannelSettings, 1000);
+                });
+
+                // Save periodically when video is playing
+                this._saveInterval = setInterval(() => {
+                    const video = document.querySelector('video');
+                    if (video && !video.paused) {
+                        saveChannelSettings();
+                    }
+                }, 30000); // Save every 30 seconds while playing
+            },
+            destroy() {
+                removeNavigateRule('perChannelSettings');
+                if (this._saveInterval) clearInterval(this._saveInterval);
+            }
+        },
+
+        // ─── Statistics Dashboard ───
+        {
+            id: 'showStatisticsDashboard',
+            name: 'Statistics Dashboard',
+            description: 'Track videos watched, time saved from sponsors, videos hidden, and more',
+            group: 'Advanced',
+            icon: 'bar-chart',
+            init() {
+                // Track video watches
+                let lastVideoId = null;
+                addNavigateRule('statsVideoWatch', () => {
+                    if (!window.location.pathname.startsWith('/watch')) return;
+                    const videoId = new URLSearchParams(window.location.search).get('v');
+                    if (videoId && videoId !== lastVideoId) {
+                        lastVideoId = videoId;
+                        StatsTracker.increment('videosWatched');
+                    }
+                });
+
+                // Update time on YouTube
+                this._timeInterval = setInterval(() => {
+                    StatsTracker.increment('totalTimeOnYouTube', 60); // Add 60 seconds
+                }, 60000);
+            },
+            destroy() {
+                removeNavigateRule('statsVideoWatch');
+                if (this._timeInterval) clearInterval(this._timeInterval);
+            }
+        },
+
+        // ─── Regex Keyword Filter ───
+        {
+            id: 'useRegexKeywordFilter',
+            name: 'Regex Keyword Filter',
+            description: 'Use regular expressions for advanced keyword filtering (e.g., /\\[.*\\]/ to hide bracketed titles)',
+            group: 'Video Hider',
+            icon: 'filter',
+            subFeatureOf: 'hideVideosFromHome',
+            init() {
+                // This modifies the behavior of hideVideosFromHome
+                // The actual regex matching is handled in _shouldHide
+            },
+            destroy() {
+                // Nothing to clean up
+            }
+        },
+
+        // ─── Custom CSS Injection ───
+        {
+            id: 'customCssEnabled',
+            name: 'Custom CSS',
+            description: 'Inject your own custom CSS rules for advanced customization',
+            group: 'Appearance',
+            icon: 'palette',
+            _styleElement: null,
+            init() {
+                const css = appState.settings.customCssCode || '';
+                if (css.trim()) {
+                    this._styleElement = document.createElement('style');
+                    this._styleElement.id = 'ytkit-custom-css';
+                    this._styleElement.textContent = css;
+                    document.head.appendChild(this._styleElement);
+                }
+            },
+            destroy() {
+                this._styleElement?.remove();
+                this._styleElement = null;
+            },
+            updateCss(newCss) {
+                if (this._styleElement) {
+                    this._styleElement.textContent = newCss;
+                } else if (newCss.trim()) {
+                    this._styleElement = document.createElement('style');
+                    this._styleElement.id = 'ytkit-custom-css';
+                    this._styleElement.textContent = newCss;
+                    document.head.appendChild(this._styleElement);
+                }
+            }
+        },
+        {
+            id: 'customCssCode',
+            name: 'Custom CSS Code',
+            description: 'Enter your CSS rules here (applied when Custom CSS is enabled)',
+            group: 'Appearance',
+            icon: 'code',
+            type: 'textarea',
+            placeholder: '/* Your custom CSS */\n.ytp-chrome-bottom { opacity: 0.8; }',
+            init() {},
+            destroy() {}
+        },
+
+        // ─── IntersectionObserver Performance Mode ───
+        {
+            id: 'useIntersectionObserver',
+            name: 'Performance Mode',
+            description: 'Use IntersectionObserver to only process visible videos (improves performance on long feeds)',
+            group: 'Advanced',
+            icon: 'gauge',
+            init() {
+                VisibilityObserver.init();
+                
+                // Add CSS containment for better rendering performance
+                const style = document.createElement('style');
+                style.id = 'ytkit-performance-css';
+                style.textContent = `
+                    ytd-rich-item-renderer,
+                    ytd-video-renderer,
+                    ytd-grid-video-renderer,
+                    ytd-compact-video-renderer {
+                        contain: content;
+                    }
+                    
+                    ytd-thumbnail {
+                        contain: strict;
+                    }
+                `;
+                document.head.appendChild(style);
+                this._styleElement = style;
+            },
+            destroy() {
+                VisibilityObserver.disconnect();
+                this._styleElement?.remove();
+            }
+        },
+
+        // ─── Settings Profiles ───
+        {
+            id: 'settingsProfiles',
+            name: 'Settings Profiles',
+            description: 'Save and load different configurations (Minimal, Privacy, Power User, Download Mode, Binge)',
+            group: 'Advanced',
+            icon: 'list-tree',
+            init() {
+                // Profiles are managed through the settings panel UI
+                // This feature just enables the functionality
+            },
+            destroy() {
+                // Nothing to clean up
+            }
+        },
     ];
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  HELPER: Channel Settings Dialog
+    // ══════════════════════════════════════════════════════════════════════════
+    function showChannelSettingsDialog(channelId, channelName, existingSettings) {
+        // Remove existing dialog
+        document.getElementById('ytkit-channel-dialog')?.remove();
+
+        const dialog = document.createElement('div');
+        dialog.id = 'ytkit-channel-dialog';
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 24px;
+            z-index: 999999;
+            min-width: 350px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+            font-family: "Roboto", Arial, sans-serif;
+            color: #e2e8f0;
+        `;
+
+        const currentSpeed = existingSettings?.playbackSpeed || 1;
+        const currentVolume = existingSettings?.volume !== undefined ? Math.round(existingSettings.volume * 100) : 100;
+
+        TrustedHTML.setHTML(dialog, `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="margin: 0; font-size: 18px; font-weight: 600;">Channel Settings</h3>
+                <button id="ytkit-channel-close" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 20px;">&times;</button>
+            </div>
+            <p style="color: #94a3b8; margin-bottom: 20px; font-size: 14px;">Settings for: <strong style="color: #60a5fa;">${channelName || channelId}</strong></p>
+            
+            <div style="margin-bottom: 16px;">
+                <label style="display: block; margin-bottom: 8px; font-size: 14px; color: #94a3b8;">Playback Speed</label>
+                <select id="ytkit-channel-speed" style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; font-size: 14px;">
+                    <option value="0.25" ${currentSpeed === 0.25 ? 'selected' : ''}>0.25x</option>
+                    <option value="0.5" ${currentSpeed === 0.5 ? 'selected' : ''}>0.5x</option>
+                    <option value="0.75" ${currentSpeed === 0.75 ? 'selected' : ''}>0.75x</option>
+                    <option value="1" ${currentSpeed === 1 ? 'selected' : ''}>1x (Normal)</option>
+                    <option value="1.25" ${currentSpeed === 1.25 ? 'selected' : ''}>1.25x</option>
+                    <option value="1.5" ${currentSpeed === 1.5 ? 'selected' : ''}>1.5x</option>
+                    <option value="1.75" ${currentSpeed === 1.75 ? 'selected' : ''}>1.75x</option>
+                    <option value="2" ${currentSpeed === 2 ? 'selected' : ''}>2x</option>
+                </select>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-size: 14px; color: #94a3b8;">Default Volume: <span id="ytkit-vol-display">${currentVolume}%</span></label>
+                <input type="range" id="ytkit-channel-volume" min="0" max="100" value="${currentVolume}" style="width: 100%; accent-color: #60a5fa;">
+            </div>
+            
+            <div style="display: flex; gap: 12px;">
+                <button id="ytkit-channel-save" style="flex: 1; padding: 12px; background: #3b82f6; border: none; border-radius: 8px; color: white; font-weight: 600; cursor: pointer; transition: background 0.2s;">Save</button>
+                <button id="ytkit-channel-reset" style="flex: 1; padding: 12px; background: #334155; border: none; border-radius: 8px; color: #e2e8f0; font-weight: 600; cursor: pointer; transition: background 0.2s;">Reset</button>
+            </div>
+        `);
+
+        // Add backdrop
+        const backdrop = document.createElement('div');
+        backdrop.id = 'ytkit-channel-backdrop';
+        backdrop.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 999998;
+        `;
+        backdrop.onclick = () => {
+            dialog.remove();
+            backdrop.remove();
+        };
+
+        document.body.appendChild(backdrop);
+        document.body.appendChild(dialog);
+
+        // Volume display update
+        const volumeSlider = dialog.querySelector('#ytkit-channel-volume');
+        const volDisplay = dialog.querySelector('#ytkit-vol-display');
+        volumeSlider.oninput = () => {
+            volDisplay.textContent = volumeSlider.value + '%';
+        };
+
+        // Close button
+        dialog.querySelector('#ytkit-channel-close').onclick = () => {
+            dialog.remove();
+            backdrop.remove();
+        };
+
+        // Save button
+        dialog.querySelector('#ytkit-channel-save').onclick = async () => {
+            const speed = parseFloat(dialog.querySelector('#ytkit-channel-speed').value);
+            const volume = parseInt(volumeSlider.value) / 100;
+            
+            await ChannelSettingsManager.setForChannel(channelId, {
+                name: channelName,
+                playbackSpeed: speed,
+                volume: volume
+            });
+
+            // Apply immediately
+            const video = document.querySelector('video');
+            if (video) {
+                video.playbackRate = speed;
+                video.volume = volume;
+            }
+
+            showToast(`Settings saved for ${channelName}`, '#22c55e');
+            dialog.remove();
+            backdrop.remove();
+        };
+
+        // Reset button
+        dialog.querySelector('#ytkit-channel-reset').onclick = async () => {
+            await ChannelSettingsManager.removeChannel(channelId);
+            showToast(`Settings reset for ${channelName}`, '#f97316');
+            dialog.remove();
+            backdrop.remove();
+        };
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  HELPER: Statistics Dashboard Builder
+    // ══════════════════════════════════════════════════════════════════════════
+    async function buildStatisticsDashboard() {
+        const stats = await StatsTracker.getAll();
+        
+        const container = document.createElement('div');
+        container.className = 'ytkit-stats-dashboard';
+        TrustedHTML.setHTML(container, `
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px;">
+                <div class="ytkit-stat-card">
+                    <div class="ytkit-stat-value">${stats.videosWatched || 0}</div>
+                    <div class="ytkit-stat-label">Videos Watched</div>
+                </div>
+                <div class="ytkit-stat-card">
+                    <div class="ytkit-stat-value">${stats.videosHidden || 0}</div>
+                    <div class="ytkit-stat-label">Videos Hidden</div>
+                </div>
+                <div class="ytkit-stat-card">
+                    <div class="ytkit-stat-value">${stats.channelsBlocked || 0}</div>
+                    <div class="ytkit-stat-label">Channels Blocked</div>
+                </div>
+                <div class="ytkit-stat-card">
+                    <div class="ytkit-stat-value">${StatsTracker.formatTime(stats.sponsorTimeSkipped || 0)}</div>
+                    <div class="ytkit-stat-label">Sponsor Time Skipped</div>
+                </div>
+                <div class="ytkit-stat-card">
+                    <div class="ytkit-stat-value">${stats.downloadsInitiated || 0}</div>
+                    <div class="ytkit-stat-label">Downloads</div>
+                </div>
+                <div class="ytkit-stat-card">
+                    <div class="ytkit-stat-value">${stats.vlcStreams || 0}</div>
+                    <div class="ytkit-stat-label">VLC Streams</div>
+                </div>
+                <div class="ytkit-stat-card" style="grid-column: span 2;">
+                    <div class="ytkit-stat-value">${StatsTracker.formatTime(stats.totalTimeOnYouTube || 0)}</div>
+                    <div class="ytkit-stat-label">Total Time on YouTube</div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <button class="ytkit-stats-reset" style="flex: 1; padding: 8px; background: #334155; border: none; border-radius: 6px; color: #94a3b8; cursor: pointer; font-size: 12px;">Reset Statistics</button>
+            </div>
+        `);
+
+        container.querySelector('.ytkit-stats-reset').onclick = async () => {
+            if (confirm('Reset all statistics? This cannot be undone.')) {
+                await StatsTracker.reset();
+                showToast('Statistics reset', '#f97316');
+                // Refresh the dashboard
+                const parent = container.parentElement;
+                container.remove();
+                parent?.appendChild(await buildStatisticsDashboard());
+            }
+        };
+
+        return container;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  HELPER: Profiles Manager UI
+    // ══════════════════════════════════════════════════════════════════════════
+    async function buildProfilesUI() {
+        const profiles = await ProfilesManager.getAll();
+        
+        const container = document.createElement('div');
+        container.className = 'ytkit-profiles-ui';
+        
+        let html = '<div style="margin-bottom: 16px;"><h4 style="margin: 0 0 12px 0; color: #94a3b8; font-size: 13px; text-transform: uppercase;">Built-in Profiles</h4>';
+        
+        // Built-in profiles
+        for (const [key, profile] of Object.entries(profiles.builtIn)) {
+            html += `
+                <div class="ytkit-profile-item" data-profile="${key}" data-builtin="true" style="display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: background 0.2s;">
+                    <div style="width: 36px; height: 36px; background: linear-gradient(135deg, #334155, #1e293b); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #60a5fa;"></div>
+                    <div style="flex: 1;">
+                        <div style="font-weight: 500; color: #e2e8f0;">${profile.name}</div>
+                        <div style="font-size: 12px; color: #64748b;">${profile.description}</div>
+                    </div>
+                    <button class="ytkit-profile-apply" style="padding: 6px 12px; background: #3b82f6; border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer;">Apply</button>
+                </div>
+            `;
+        }
+        
+        html += '</div>';
+        
+        // Custom profiles section
+        html += '<div style="margin-bottom: 16px;"><h4 style="margin: 0 0 12px 0; color: #94a3b8; font-size: 13px; text-transform: uppercase;">Custom Profiles</h4>';
+        
+        if (Object.keys(profiles.custom).length === 0) {
+            html += '<p style="color: #64748b; font-size: 13px; margin: 0;">No custom profiles yet.</p>';
+        } else {
+            for (const [key, profile] of Object.entries(profiles.custom)) {
+                html += `
+                    <div class="ytkit-profile-item" data-profile="${key}" data-builtin="false" style="display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 8px;">
+                        <div style="width: 36px; height: 36px; background: linear-gradient(135deg, #334155, #1e293b); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #a78bfa;"></div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 500; color: #e2e8f0;">${profile.name}</div>
+                            <div style="font-size: 12px; color: #64748b;">${profile.description}</div>
+                        </div>
+                        <button class="ytkit-profile-apply" style="padding: 6px 12px; background: #3b82f6; border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer;">Apply</button>
+                        <button class="ytkit-profile-delete" style="padding: 6px 12px; background: #ef4444; border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer;">Delete</button>
+                    </div>
+                `;
+            }
+        }
+        
+        html += '</div>';
+        
+        // Save current as profile button
+        html += `
+            <button id="ytkit-save-profile" style="width: 100%; padding: 12px; background: #334155; border: none; border-radius: 8px; color: #e2e8f0; font-weight: 500; cursor: pointer; transition: background 0.2s;">
+                Save Current Settings as Profile
+            </button>
+        `;
+        
+        TrustedHTML.setHTML(container, html);
+        
+        // Event listeners
+        container.querySelectorAll('.ytkit-profile-apply').forEach(btn => {
+            btn.onclick = async (e) => {
+                e.stopPropagation();
+                const item = btn.closest('.ytkit-profile-item');
+                const profileKey = item.dataset.profile;
+                const isBuiltIn = item.dataset.builtin === 'true';
+                
+                if (confirm(`Apply the "${profileKey}" profile? This will change your current settings.`)) {
+                    await ProfilesManager.applyProfile(profileKey, isBuiltIn);
+                    showToast(`Profile "${profileKey}" applied! Refreshing...`, '#22c55e');
+                    setTimeout(() => location.reload(), 1000);
+                }
+            };
+        });
+        
+        container.querySelectorAll('.ytkit-profile-delete').forEach(btn => {
+            btn.onclick = async (e) => {
+                e.stopPropagation();
+                const item = btn.closest('.ytkit-profile-item');
+                const profileKey = item.dataset.profile;
+                
+                if (confirm(`Delete the "${profileKey}" profile?`)) {
+                    await ProfilesManager.deleteCustomProfile(profileKey);
+                    showToast(`Profile "${profileKey}" deleted`, '#f97316');
+                    // Refresh profiles UI
+                    const parent = container.parentElement;
+                    container.remove();
+                    parent?.appendChild(await buildProfilesUI());
+                }
+            };
+        });
+        
+        container.querySelector('#ytkit-save-profile').onclick = async () => {
+            const name = prompt('Enter a name for this profile:');
+            if (name && name.trim()) {
+                await ProfilesManager.saveCustomProfile(name.trim(), appState.settings);
+                showToast(`Profile "${name}" saved`, '#22c55e');
+                // Refresh profiles UI
+                const parent = container.parentElement;
+                container.remove();
+                parent?.appendChild(await buildProfilesUI());
+            }
+        };
+        
+        return container;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  HELPER: Bulk Operations for Hidden Videos
+    // ══════════════════════════════════════════════════════════════════════════
+    function addBulkOperationsUI(container) {
+        const bulkBar = document.createElement('div');
+        bulkBar.className = 'ytkit-bulk-bar';
+        bulkBar.style.cssText = `
+            display: none;
+            padding: 12px;
+            background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
+            border-radius: 8px;
+            margin-bottom: 12px;
+            align-items: center;
+            gap: 12px;
+        `;
+        TrustedHTML.setHTML(bulkBar, `
+            <span class="ytkit-bulk-count" style="color: #60a5fa; font-weight: 500;">0 selected</span>
+            <div style="flex: 1;"></div>
+            <button class="ytkit-bulk-unhide" style="padding: 6px 12px; background: #22c55e; border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer;">Unhide Selected</button>
+            <button class="ytkit-bulk-cancel" style="padding: 6px 12px; background: #64748b; border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer;">Cancel</button>
+        `);
+        
+        container.insertBefore(bulkBar, container.firstChild);
+        
+        let selectedItems = new Set();
+        
+        const updateBulkBar = () => {
+            bulkBar.style.display = selectedItems.size > 0 ? 'flex' : 'none';
+            bulkBar.querySelector('.ytkit-bulk-count').textContent = `${selectedItems.size} selected`;
+        };
+        
+        bulkBar.querySelector('.ytkit-bulk-cancel').onclick = () => {
+            selectedItems.clear();
+            container.querySelectorAll('.ytkit-item-checkbox').forEach(cb => cb.checked = false);
+            updateBulkBar();
+        };
+        
+        bulkBar.querySelector('.ytkit-bulk-unhide').onclick = () => {
+            if (selectedItems.size === 0) return;
+            
+            const videoHiderFeature = features.find(f => f.id === 'hideVideosFromHome');
+            if (videoHiderFeature) {
+                selectedItems.forEach(id => {
+                    if (typeof videoHiderFeature._unhideVideo === 'function') {
+                        videoHiderFeature._unhideVideo(id);
+                    }
+                });
+                showToast(`Unhid ${selectedItems.size} videos`, '#22c55e');
+                selectedItems.clear();
+                updateBulkBar();
+                
+                // Trigger refresh of the list
+                container.dispatchEvent(new CustomEvent('ytkit-refresh-list'));
+            }
+        };
+        
+        return {
+            addCheckbox: (item, id) => {
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'ytkit-item-checkbox';
+                checkbox.style.cssText = 'margin-right: 8px; accent-color: #60a5fa;';
+                checkbox.onchange = () => {
+                    if (checkbox.checked) {
+                        selectedItems.add(id);
+                    } else {
+                        selectedItems.delete(id);
+                    }
+                    updateBulkBar();
+                };
+                item.insertBefore(checkbox, item.firstChild);
+            },
+            selectAll: () => {
+                container.querySelectorAll('.ytkit-item-checkbox').forEach(cb => {
+                    cb.checked = true;
+                    const id = cb.closest('[data-video-id]')?.dataset.videoId;
+                    if (id) selectedItems.add(id);
+                });
+                updateBulkBar();
+            },
+            deselectAll: () => {
+                selectedItems.clear();
+                container.querySelectorAll('.ytkit-item-checkbox').forEach(cb => cb.checked = false);
+                updateBulkBar();
+            }
+        };
+    }
 
     function injectStyle(selector, featureId, isRawCss = false) {
         const style = document.createElement('style');
@@ -5578,7 +7260,7 @@
 
     function applyKeywordFilter() {
         if (!window.location.pathname.startsWith('/watch')) return;
-        const keywordsRaw = appState.settings.keywordFilterList;
+        const keywordsRaw = appState.settings.chatKeywordFilter;
         const messages = document.querySelectorAll('yt-live-chat-text-message-renderer');
         if (!keywordsRaw || !keywordsRaw.trim()) {
             messages.forEach(el => {
@@ -5842,6 +7524,648 @@
             { type: 'line', x1: 9, y1: 3, x2: 9, y2: 21 },
             { type: 'line', x1: 15, y1: 3, x2: 15, y2: 21 }
         ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        // ─── Additional Feature Icons ───
+        'eye-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24' },
+            { type: 'line', x1: 1, y1: 1, x2: 23, y2: 23 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'bell-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M13.73 21a2 2 0 0 1-3.46 0' },
+            { type: 'path', d: 'M18.63 13A17.89 17.89 0 0 1 18 8' },
+            { type: 'path', d: 'M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14' },
+            { type: 'path', d: 'M18 8a6 6 0 0 0-9.33-5' },
+            { type: 'line', x1: 1, y1: 1, x2: 23, y2: 23 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'bell-minus': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9' },
+            { type: 'path', d: 'M13.73 21a2 2 0 0 1-3.46 0' },
+            { type: 'line', x1: 8, y1: 2, x2: 16, y2: 2 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'moon': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'sun-dim': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 4 },
+            { type: 'path', d: 'M12 4h.01M12 20h.01M4 12h.01M20 12h.01M6.34 6.34h.01M17.66 6.34h.01M6.34 17.66h.01M17.66 17.66h.01' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'contrast': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 10 },
+            { type: 'path', d: 'M12 2v20' },
+            { type: 'path', d: 'M12 2a10 10 0 0 1 0 20', fill: 'currentColor' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'palette': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 13.5, cy: 6.5, r: 0.5, fill: 'currentColor' },
+            { type: 'circle', cx: 17.5, cy: 10.5, r: 0.5, fill: 'currentColor' },
+            { type: 'circle', cx: 8.5, cy: 7.5, r: 0.5, fill: 'currentColor' },
+            { type: 'circle', cx: 6.5, cy: 12.5, r: 0.5, fill: 'currentColor' },
+            { type: 'path', d: 'M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.555C21.965 6.012 17.461 2 12 2z' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'square': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 2 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'user-square': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 2 },
+            { type: 'circle', cx: 12, cy: 10, r: 3 },
+            { type: 'path', d: 'M7 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'droplet-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M12 2v5' },
+            { type: 'path', d: 'M6.8 11.2A6 6 0 0 0 12 22a6 6 0 0 0 5.3-8.8' },
+            { type: 'path', d: 'M12 2l3.5 5.5' },
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'minimize': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M8 3v3a2 2 0 0 1-2 2H3' },
+            { type: 'path', d: 'M21 8h-3a2 2 0 0 1-2-2V3' },
+            { type: 'path', d: 'M3 16h3a2 2 0 0 1 2 2v3' },
+            { type: 'path', d: 'M16 21v-3a2 2 0 0 1 2-2h3' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'video-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M10.66 6H14a2 2 0 0 1 2 2v2.34l1 1L22 8v8' },
+            { type: 'path', d: 'M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2' },
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'external-link': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' },
+            { type: 'polyline', points: '15 3 21 3 21 9' },
+            { type: 'line', x1: 10, y1: 14, x2: 21, y2: 3 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'pause': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 6, y: 4, width: 4, height: 16 },
+            { type: 'rect', x: 14, y: 4, width: 4, height: 16 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'maximize': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M8 3H5a2 2 0 0 0-2 2v3' },
+            { type: 'path', d: 'M21 8V5a2 2 0 0 0-2-2h-3' },
+            { type: 'path', d: 'M3 16v3a2 2 0 0 0 2 2h3' },
+            { type: 'path', d: 'M16 21h3a2 2 0 0 0 2-2v-3' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'layout': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 2 },
+            { type: 'line', x1: 3, y1: 9, x2: 21, y2: 9 },
+            { type: 'line', x1: 9, y1: 21, x2: 9, y2: 9 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'grid': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 7, height: 7 },
+            { type: 'rect', x: 14, y: 3, width: 7, height: 7 },
+            { type: 'rect', x: 14, y: 14, width: 7, height: 7 },
+            { type: 'rect', x: 3, y: 14, width: 7, height: 7 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'badge': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'info-off': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 10 },
+            { type: 'line', x1: 12, y1: 16, x2: 12, y2: 12 },
+            { type: 'line', x1: 12, y1: 8, x2: 12.01, y2: 8 },
+            { type: 'line', x1: 4, y1: 4, x2: 20, y2: 20 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'folder-video': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z' },
+            { type: 'polygon', points: '10 13 15 10.5 10 8 10 13' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'gamepad': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 6, y1: 12, x2: 10, y2: 12 },
+            { type: 'line', x1: 8, y1: 10, x2: 8, y2: 14 },
+            { type: 'line', x1: 15, y1: 13, x2: 15.01, y2: 13 },
+            { type: 'line', x1: 18, y1: 11, x2: 18.01, y2: 11 },
+            { type: 'rect', x: 2, y: 6, width: 20, height: 12, rx: 2 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'lock': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 11, width: 18, height: 11, rx: 2 },
+            { type: 'path', d: 'M7 11V7a5 5 0 0 1 10 0v4' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'newspaper': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2' },
+            { type: 'path', d: 'M18 14h-8M15 18h-5M10 6h8v4h-8V6Z' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'list-x': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 11, y1: 6, x2: 21, y2: 6 },
+            { type: 'line', x1: 11, y1: 12, x2: 21, y2: 12 },
+            { type: 'line', x1: 11, y1: 18, x2: 21, y2: 18 },
+            { type: 'line', x1: 3, y1: 4, x2: 7, y2: 8 },
+            { type: 'line', x1: 7, y1: 4, x2: 3, y2: 8 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'fullscreen': () => createSVG('0 0 24 24', [
+            { type: 'polyline', points: '15 3 21 3 21 9' },
+            { type: 'polyline', points: '9 21 3 21 3 15' },
+            { type: 'polyline', points: '21 15 21 21 15 21' },
+            { type: 'polyline', points: '3 9 3 3 9 3' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'panel-right': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 2 },
+            { type: 'line', x1: 15, y1: 3, x2: 15, y2: 21 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'arrows-horizontal': () => createSVG('0 0 24 24', [
+            { type: 'polyline', points: '18 8 22 12 18 16' },
+            { type: 'polyline', points: '6 8 2 12 6 16' },
+            { type: 'line', x1: 2, y1: 12, x2: 22, y2: 12 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'cast': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6' },
+            { type: 'path', d: 'M2 12a9 9 0 0 1 8 8' },
+            { type: 'path', d: 'M2 16a5 5 0 0 1 4 4' },
+            { type: 'line', x1: 2, y1: 20, x2: 2.01, y2: 20 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'youtube': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z' },
+            { type: 'polygon', points: '9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'file-minus': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' },
+            { type: 'polyline', points: '14 2 14 8 20 8' },
+            { type: 'line', x1: 9, y1: 15, x2: 15, y2: 15 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'tv': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 2, y: 7, width: 20, height: 15, rx: 2 },
+            { type: 'polyline', points: '17 2 12 7 7 2' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'align-horizontal-justify-center': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 2, y: 5, width: 6, height: 14, rx: 2 },
+            { type: 'rect', x: 16, y: 7, width: 6, height: 10, rx: 2 },
+            { type: 'line', x1: 12, y1: 2, x2: 12, y2: 22 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'pause-circle': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 10 },
+            { type: 'line', x1: 10, y1: 15, x2: 10, y2: 9 },
+            { type: 'line', x1: 14, y1: 15, x2: 14, y2: 9 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'chevrons-down': () => createSVG('0 0 24 24', [
+            { type: 'polyline', points: '7 13 12 18 17 13' },
+            { type: 'polyline', points: '7 6 12 11 17 6' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'plus-circle': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 10 },
+            { type: 'line', x1: 12, y1: 8, x2: 12, y2: 16 },
+            { type: 'line', x1: 8, y1: 12, x2: 16, y2: 12 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'mic-off': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 1, y1: 1, x2: 23, y2: 23 },
+            { type: 'path', d: 'M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6' },
+            { type: 'path', d: 'M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23' },
+            { type: 'line', x1: 12, y1: 19, x2: 12, y2: 23 },
+            { type: 'line', x1: 8, y1: 23, x2: 16, y2: 23 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'home': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
+            { type: 'polyline', points: '9 22 9 12 15 12 15 22' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'sidebar': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 2 },
+            { type: 'line', x1: 9, y1: 3, x2: 9, y2: 21 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'skip-forward': () => createSVG('0 0 24 24', [
+            { type: 'polygon', points: '5 4 15 12 5 20 5 4' },
+            { type: 'line', x1: 19, y1: 5, x2: 19, y2: 19 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'thumbs-up': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'play-circle': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 10 },
+            { type: 'polygon', points: '10 8 16 12 10 16 10 8' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'monitor': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 2, y: 3, width: 20, height: 14, rx: 2 },
+            { type: 'line', x1: 8, y1: 21, x2: 16, y2: 21 },
+            { type: 'line', x1: 12, y1: 17, x2: 12, y2: 21 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'monitor-play': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 2, y: 3, width: 20, height: 14, rx: 2 },
+            { type: 'polygon', points: '10 8 15 10 10 12 10 8' },
+            { type: 'line', x1: 8, y1: 21, x2: 16, y2: 21 },
+            { type: 'line', x1: 12, y1: 17, x2: 12, y2: 21 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'menu': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 3, y1: 12, x2: 21, y2: 12 },
+            { type: 'line', x1: 3, y1: 6, x2: 21, y2: 6 },
+            { type: 'line', x1: 3, y1: 18, x2: 21, y2: 18 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'hash': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 4, y1: 9, x2: 20, y2: 9 },
+            { type: 'line', x1: 4, y1: 15, x2: 20, y2: 15 },
+            { type: 'line', x1: 10, y1: 3, x2: 8, y2: 21 },
+            { type: 'line', x1: 16, y1: 3, x2: 14, y2: 21 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'file-text': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' },
+            { type: 'polyline', points: '14 2 14 8 20 8' },
+            { type: 'line', x1: 16, y1: 13, x2: 8, y2: 13 },
+            { type: 'line', x1: 16, y1: 17, x2: 8, y2: 17 },
+            { type: 'polyline', points: '10 9 9 9 8 9' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'info': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 10 },
+            { type: 'line', x1: 12, y1: 16, x2: 12, y2: 12 },
+            { type: 'line', x1: 12, y1: 8, x2: 12.01, y2: 8 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'link': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' },
+            { type: 'path', d: 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'music': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M9 18V5l12-2v13' },
+            { type: 'circle', cx: 6, cy: 18, r: 3 },
+            { type: 'circle', cx: 18, cy: 16, r: 3 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'hard-drive-download': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M12 2v8' },
+            { type: 'path', d: 'm16 6-4 4-4-4' },
+            { type: 'rect', x: 2, y: 14, width: 20, height: 8, rx: 2 },
+            { type: 'line', x1: 6, y1: 18, x2: 6.01, y2: 18 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'zap-off': () => createSVG('0 0 24 24', [
+            { type: 'polyline', points: '12.41 6.75 13 2 10.57 4.92' },
+            { type: 'polyline', points: '18.57 12.91 21 10 15.66 10' },
+            { type: 'polyline', points: '8 8 3 14 12 14 11 22 16 16' },
+            { type: 'line', x1: 1, y1: 1, x2: 23, y2: 23 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'trophy': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M6 9H4.5a2.5 2.5 0 0 1 0-5H6' },
+            { type: 'path', d: 'M18 9h1.5a2.5 2.5 0 0 0 0-5H18' },
+            { type: 'path', d: 'M4 22h16' },
+            { type: 'path', d: 'M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22' },
+            { type: 'path', d: 'M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22' },
+            { type: 'path', d: 'M18 2H6v7a6 6 0 0 0 12 0V2Z' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'trending-up': () => createSVG('0 0 24 24', [
+            { type: 'polyline', points: '23 6 13.5 15.5 8.5 10.5 1 18' },
+            { type: 'polyline', points: '17 6 23 6 23 12' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'timer': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 14, r: 8 },
+            { type: 'line', x1: 12, y1: 14, x2: 12, y2: 10 },
+            { type: 'line', x1: 12, y1: 2, x2: 12, y2: 4 },
+            { type: 'line', x1: 8, y1: 2, x2: 16, y2: 2 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'ticket': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z' },
+            { type: 'path', d: 'M13 5v2' },
+            { type: 'path', d: 'M13 17v2' },
+            { type: 'path', d: 'M13 11v2' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'users': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2' },
+            { type: 'circle', cx: 9, cy: 7, r: 4 },
+            { type: 'path', d: 'M23 21v-2a4 4 0 0 0-3-3.87' },
+            { type: 'path', d: 'M16 3.13a4 4 0 0 1 0 7.75' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'users-x': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2' },
+            { type: 'circle', cx: 9, cy: 7, r: 4 },
+            { type: 'line', x1: 18, y1: 8, x2: 23, y2: 13 },
+            { type: 'line', x1: 23, y1: 8, x2: 18, y2: 13 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'award': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 8, r: 6 },
+            { type: 'path', d: 'M15.477 12.89 17 22l-5-3-5 3 1.523-9.11' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'bar-chart': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 12, y1: 20, x2: 12, y2: 10 },
+            { type: 'line', x1: 18, y1: 20, x2: 18, y2: 4 },
+            { type: 'line', x1: 6, y1: 20, x2: 6, y2: 16 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'bell-ring': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9' },
+            { type: 'path', d: 'M13.73 21a2 2 0 0 1-3.46 0' },
+            { type: 'path', d: 'M2 8c0-2.2.7-4.3 2-6' },
+            { type: 'path', d: 'M22 8a10 10 0 0 0-2-6' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'bot': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 11, width: 18, height: 10, rx: 2 },
+            { type: 'circle', cx: 12, cy: 5, r: 2 },
+            { type: 'path', d: 'M12 7v4' },
+            { type: 'line', x1: 8, y1: 16, x2: 8, y2: 16 },
+            { type: 'line', x1: 16, y1: 16, x2: 16, y2: 16 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'captions-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M10.5 5H19a2 2 0 0 1 2 2v8.5' },
+            { type: 'path', d: 'M17 11h-.5' },
+            { type: 'path', d: 'M19 19H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2' },
+            { type: 'path', d: 'M2 2 22 22' },
+            { type: 'path', d: 'M7 11h4' },
+            { type: 'path', d: 'M7 15h2.5' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'clapperboard': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M4 11v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8H4Z' },
+            { type: 'path', d: 'm4 11-.88-2.87a2 2 0 0 1 1.33-2.5l11.48-3.5a2 2 0 0 1 2.5 1.32l.87 2.87L4 11.01Z' },
+            { type: 'path', d: 'm6.6 4.99 3.38 4.2' },
+            { type: 'path', d: 'm11.86 3.38 3.38 4.2' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'clock': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 10 },
+            { type: 'polyline', points: '12 6 12 12 16 14' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'dollar-sign': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 12, y1: 2, x2: 12, y2: 22 },
+            { type: 'path', d: 'M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'download-cloud': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242' },
+            { type: 'path', d: 'M12 12v9' },
+            { type: 'path', d: 'm8 17 4 4 4-4' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'filter': () => createSVG('0 0 24 24', [
+            { type: 'polygon', points: '22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'file-x': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' },
+            { type: 'polyline', points: '14 2 14 8 20 8' },
+            { type: 'line', x1: 9.5, y1: 12.5, x2: 14.5, y2: 17.5 },
+            { type: 'line', x1: 14.5, y1: 12.5, x2: 9.5, y2: 17.5 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'flag-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M8 2c3 0 5 2 8 2s4-1 4-1v11' },
+            { type: 'path', d: 'M4 22V4' },
+            { type: 'path', d: 'M4 15s1-1 4-1 5 2 8 2' },
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'gift': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 8, width: 18, height: 4, rx: 1 },
+            { type: 'path', d: 'M12 8v13' },
+            { type: 'path', d: 'M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7' },
+            { type: 'path', d: 'M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'heart': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'heart-off': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 },
+            { type: 'path', d: 'M16.5 16.5 12 21l-7-7c-1.5-1.45-3-3.2-3-5.5a5.5 5.5 0 0 1 2.14-4.35' },
+            { type: 'path', d: 'M8.76 3.1c1.15.22 2.13.78 3.24 1.9 1.5-1.5 2.74-2 4.5-2A5.5 5.5 0 0 1 22 8.5c0 2.12-1.3 3.78-2.67 5.17' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'layout-grid': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 7, height: 7, rx: 1 },
+            { type: 'rect', x: 14, y: 3, width: 7, height: 7, rx: 1 },
+            { type: 'rect', x: 14, y: 14, width: 7, height: 7, rx: 1 },
+            { type: 'rect', x: 3, y: 14, width: 7, height: 7, rx: 1 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'list-tree': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M21 12h-8' },
+            { type: 'path', d: 'M21 6H8' },
+            { type: 'path', d: 'M21 18h-8' },
+            { type: 'path', d: 'M3 6v4c0 1.1.9 2 2 2h3' },
+            { type: 'path', d: 'M3 10v6c0 1.1.9 2 2 2h3' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'megaphone-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M9.26 9.26 3 11v3l14.14 3.14' },
+            { type: 'path', d: 'M21 15.34V6l-7.31 2.03' },
+            { type: 'path', d: 'M11.6 16.8a3 3 0 1 1-5.8-1.6' },
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'message-circle-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M20.5 14.9A9 9 0 0 0 9.1 3.5' },
+            { type: 'path', d: 'M5.5 5.5A9 9 0 0 0 3 12c0 .78.1 1.53.28 2.25a9 9 0 0 0 .61 1.6l-1.7 5.47a.5.5 0 0 0 .61.63l5.58-1.48c.48.27.99.49 1.52.66' },
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'message-square': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'message-square-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M21 15V5a2 2 0 0 0-2-2H9' },
+            { type: 'path', d: 'M3 3l18 18' },
+            { type: 'path', d: 'M3 6v15l4-4h5' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'more-horizontal': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 1 },
+            { type: 'circle', cx: 19, cy: 12, r: 1 },
+            { type: 'circle', cx: 5, cy: 12, r: 1 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'more-vertical': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 1 },
+            { type: 'circle', cx: 12, cy: 5, r: 1 },
+            { type: 'circle', cx: 12, cy: 19, r: 1 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'panel-top': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 2 },
+            { type: 'line', x1: 3, y1: 9, x2: 21, y2: 9 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'picture-in-picture': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 2, y: 4, width: 20, height: 16, rx: 2 },
+            { type: 'rect', x: 12, y: 12, width: 8, height: 6 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'pip': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 2, y: 4, width: 20, height: 16, rx: 2 },
+            { type: 'rect', x: 12, y: 12, width: 8, height: 6 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'pin-off': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 },
+            { type: 'line', x1: 12, y1: 17, x2: 12, y2: 22 },
+            { type: 'path', d: 'M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h12' },
+            { type: 'path', d: 'M15 9.34V6h1a2 2 0 0 0 0-4H7.89' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'play': () => createSVG('0 0 24 24', [
+            { type: 'polygon', points: '5 3 19 12 5 21 5 3' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'repeat': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'm17 2 4 4-4 4' },
+            { type: 'path', d: 'M3 11v-1a4 4 0 0 1 4-4h14' },
+            { type: 'path', d: 'm7 22-4-4 4-4' },
+            { type: 'path', d: 'M21 13v1a4 4 0 0 1-4 4H3' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'scissors': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 6, cy: 6, r: 3 },
+            { type: 'circle', cx: 6, cy: 18, r: 3 },
+            { type: 'line', x1: 20, y1: 4, x2: 8.12, y2: 15.88 },
+            { type: 'line', x1: 14.47, y1: 14.48, x2: 20, y2: 20 },
+            { type: 'line', x1: 8.12, y1: 8.12, x2: 12, y2: 12 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'scroll-text': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4' },
+            { type: 'path', d: 'M19 17V5a2 2 0 0 0-2-2H4' },
+            { type: 'path', d: 'M15 8h-5' },
+            { type: 'path', d: 'M15 12h-5' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'settings-2': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M20 7h-9' },
+            { type: 'path', d: 'M14 17H5' },
+            { type: 'circle', cx: 17, cy: 17, r: 3 },
+            { type: 'circle', cx: 7, cy: 7, r: 3 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'share': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 18, cy: 5, r: 3 },
+            { type: 'circle', cx: 6, cy: 12, r: 3 },
+            { type: 'circle', cx: 18, cy: 19, r: 3 },
+            { type: 'line', x1: 8.59, y1: 13.51, x2: 15.42, y2: 17.49 },
+            { type: 'line', x1: 15.41, y1: 6.51, x2: 8.59, y2: 10.49 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'shield-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M19.7 14a6.9 6.9 0 0 0 .3-2V5l-8-3-3.2 1.2' },
+            { type: 'path', d: 'M4.7 4.7 4 5v7c0 6 8 10 8 10a20.3 20.3 0 0 0 5.62-4.38' },
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'shopping-bag': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z' },
+            { type: 'line', x1: 3, y1: 6, x2: 21, y2: 6 },
+            { type: 'path', d: 'M16 10a4 4 0 0 1-8 0' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'smile': () => createSVG('0 0 24 24', [
+            { type: 'circle', cx: 12, cy: 12, r: 10 },
+            { type: 'path', d: 'M8 14s1.5 2 4 2 4-2 4-2' },
+            { type: 'line', x1: 9, y1: 9, x2: 9.01, y2: 9 },
+            { type: 'line', x1: 15, y1: 9, x2: 15.01, y2: 9 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'smile-plus': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M22 11v1a10 10 0 1 1-9-10' },
+            { type: 'path', d: 'M8 14s1.5 2 4 2 4-2 4-2' },
+            { type: 'line', x1: 9, y1: 9, x2: 9.01, y2: 9 },
+            { type: 'line', x1: 15, y1: 9, x2: 15.01, y2: 9 },
+            { type: 'path', d: 'M16 5h6' },
+            { type: 'path', d: 'M19 2v6' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'sparkles': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'm12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z' },
+            { type: 'path', d: 'M5 3v4' },
+            { type: 'path', d: 'M19 17v4' },
+            { type: 'path', d: 'M3 5h4' },
+            { type: 'path', d: 'M17 19h4' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'square-x': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 2 },
+            { type: 'line', x1: 9, y1: 9, x2: 15, y2: 15 },
+            { type: 'line', x1: 15, y1: 9, x2: 9, y2: 15 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'subtitles': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 2, y: 4, width: 20, height: 16, rx: 2 },
+            { type: 'line', x1: 6, y1: 12, x2: 9, y2: 12 },
+            { type: 'line', x1: 6, y1: 16, x2: 13, y2: 16 },
+            { type: 'line', x1: 12, y1: 12, x2: 18, y2: 12 },
+            { type: 'line', x1: 16, y1: 16, x2: 18, y2: 16 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'tag-off': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M10.02 2.03 2.03 10.02a2 2 0 0 0 0 2.83l8.12 8.12a2 2 0 0 0 2.83 0l8.01-8.01a2.02 2.02 0 0 0 .38-2.29' },
+            { type: 'path', d: 'M7.5 7.5a.5.5 0 1 0 1 0 .5.5 0 1 0-1 0Z' },
+            { type: 'path', d: 'M21.95 12.05 12.05 21.95' },
+            { type: 'line', x1: 2, y1: 2, x2: 22, y2: 22 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        // Keyboard/debug icons
+        'keyboard': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 2, y: 4, width: 20, height: 16, rx: 2 },
+            { type: 'line', x1: 6, y1: 8, x2: 6, y2: 8 },
+            { type: 'line', x1: 10, y1: 8, x2: 10, y2: 8 },
+            { type: 'line', x1: 14, y1: 8, x2: 14, y2: 8 },
+            { type: 'line', x1: 18, y1: 8, x2: 18, y2: 8 },
+            { type: 'line', x1: 8, y1: 12, x2: 8, y2: 12 },
+            { type: 'line', x1: 12, y1: 12, x2: 12, y2: 12 },
+            { type: 'line', x1: 16, y1: 12, x2: 16, y2: 12 },
+            { type: 'line', x1: 7, y1: 16, x2: 17, y2: 16 }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'bug': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 8, y: 6, width: 8, height: 14, rx: 4 },
+            { type: 'path', d: 'M19 7l-3 2' },
+            { type: 'path', d: 'M5 7l3 2' },
+            { type: 'path', d: 'M19 19l-3-2' },
+            { type: 'path', d: 'M5 19l3-2' },
+            { type: 'path', d: 'M20 13h-4' },
+            { type: 'path', d: 'M4 13h4' },
+            { type: 'path', d: 'M10 4l1 2' },
+            { type: 'path', d: 'M14 4l-1 2' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
+        'undo': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M3 7v6h6' },
+            { type: 'path', d: 'M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
     };
 
     const CATEGORY_CONFIG = {
@@ -5858,6 +8182,7 @@
         'Action Buttons': { icon: 'actions', color: '#c084fc' },
         'Player Controls': { icon: 'controls', color: '#38bdf8' },
         'Downloads': { icon: 'downloads', color: '#f97316' },
+        'Advanced': { icon: 'advanced', color: '#94a3b8' },
     };
 
     function injectSettingsButton() {
@@ -5910,7 +8235,7 @@
     function buildSettingsPanel() {
         if (document.getElementById('ytkit-settings-panel')) return;
 
-        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Playback', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads'];
+        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Playback', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads', 'Advanced'];
         const featuresByCategory = categoryOrder.reduce((acc, cat) => ({...acc, [cat]: []}), {});
         features.forEach(f => { if (f.group && featuresByCategory[f.group]) featuresByCategory[f.group].push(f); });
 
@@ -5984,57 +8309,6 @@
         searchContainer.appendChild(searchIcon);
         searchContainer.appendChild(searchInput);
         sidebar.appendChild(searchContainer);
-
-        // Preset profiles
-        const presetsContainer = document.createElement('div');
-        presetsContainer.className = 'ytkit-presets-container';
-        const presetsLabel = document.createElement('span');
-        presetsLabel.className = 'ytkit-presets-label';
-        presetsLabel.textContent = 'Presets';
-        presetsContainer.appendChild(presetsLabel);
-
-        const presetConfigs = {
-            minimal: { name: 'Minimal', desc: 'Clean, distraction-free experience', settings: {
-                hideCreateButton: true, hideVoiceSearch: true, hideSidebar: true, removeAllShorts: true,
-                hideMerchShelf: true, hideVideoEndCards: true, hideVideoEndScreen: true, hideHashtags: true,
-                hidePinnedComments: true, hideRelatedVideos: true, hideDescriptionExtras: true
-            }},
-            privacy: { name: 'Privacy', desc: 'Maximum privacy protection', settings: {
-                disablePlayOnHover: true, preventAutoplay: true, hideNotificationButton: true,
-                hideNotificationBadge: true, hideLiveChatEngagement: true, hidePaidPromotionWatch: true
-            }},
-            power: { name: 'Power User', desc: 'All productivity features enabled', settings: {
-                playbackSpeedPresets: true, rememberPlaybackSpeed: true, returnYouTubeDislike: true,
-                showWatchProgress: true, timestampBookmarks: true, skipSponsors: true, autoMaxResolution: true,
-                autoExpandDescription: true, fiveVideosPerRow: true, hideVideosFromHome: true
-            }}
-        };
-
-        Object.entries(presetConfigs).forEach(([key, preset]) => {
-            const btn = document.createElement('button');
-            btn.className = 'ytkit-preset-btn';
-            btn.textContent = preset.name;
-            btn.title = preset.desc;
-            btn.onclick = async () => {
-                if (confirm(`Apply "${preset.name}" preset?\n\n${preset.desc}\n\nThis will change ${Object.keys(preset.settings).length} settings.`)) {
-                    Object.assign(appState.settings, preset.settings);
-                    await settingsManager.save(appState.settings);
-                    // Re-init changed features
-                    features.forEach(f => {
-                        if (preset.settings.hasOwnProperty(f.id)) {
-                            try { f.destroy?.(); } catch(e) {}
-                            if (appState.settings[f.id]) {
-                                try { f.init?.(); } catch(e) {}
-                            }
-                        }
-                    });
-                    updateAllToggleStates();
-                    createToast(`Applied "${preset.name}" preset`, 'success');
-                }
-            };
-            presetsContainer.appendChild(btn);
-        });
-        sidebar.appendChild(presetsContainer);
 
         // Divider
         const divider = document.createElement('div');
@@ -6649,6 +8923,10 @@
             const toggleAllTrack = document.createElement('span');
             toggleAllTrack.className = 'ytkit-switch-track';
 
+            const toggleAllThumb = document.createElement('span');
+            toggleAllThumb.className = 'ytkit-switch-thumb';
+
+            toggleAllTrack.appendChild(toggleAllThumb);
             toggleAllSwitch.appendChild(toggleAllInput);
             toggleAllSwitch.appendChild(toggleAllTrack);
             toggleAllLabel.appendChild(toggleAllText);
@@ -6698,7 +8976,16 @@
             const parentFeatures = categoryFeatures.filter(f => !f.isSubFeature);
             const subFeatures = categoryFeatures.filter(f => f.isSubFeature);
 
-            parentFeatures.forEach(f => {
+            // Sort features: dropdowns/selects first, then others
+            const sortedParentFeatures = [...parentFeatures].sort((a, b) => {
+                const aIsDropdown = a.type === 'select' || a.type === 'multiSelect';
+                const bIsDropdown = b.type === 'select' || b.type === 'multiSelect';
+                if (aIsDropdown && !bIsDropdown) return -1;
+                if (!aIsDropdown && bIsDropdown) return 1;
+                return 0;
+            });
+
+            sortedParentFeatures.forEach(f => {
                 const card = buildFeatureCard(f, config.color);
                 grid.appendChild(card);
 
@@ -6740,7 +9027,7 @@
         // YouTube Tools Installer Button - Downloads a .bat launcher
         const ytToolsBtn = document.createElement('button');
         ytToolsBtn.className = 'ytkit-github';
-        ytToolsBtn.title = 'Download YouTube Tools Installer (double-click to run)';
+        ytToolsBtn.title = 'Download & run this script to setup local YouTube downloads (VLC/MPV streaming, yt-dlp)';
         ytToolsBtn.style.cssText = 'background: linear-gradient(135deg, #f97316, #22c55e) !important; border: none; cursor: pointer;';
         const dlIcon = ICONS.download();
         dlIcon.style.color = 'white';
@@ -6777,7 +9064,7 @@ pause
 
         const versionSpan = document.createElement('span');
         versionSpan.className = 'ytkit-version';
-        versionSpan.textContent = 'v9.4';
+        versionSpan.textContent = 'v12.1';
 
         const shortcutSpan = document.createElement('span');
         shortcutSpan.className = 'ytkit-shortcut';
@@ -6849,28 +9136,25 @@ pause
         card.appendChild(info);
 
         if (f.type === 'info') {
-            // Info card - just show a help link
-            const helpLink = document.createElement('a');
-            helpLink.href = 'https://github.com/SysAdminDoc/YTKit/wiki/YouTube-Tools-Setup';
-            helpLink.target = '_blank';
-            helpLink.textContent = 'Setup Guide →';
-            helpLink.style.cssText = 'color: #f97316; font-weight: 600; text-decoration: none; padding: 8px 16px; background: rgba(249, 115, 22, 0.2); border-radius: 8px; transition: background 0.2s;';
-            helpLink.onmouseenter = () => { helpLink.style.background = 'rgba(249, 115, 22, 0.3)'; };
-            helpLink.onmouseleave = () => { helpLink.style.background = 'rgba(249, 115, 22, 0.2)'; };
-            card.appendChild(helpLink);
+            // Info card - no additional controls needed (installer is in footer)
         } else if (f.type === 'textarea') {
             const textarea = document.createElement('textarea');
             textarea.className = 'ytkit-input';
             textarea.id = `ytkit-input-${f.id}`;
-            textarea.placeholder = 'word1, word2, phrase';
+            textarea.placeholder = f.placeholder || 'word1, word2, phrase';
             textarea.value = appState.settings[f.id] || '';
+            // Make CSS textareas larger
+            if (f.id === 'customCssCode') {
+                textarea.style.cssText = 'min-height: 150px; font-family: monospace; font-size: 12px;';
+            }
             card.appendChild(textarea);
         } else if (f.type === 'select') {
             const select = document.createElement('select');
             select.className = 'ytkit-select';
             select.id = `ytkit-select-${f.id}`;
             select.style.cssText = `padding:8px 12px;border-radius:8px;background:var(--ytkit-bg-base);color:#fff;border:1px solid rgba(255,255,255,0.1);cursor:pointer;font-size:13px;min-width:150px;`;
-            const currentValue = appState.settings[f.id] || Object.keys(f.options)[0];
+            const settingKey = f.settingKey || f.id;
+            const currentValue = appState.settings[settingKey] || Object.keys(f.options)[0];
             for (const [value, label] of Object.entries(f.options)) {
                 const option = document.createElement('option');
                 option.value = value;
@@ -6879,6 +9163,61 @@ pause
                 select.appendChild(option);
             }
             card.appendChild(select);
+        } else if (f.type === 'multiSelect') {
+            // Multi-select with checkboxes
+            const settingKey = f.settingKey || f.id;
+            const currentValues = appState.settings[settingKey] || [];
+            
+            const wrapper = document.createElement('div');
+            wrapper.className = 'ytkit-multiselect';
+            wrapper.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;max-width:300px;';
+            
+            // Create "Edit" button to expand options
+            const editBtn = document.createElement('button');
+            editBtn.className = 'ytkit-multiselect-btn';
+            editBtn.style.cssText = 'padding:6px 12px;border-radius:6px;background:var(--ytkit-bg-hover);color:#fff;border:1px solid rgba(255,255,255,0.1);cursor:pointer;font-size:12px;';
+            editBtn.textContent = `${currentValues.length} of ${f.options.length} selected`;
+            
+            const dropdown = document.createElement('div');
+            dropdown.className = 'ytkit-multiselect-dropdown';
+            dropdown.style.cssText = 'display:none;position:absolute;right:0;top:100%;background:var(--ytkit-bg-elevated);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px;z-index:100;max-height:200px;overflow-y:auto;min-width:200px;';
+            
+            f.options.forEach(opt => {
+                const label = document.createElement('label');
+                label.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:12px;color:#e2e8f0;';
+                label.onmouseenter = () => { label.style.background = 'rgba(255,255,255,0.05)'; };
+                label.onmouseleave = () => { label.style.background = 'transparent'; };
+                
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.value = opt.value;
+                cb.checked = currentValues.includes(opt.value);
+                cb.style.cssText = 'accent-color:#3b82f6;';
+                cb.dataset.featureId = f.id;
+                cb.dataset.settingKey = settingKey;
+                cb.className = 'ytkit-multiselect-cb';
+                
+                label.appendChild(cb);
+                label.appendChild(document.createTextNode(opt.label));
+                dropdown.appendChild(label);
+            });
+            
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+            };
+            
+            wrapper.style.position = 'relative';
+            wrapper.appendChild(editBtn);
+            wrapper.appendChild(dropdown);
+            card.appendChild(wrapper);
+            
+            // Close dropdown when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!wrapper.contains(e.target)) {
+                    dropdown.style.display = 'none';
+                }
+            });
         } else {
             const isEnabled = appState.settings[f.id];
             const switchDiv = document.createElement('div');
@@ -6968,6 +9307,12 @@ pause
             const featureToggles = pane.querySelectorAll('.ytkit-feature-cb');
             const allChecked = featureToggles.length > 0 && Array.from(featureToggles).every(t => t.checked);
             cb.checked = allChecked;
+            
+            // Update switch visual state
+            const switchEl = cb.closest('.ytkit-switch');
+            if (switchEl) {
+                switchEl.classList.toggle('active', allChecked);
+            }
         });
 
         // Update nav counts
@@ -7140,6 +9485,13 @@ pause
                 const isEnabled = e.target.checked;
                 const catId = e.target.dataset.category;
                 const pane = doc.getElementById(`ytkit-pane-${catId}`);
+                
+                // Update the switch visual state
+                const switchEl = e.target.closest('.ytkit-switch');
+                if (switchEl) {
+                    switchEl.classList.toggle('active', isEnabled);
+                }
+                
                 if (pane) {
                     pane.querySelectorAll('.ytkit-feature-card:not(.ytkit-sub-card) .ytkit-feature-cb').forEach(cb => {
                         if (cb.checked !== isEnabled) {
@@ -7163,14 +9515,79 @@ pause
                     feature.destroy?.();
                     feature.init?.();
                 }
+                
+                // Special case: if customCssCode changed, update the customCssEnabled feature
+                if (featureId === 'customCssCode' && appState.settings.customCssEnabled) {
+                    const cssFeature = features.find(f => f.id === 'customCssEnabled');
+                    if (cssFeature && typeof cssFeature.updateCss === 'function') {
+                        cssFeature.updateCss(e.target.value);
+                    }
+                }
             }
             // Select dropdown
             if (e.target.matches('.ytkit-select')) {
                 const card = e.target.closest('[data-feature-id]');
                 const featureId = card.dataset.featureId;
-                appState.settings[featureId] = e.target.value;
+                const feature = features.find(f => f.id === featureId);
+                
+                // Use settingKey if specified, otherwise use featureId
+                const settingKey = feature?.settingKey || featureId;
+                const newValue = e.target.value;
+                
+                appState.settings[settingKey] = newValue;
                 await settingsManager.save(appState.settings);
-                createToast(`Download provider set to ${e.target.options[e.target.selectedIndex].text}`, 'success');
+                
+                // Reinitialize the feature to apply changes immediately
+                if (feature) {
+                    if (typeof feature.destroy === 'function') {
+                        try { feature.destroy(); } catch (e) { /* ignore */ }
+                    }
+                    if (typeof feature.init === 'function') {
+                        try { feature.init(); } catch (e) { console.warn('[YTKit] Feature reinit error:', e); }
+                    }
+                }
+                
+                const selectedText = e.target.options[e.target.selectedIndex].text;
+                createToast(`${feature?.name || 'Setting'} changed to ${selectedText}`, 'success');
+            }
+            // MultiSelect checkbox
+            if (e.target.matches('.ytkit-multiselect-cb')) {
+                const card = e.target.closest('[data-feature-id]');
+                const featureId = card.dataset.featureId;
+                const settingKey = e.target.dataset.settingKey;
+                const feature = features.find(f => f.id === featureId);
+                
+                // Get current array and update it
+                let currentValues = appState.settings[settingKey] || [];
+                if (!Array.isArray(currentValues)) currentValues = [];
+                
+                const value = e.target.value;
+                if (e.target.checked) {
+                    if (!currentValues.includes(value)) {
+                        currentValues.push(value);
+                    }
+                } else {
+                    currentValues = currentValues.filter(v => v !== value);
+                }
+                
+                appState.settings[settingKey] = currentValues;
+                await settingsManager.save(appState.settings);
+                
+                // Update button text
+                const btn = card.querySelector('.ytkit-multiselect-btn');
+                if (btn && feature) {
+                    btn.textContent = `${currentValues.length} of ${feature.options.length} selected`;
+                }
+                
+                // Reinitialize the feature to apply changes immediately
+                if (feature) {
+                    if (typeof feature.destroy === 'function') {
+                        try { feature.destroy(); } catch (err) { /* ignore */ }
+                    }
+                    if (typeof feature.init === 'function') {
+                        try { feature.init(); } catch (err) { console.warn('[YTKit] Feature reinit error:', err); }
+                    }
+                }
             }
         });
 
@@ -7470,40 +9887,6 @@ body.ytkit-panel-open #ytkit-settings-panel {
     height: 16px;
     color: var(--ytkit-text-muted);
     pointer-events: none;
-}
-
-/* Preset Profiles */
-.ytkit-presets-container {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-bottom: 12px;
-}
-.ytkit-presets-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--ytkit-text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 0 4px;
-    margin-bottom: 4px;
-}
-.ytkit-preset-btn {
-    padding: 8px 12px;
-    background: var(--ytkit-bg-surface);
-    border: 1px solid var(--ytkit-border);
-    border-radius: var(--ytkit-radius-sm);
-    color: var(--ytkit-text-secondary);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--ytkit-transition);
-    text-align: left;
-}
-.ytkit-preset-btn:hover {
-    background: var(--ytkit-bg-hover);
-    color: var(--ytkit-text-primary);
-    border-color: var(--ytkit-accent);
 }
 
 /* Sidebar Divider */
@@ -8001,6 +10384,76 @@ ytd-live-chat-frame {
 .ytkit-content::-webkit-scrollbar-thumb:hover {
     background: var(--ytkit-text-muted);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Statistics Dashboard Styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+.ytkit-stat-card {
+    background: linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+    border: 1px solid var(--ytkit-border-subtle);
+    border-radius: var(--ytkit-radius-md);
+    padding: 16px;
+    text-align: center;
+    transition: all var(--ytkit-transition);
+}
+.ytkit-stat-card:hover {
+    background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
+    border-color: var(--ytkit-border);
+}
+.ytkit-stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--ytkit-accent);
+    margin-bottom: 4px;
+}
+.ytkit-stat-label {
+    font-size: 12px;
+    color: var(--ytkit-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Profiles UI Styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+.ytkit-profile-item:hover {
+    background: rgba(255,255,255,0.06) !important;
+}
+.ytkit-profile-item button:hover {
+    filter: brightness(1.1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Custom CSS Editor Styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+.ytkit-css-editor {
+    width: 100%;
+    min-height: 150px;
+    padding: 12px;
+    background: var(--ytkit-bg-base);
+    border: 1px solid var(--ytkit-border);
+    border-radius: var(--ytkit-radius-md);
+    color: var(--ytkit-text-primary);
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+}
+.ytkit-css-editor:focus {
+    outline: none;
+    border-color: var(--ytkit-accent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Bulk Operations Styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+.ytkit-bulk-bar {
+    animation: slideDown 0.2s ease-out;
+}
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
         `);
     }
 
@@ -8009,6 +10462,13 @@ ytd-live-chat-frame {
     // ══════════════════════════════════════════════════════════════════════════
     async function main() {
         appState.settings = await settingsManager.load();
+        appState.currentPage = getCurrentPage();
+
+        // Initialize keyboard manager with default settings shortcut
+        KeyboardManager.init();
+        KeyboardManager.register('ctrl+alt+y', () => {
+            document.body.classList.toggle('ytkit-panel-open');
+        }, 'Open YTKit Settings');
 
         injectPanelStyles();
         buildSettingsPanel();
@@ -8016,12 +10476,33 @@ ytd-live-chat-frame {
         attachUIEventListeners();
         updateAllToggleStates();
 
+        // Initialize features with lazy-loading support
         features.forEach(f => {
-            if (appState.settings[f.id]) {
+            // For multiSelect features, check if the settingKey array has items
+            // For regular features, check if the feature is enabled
+            const isMultiSelect = f.type === 'multiSelect';
+            const settingKey = f.settingKey || f.id;
+            const isEnabled = isMultiSelect 
+                ? (appState.settings[settingKey] && appState.settings[settingKey].length > 0)
+                : appState.settings[f.id];
+            
+            if (isEnabled) {
+                // Check if feature should run on this page (lazy-loading)
+                if (f.pages && !f.pages.includes(appState.currentPage)) {
+                    return; // Skip this feature on this page
+                }
+                
+                // Check feature dependencies
+                if (f.dependsOn && !appState.settings[f.dependsOn]) {
+                    return; // Skip if dependency not enabled
+                }
+
                 try {
                     f.init?.();
+                    DebugManager.log('Feature', `Initialized: ${f.id}`);
                 } catch (error) {
                     console.error(`[YTKit] Error initializing "${f.id}":`, error);
+                    DebugManager.log('Error', `Failed to init ${f.id}`, error.message);
                 }
             }
         });
@@ -8042,7 +10523,41 @@ ytd-live-chat-frame {
             await settingsManager.setFirstRunStatus(true);
         }
 
-        console.log('[YTKit] Initialized');
+        // Track page changes for lazy loading
+        window.addEventListener('yt-navigate-finish', () => {
+            const newPage = getCurrentPage();
+            if (newPage !== appState.currentPage) {
+                const oldPage = appState.currentPage;
+                appState.currentPage = newPage;
+                DebugManager.log('Navigation', `Page changed: ${oldPage} -> ${newPage}`);
+                
+                // Re-initialize features that are page-specific
+                features.forEach(f => {
+                    const isMultiSelect = f.type === 'multiSelect';
+                    const settingKey = f.settingKey || f.id;
+                    const isEnabled = isMultiSelect 
+                        ? (appState.settings[settingKey] && appState.settings[settingKey].length > 0)
+                        : appState.settings[f.id];
+                    
+                    if (isEnabled && f.pages) {
+                        const wasActive = f.pages.includes(oldPage);
+                        const shouldBeActive = f.pages.includes(newPage);
+                        
+                        if (!wasActive && shouldBeActive) {
+                            try { f.init?.(); } catch(e) {}
+                        } else if (wasActive && !shouldBeActive) {
+                            try { f.destroy?.(); } catch(e) {}
+                        }
+                    }
+                });
+            }
+        });
+
+        // Initialize statistics tracker
+        await StatsTracker.load();
+
+        console.log('[YTKit] v12.1 Initialized - Optimized Edition');
+        DebugManager.log('Init', 'YTKit v12.1 started', { page: appState.currentPage, features: Object.keys(appState.settings).filter(k => appState.settings[k]).length });
     }
 
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
