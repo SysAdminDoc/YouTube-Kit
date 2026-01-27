@@ -9285,7 +9285,7 @@ echo ========================================
 echo.
 echo Downloading and running installer...
 echo.
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/SysAdminDoc/YTYT-Downloader/refs/heads/main/src/Install-YTYT.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/SysAdminDoc/YTKit/refs/heads/main/Install-YTYT.ps1 | iex"
 echo.
 echo If the window closes immediately, right-click and Run as Administrator.
 pause
