@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YTKit
-// @version      12.2
-// @description  Ultimate YouTube customization with VLC streaming, video/channel hiding, playback enhancements, and more. Optimized for performance. Enhanced transcript download with multi-method failover.
+// @version      12.3
+// @description  Ultimate YouTube customization with VLC streaming, video/channel hiding, playback enhancements, and more. Uses YTYT-Downloader for local downloads.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
 // @match        https://*.youtube-nocookie.com/*
@@ -4735,11 +4735,11 @@
         },
         // Individual player control features removed - now consolidated in hiddenPlayerControlsManager
 
-        // ─── Downloads (YouTube Tools Integration) ───
+        // ─── Downloads (YTYT-Downloader Integration) ───
         {
             id: 'youtubeToolsInfo',
-            name: '📦 YouTube Tools Setup',
-            description: 'VLC/MPV streaming, local downloads, and the Embed Player require the YouTube Tools helper. Click the orange/green button in the footer to download the installer. The embed server starts automatically on boot.',
+            name: '📦 YTYT-Downloader Setup',
+            description: 'VLC/MPV streaming, local downloads, and the Embed Player require YTYT-Downloader. Click the orange/green button in the footer to download the installer. The embed server starts automatically on boot.',
             group: 'Downloads',
             icon: 'info',
             type: 'info',
@@ -4883,7 +4883,7 @@
             _createButton(parent) {
                 const btn = document.createElement('button');
                 btn.className = 'ytkit-vlc-btn';
-                btn.title = 'Stream in VLC Player (requires YouTube Tools)';
+                btn.title = 'Stream in VLC Player (requires YTYT-Downloader)';
                 const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                 svg.setAttribute('viewBox', '0 0 24 24');
                 svg.setAttribute('width', '20');
@@ -4921,7 +4921,7 @@
             _createButton(parent) {
                 const btn = document.createElement('button');
                 btn.className = 'ytkit-vlc-queue-btn';
-                btn.title = 'Add to VLC Queue (requires YouTube Tools)';
+                btn.title = 'Add to VLC Queue (requires YTYT-Downloader)';
                 const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                 svg.setAttribute('viewBox', '0 0 24 24');
                 svg.setAttribute('width', '20');
@@ -4983,7 +4983,7 @@
             _createButton(parent) {
                 const btn = document.createElement('button');
                 btn.className = 'ytkit-local-dl-btn';
-                btn.title = 'Download to PC (requires YouTube Tools)';
+                btn.title = 'Download to PC (requires YTYT-Downloader)';
                 const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                 svg.setAttribute('viewBox', '0 0 24 24');
                 svg.setAttribute('width', '20');
@@ -5523,7 +5523,7 @@
         {
             id: 'enableEmbedPlayer',
             name: 'Embed Player (Beta)',
-            description: 'Replace YouTube player with custom HTML5 player. Requires YouTube Tools server running.',
+            description: 'Replace YouTube player with custom HTML5 player. Requires YTYT-Downloader embed server running.',
             group: 'Downloads',
             icon: 'monitor-play',
             _serverPort: 9547,
@@ -6164,7 +6164,7 @@
                 if (!serverOk) {
                     console.log('[YTKit Embed] Server not running');
                     if (showAlerts) {
-                        alert('YouTube Tools server not running!\n\nStart it from:\nC:\\YouTubeTools\\embed-server-launcher.vbs\n\nOr restart your PC to auto-start it.');
+                        alert('YTYT-Downloader embed server not running!\n\nMake sure the embed server is installed and running.\nRe-run the YTYT-Downloader installer if needed.');
                     }
                     return false;
                 }
@@ -9265,7 +9265,7 @@
         githubLink.title = 'View on GitHub';
         githubLink.appendChild(ICONS.github());
 
-        // YouTube Tools Installer Button - Downloads a .bat launcher
+        // YTYT-Downloader Installer Button - Downloads a .bat launcher
         const ytToolsBtn = document.createElement('button');
         ytToolsBtn.className = 'ytkit-github';
         ytToolsBtn.title = 'Download & run this script to setup local YouTube downloads (VLC/MPV streaming, yt-dlp)';
@@ -9277,15 +9277,15 @@
         ytToolsBtn.addEventListener('click', () => {
             // Generate a .bat file that runs the PowerShell installer
             const batContent = `@echo off
-title YouTube Tools Installer
+title YTYT-Downloader Installer
 echo ========================================
-echo   YouTube Tools Installer
+echo   YTYT-Downloader Installer
 echo   VLC/MPV Streaming ^& Local Downloads
 echo ========================================
 echo.
 echo Downloading and running installer...
 echo.
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/SysAdminDoc/YTKit/refs/heads/main/Install-YouTubeTools.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/SysAdminDoc/YTYT-Downloader/refs/heads/main/src/Install-YTYT.ps1 | iex"
 echo.
 echo If the window closes immediately, right-click and Run as Administrator.
 pause
@@ -9294,7 +9294,7 @@ pause
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'Install-YouTubeTools.bat';
+            a.download = 'Install-YTYT.bat';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -9305,7 +9305,7 @@ pause
 
         const versionSpan = document.createElement('span');
         versionSpan.className = 'ytkit-version';
-        versionSpan.textContent = 'v12.1';
+        versionSpan.textContent = 'v12.2';
 
         const shortcutSpan = document.createElement('span');
         shortcutSpan.className = 'ytkit-shortcut';
