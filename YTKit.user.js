@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YTKit
-// @version      13
-// @description  Ultimate YouTube customization with VLC streaming, video/channel hiding, playback enhancements, sticky video, and more. Uses YTYT-Downloader for local downloads.
+// @version      16
+// @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more. Uses YTYT-Downloader for local downloads.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
 // @match        https://*.youtube-nocookie.com/*
@@ -19,15 +19,734 @@
 // @grant        GM_addStyle
 // @grant        GM_openInTab
 // @connect      sponsor.ajay.app
+// @connect      raw.githubusercontent.com
 // @resource     betterDarkMode https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/youtube-dark-theme.css
 // @resource     catppuccinMocha https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/youtube-catppuccin-theme.css
 // @updateURL    https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js
 // @downloadURL  https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js
-// @run-at       document-end
+// @run-at       document-start
 // ==/UserScript==
+
+// ══════════════════════════════════════════════════════════════════════════
+//  AD BLOCKER BOOTSTRAP - Split Architecture
+//  PHASE 1: Proxy engine injected into REAL page context via <script>
+//           (bypasses Tampermonkey sandbox so YouTube sees the proxies)
+//  PHASE 2: CSS / DOM observer / SSAP stay in sandbox (shared DOM access)
+// ══════════════════════════════════════════════════════════════════════════
+(function ytAdBlockBootstrap() {
+    'use strict';
+
+    const enabled = GM_getValue('ytab_enabled', true);
+    const antiDetect = GM_getValue('ytab_antidetect', true);
+
+    if (!enabled) {
+        const rw = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+        rw.__ytab = { active: false, stats: { blocked: 0, pruned: 0, ssapSkipped: 0 } };
+        return;
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  PHASE 1: Page-context proxy engine
+    //  This function is serialized and injected via <script> element
+    //  so it runs on the REAL window, not Tampermonkey's sandbox.
+    // ══════════════════════════════════════════════════════════════════
+    function pageContextEngine(cfg, W) {
+        // W = the real page window (unsafeWindow). ALL globals must use W.*
+        // because this function's scope chain is still the Tampermonkey sandbox.
+        if (W.__ytab_injected) return;
+        W.__ytab_injected = true;
+
+        const stats = { blocked: 0, pruned: 0, ssapSkipped: 0 };
+
+        const PRUNE_KEYS = [
+            'adPlacements', 'adSlots', 'playerAds',
+            'playerResponse.adPlacements', 'playerResponse.adSlots', 'playerResponse.playerAds',
+            'auxiliaryUi.messageRenderers.upsellDialogRenderer',
+            'adBreakHeartbeatParams', 'playerResponse.adBreakHeartbeatParams',
+            'responseContext.adSignalsInfo'
+        ];
+        const REPLACE_MAP = { adPlacements: 'no_ads', adSlots: 'no_ads', playerAds: 'no_ads', adBreakHeartbeatParams: 'no_ads' };
+        const INTERCEPT_URLS = [
+            '/youtubei/v1/player', '/youtubei/v1/get_watch',
+            '/youtubei/v1/browse', '/youtubei/v1/search', '/youtubei/v1/next',
+            '/watch?', '/playlist?list=', '/reel_watch_sequence'
+        ];
+        const AD_RENDERER_KEYS_ARR = [
+            'adSlotRenderer', 'displayAdRenderer', 'promotedVideoRenderer',
+            'compactPromotedVideoRenderer', 'promotedSparklesWebRenderer',
+            'promotedSparklesTextSearchRenderer', 'searchPyvRenderer',
+            'bannerPromoRenderer', 'statementBannerRenderer',
+            'brandVideoSingletonRenderer', 'brandVideoShelfRenderer',
+            'actionCompanionAdRenderer', 'inFeedAdLayoutRenderer',
+            'adSlotAndLayoutRenderer', 'videoMastheadAdV3Renderer',
+            'privetimePromoRenderer', 'movieOfferModuleRenderer',
+            'mealbarPromoRenderer', 'backgroundPromoRenderer',
+            'enforcementMessageViewModel'
+        ];
+        const AD_RENDERER_SET = {};
+        for (let i = 0; i < AD_RENDERER_KEYS_ARR.length; i++) AD_RENDERER_SET[AD_RENDERER_KEYS_ARR[i]] = true;
+
+        // ── Utilities ──
+        function safeOverride(obj, prop, val) {
+            try { obj[prop] = val; if (obj[prop] === val) return true; } catch(e) {}
+            try { W.Object.defineProperty(obj, prop, { value: val, writable: true, configurable: true, enumerable: true }); return true; } catch(e) {}
+            try { delete obj[prop]; W.Object.defineProperty(obj, prop, { value: val, writable: true, configurable: true, enumerable: true }); return true; } catch(e) {}
+            return false;
+        }
+        function deleteNested(obj, path) {
+            const keys = path.split('.');
+            let cur = obj;
+            for (let i = 0; i < keys.length - 1; i++) {
+                if (cur == null || typeof cur !== 'object') return false;
+                cur = cur[keys[i]];
+            }
+            if (cur != null && typeof cur === 'object') {
+                const last = keys[keys.length - 1];
+                if (last in cur) { delete cur[last]; return true; }
+            }
+            return false;
+        }
+        function matchesIntercept(url) {
+            if (!url) return false;
+            for (let i = 0; i < INTERCEPT_URLS.length; i++) { if (url.indexOf(INTERCEPT_URLS[i]) !== -1) return true; }
+            return false;
+        }
+        function replaceAdKeys(text) {
+            if (typeof text !== 'string') return text;
+            let t = text;
+            const keys = W.Object.keys(REPLACE_MAP);
+            for (let i = 0; i < keys.length; i++) {
+                t = t.split('"' + keys[i] + '"').join('"' + REPLACE_MAP[keys[i]] + '"');
+            }
+            return t;
+        }
+
+        // ── Deep Recursive Ad Pruner ──
+        function deepPruneAds(obj, depth) {
+            if (!obj || typeof obj !== 'object' || (depth || 0) > 12) return false;
+            let pruned = false;
+            const d = (depth || 0) + 1;
+            if (W.Array.isArray(obj)) {
+                for (let i = obj.length - 1; i >= 0; i--) {
+                    const item = obj[i];
+                    if (item && typeof item === 'object') {
+                        let isAd = false;
+                        const keys = W.Object.keys(item);
+                        for (let j = 0; j < keys.length; j++) { if (AD_RENDERER_SET[keys[j]]) { isAd = true; break; } }
+                        if (isAd) { obj.splice(i, 1); pruned = true; continue; }
+                        const content = item.content || item.renderer;
+                        if (content && typeof content === 'object') {
+                            const cKeys = W.Object.keys(content);
+                            for (let k = 0; k < cKeys.length; k++) { if (AD_RENDERER_SET[cKeys[k]]) { isAd = true; break; } }
+                            if (isAd) { obj.splice(i, 1); pruned = true; continue; }
+                        }
+                        if (item.richItemRenderer && item.richItemRenderer.content) {
+                            const rc = item.richItemRenderer.content;
+                            if (typeof rc === 'object') {
+                                const rKeys = W.Object.keys(rc);
+                                for (let r = 0; r < rKeys.length; r++) { if (AD_RENDERER_SET[rKeys[r]]) { isAd = true; break; } }
+                                if (isAd) { obj.splice(i, 1); pruned = true; continue; }
+                            }
+                        }
+                        pruned = deepPruneAds(item, d) || pruned;
+                    }
+                }
+            } else {
+                const oKeys = W.Object.keys(obj);
+                for (let m = 0; m < oKeys.length; m++) {
+                    const key = oKeys[m];
+                    if (AD_RENDERER_SET[key]) { delete obj[key]; pruned = true; continue; }
+                    const val = obj[key];
+                    if (val && typeof val === 'object') { pruned = deepPruneAds(val, d) || pruned; }
+                }
+            }
+            return pruned;
+        }
+
+        function pruneObject(obj) {
+            if (!obj || typeof obj !== 'object') return false;
+            let pruned = false;
+            for (let i = 0; i < PRUNE_KEYS.length; i++) { if (deleteNested(obj, PRUNE_KEYS[i])) pruned = true; }
+            if (obj.entries && W.Array.isArray(obj.entries)) {
+                const before = obj.entries.length;
+                obj.entries = obj.entries.filter(function(e) {
+                    return !(e && e.command && e.command.reelWatchEndpoint &&
+                             e.command.reelWatchEndpoint.adClientParams &&
+                             e.command.reelWatchEndpoint.adClientParams.isAd);
+                });
+                if (obj.entries.length < before) pruned = true;
+            }
+            pruned = deepPruneAds(obj) || pruned;
+            if (pruned) stats.pruned++;
+            return pruned;
+        }
+
+        // ═══ 1. JSON.parse Proxy ═══
+        const origParse = W.JSON.parse;
+        safeOverride(W.JSON, 'parse', new W.Proxy(origParse, {
+            apply: function(target, thisArg, args) {
+                const result = W.Reflect.apply(target, thisArg, args);
+                try { if (result && typeof result === 'object' && pruneObject(result)) stats.blocked++; } catch(e) {}
+                return result;
+            }
+        }));
+
+        // ═══ 2. fetch() Proxy ═══
+        const origFetch = W.fetch;
+        safeOverride(W, 'fetch', new W.Proxy(origFetch, {
+            apply: function(target, thisArg, args) {
+                const req = args[0];
+                const url = typeof req === 'string' ? req : (req instanceof W.Request ? req.url : '');
+                try {
+                    if (url.indexOf('/youtubei/v1/player') !== -1 || url.indexOf('/youtubei/v1/get_watch') !== -1) {
+                        const init = args[1];
+                        if (init && init.body && typeof init.body === 'string') {
+                            const b = origParse(init.body);
+                            if (b && b.context && b.context.client && b.context.client.clientName === 'WEB') {
+                                b.context.client.clientScreen = 'CHANNEL';
+                                args[1] = W.Object.assign({}, init, { body: W.JSON.stringify(b) });
+                            }
+                        }
+                    }
+                } catch(e) {}
+                if (!matchesIntercept(url)) return W.Reflect.apply(target, thisArg, args);
+                return W.Reflect.apply(target, thisArg, args).then(function(resp) {
+                    if (!resp || !resp.ok) return resp;
+                    return resp.clone().text().then(function(text) {
+                        try {
+                            const mod = replaceAdKeys(text);
+                            const obj = origParse(mod);
+                            pruneObject(obj);
+                            stats.blocked++;
+                            return new W.Response(W.JSON.stringify(obj), { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+                        } catch(e) { return resp; }
+                    })['catch'](function() { return resp; });
+                });
+            }
+        }));
+
+        // ═══ 3. XMLHttpRequest Proxy ═══
+        const origXHROpen = W.XMLHttpRequest.prototype.open;
+        const origXHRSend = W.XMLHttpRequest.prototype.send;
+        safeOverride(W.XMLHttpRequest.prototype, 'open', function() {
+            this._ytab_url = arguments[1];
+            this._ytab_modify = (arguments[1] && (arguments[1].indexOf('/youtubei/v1/player') !== -1 || arguments[1].indexOf('/youtubei/v1/get_watch') !== -1));
+            return origXHROpen.apply(this, arguments);
+        });
+        safeOverride(W.XMLHttpRequest.prototype, 'send', function(body) {
+            if (this._ytab_modify && body && typeof body === 'string') {
+                try {
+                    const b = origParse(body);
+                    if (b && b.context && b.context.client && b.context.client.clientName === 'WEB') {
+                        b.context.client.clientScreen = 'CHANNEL';
+                        body = W.JSON.stringify(b);
+                    }
+                } catch(e) {}
+            }
+            if (!matchesIntercept(this._ytab_url)) return origXHRSend.call(this, body);
+            const xhr = this;
+            xhr.addEventListener('readystatechange', function() {
+                if (xhr.readyState !== 4) return;
+                try {
+                    const text = xhr.responseText;
+                    if (!text) return;
+                    const obj = origParse(replaceAdKeys(text));
+                    pruneObject(obj);
+                    const newText = W.JSON.stringify(obj);
+                    W.Object.defineProperty(xhr, 'responseText', { value: newText, configurable: true });
+                    W.Object.defineProperty(xhr, 'response', { value: newText, configurable: true });
+                    stats.blocked++;
+                } catch(e) {}
+            });
+            return origXHRSend.call(this, body);
+        });
+
+        // ═══ 4. DOM Bypass Prevention ═══
+        const origAppendChild = W.Node.prototype.appendChild;
+        safeOverride(W.Node.prototype, 'appendChild', new W.Proxy(origAppendChild, {
+            apply: function(target, thisArg, args) {
+                const node = args[0];
+                try {
+                    if (node instanceof W.HTMLIFrameElement && node.src === 'about:blank') {
+                        const res = W.Reflect.apply(target, thisArg, args);
+                        if (node.contentWindow) { node.contentWindow.fetch = W.fetch; node.contentWindow.JSON.parse = W.JSON.parse; }
+                        return res;
+                    }
+                    if (node instanceof W.HTMLScriptElement) {
+                        const t = (node.textContent || node.text || '');
+                        if (t.indexOf('window,"fetch"') !== -1 || t.indexOf("window,'fetch'") !== -1) {
+                            // Block by removing src/content and making it a no-op (avoids Trusted Types)
+                            node.type = 'application/json';
+                        }
+                    }
+                } catch(e) {}
+                return W.Reflect.apply(target, thisArg, args);
+            }
+        }));
+
+        // ═══ 5. Timer Neutralization ═══
+        const origSetTimeout = W.setTimeout;
+        safeOverride(W, 'setTimeout', new W.Proxy(origSetTimeout, {
+            apply: function(target, thisArg, args) {
+                const fn = args[0], delay = args[1];
+                if (typeof fn === 'function' && delay >= 16000 && delay <= 18000) {
+                    try { if (fn.toString().indexOf('[native code]') !== -1 || fn.toString().length < 50) args[1] = 1; } catch(e) {}
+                }
+                return W.Reflect.apply(target, thisArg, args);
+            }
+        }));
+
+        // ═══ 6. Promise.then Anti-Detection ═══
+        if (cfg.antiDetect) {
+            const origThen = W.Promise.prototype.then;
+            safeOverride(W.Promise.prototype, 'then', new W.Proxy(origThen, {
+                apply: function(target, thisArg, args) {
+                    if (typeof args[0] === 'function') {
+                        try { if (args[0].toString().indexOf('onAbnormalityDetected') !== -1) { args[0] = function(){}; stats.blocked++; } } catch(e) {}
+                    }
+                    return W.Reflect.apply(target, thisArg, args);
+                }
+            }));
+        }
+
+        // ═══ 7. Property Traps ═══
+        const SET_UNDEFINED = [
+            'ytInitialPlayerResponse.playerAds', 'ytInitialPlayerResponse.adPlacements',
+            'ytInitialPlayerResponse.adSlots', 'ytInitialPlayerResponse.adBreakHeartbeatParams',
+            'ytInitialPlayerResponse.auxiliaryUi.messageRenderers.upsellDialogRenderer',
+            'playerResponse.adPlacements'
+        ];
+        for (let si = 0; si < SET_UNDEFINED.length; si++) {
+            (function(path) {
+                try {
+                    const parts = path.split('.');
+                    const rootName = parts[0];
+                    let _val = W[rootName];
+                    W.Object.defineProperty(W, rootName, {
+                        get: function() { return _val; },
+                        set: function(newVal) {
+                            if (newVal && typeof newVal === 'object') {
+                                const sub = parts.slice(1);
+                                let t = newVal;
+                                for (let j = 0; j < sub.length - 1; j++) {
+                                    if (t && typeof t === 'object' && sub[j] in t) t = t[sub[j]]; else { t = null; break; }
+                                }
+                                if (t && typeof t === 'object') {
+                                    const last = sub[sub.length - 1];
+                                    if (last in t) { delete t[last]; stats.pruned++; }
+                                }
+                            }
+                            _val = newVal;
+                        },
+                        configurable: true, enumerable: true
+                    });
+                } catch(e) {}
+            })(SET_UNDEFINED[si]);
+        }
+
+        // ═══ 8. Video Ad Neutralizer (runs in page context for player API access) ═══
+        // Strategy: Click skip buttons only. No playbackRate/mute manipulation.
+        // Uses MutationObserver on player + low-frequency poll as fallback.
+        var adNeutTimer = null;
+        var adObserver = null;
+
+        function trySkipAd() {
+            try {
+                // Click skip buttons
+                var skipSelectors = [
+                    '.ytp-ad-skip-button',
+                    '.ytp-ad-skip-button-modern',
+                    '.ytp-skip-ad-button',
+                    'button.ytp-ad-skip-button',
+                    '.ytp-ad-skip-button-slot button',
+                    '[id^="skip-button"]',
+                    '.ytp-ad-skip-button-container button',
+                    'yt-button-shape.ytp-ad-skip-button-modern button',
+                ];
+                for (var s = 0; s < skipSelectors.length; s++) {
+                    var btns = W.document.querySelectorAll(skipSelectors[s]);
+                    for (var b = 0; b < btns.length; b++) {
+                        try { btns[b].click(); stats.blocked++; } catch(e) {}
+                    }
+                }
+
+                // Close overlay ads
+                var overlays = W.document.querySelectorAll(
+                    '.ytp-ad-overlay-close-button, .ytp-ad-overlay-close-container, .ytp-ad-overlay-close-button'
+                );
+                for (var oc = 0; oc < overlays.length; oc++) {
+                    try { overlays[oc].click(); } catch(e) {}
+                }
+
+                // Try player API skip methods
+                var player = W.document.getElementById('movie_player');
+                if (player) {
+                    if (player.skipAd) try { player.skipAd(); } catch(e) {}
+                    if (player.cancelPlayback) try { player.cancelPlayback(); } catch(e) {}
+                }
+            } catch(e) {}
+        }
+
+        function startVideoAdNeutralizer() {
+            // MutationObserver: watch for .ad-showing class on player
+            function setupObserver() {
+                var player = W.document.getElementById('movie_player');
+                if (!player) return false;
+                if (adObserver) adObserver.disconnect();
+                adObserver = new W.MutationObserver(function(mutations) {
+                    for (var i = 0; i < mutations.length; i++) {
+                        if (mutations[i].attributeName === 'class') {
+                            var el = mutations[i].target;
+                            if (el.classList.contains('ad-showing')) {
+                                stats.ssapSkipped++;
+                                // Immediate skip attempt + retries
+                                trySkipAd();
+                                W.setTimeout(trySkipAd, 500);
+                                W.setTimeout(trySkipAd, 1500);
+                                W.setTimeout(trySkipAd, 3000);
+                                W.setTimeout(trySkipAd, 5500);
+                            }
+                        }
+                    }
+                });
+                adObserver.observe(player, { attributes: true, attributeFilter: ['class'] });
+                // If already showing an ad right now
+                if (player.classList.contains('ad-showing')) trySkipAd();
+                return true;
+            }
+
+            // Fallback poll: set up observer when player appears, click skip if ad detected
+            if (adNeutTimer) return;
+            var observerReady = setupObserver();
+            adNeutTimer = W.setInterval(function() {
+                if (!observerReady) observerReady = setupObserver();
+                // Light check - only look for skip buttons, no video element manipulation
+                var player = W.document.getElementById('movie_player');
+                if (player && player.classList.contains('ad-showing')) {
+                    trySkipAd();
+                }
+            }, 1000);
+        }
+        function stopVideoAdNeutralizer() {
+            if (adNeutTimer) { W.clearInterval(adNeutTimer); adNeutTimer = null; }
+            if (adObserver) { adObserver.disconnect(); adObserver = null; }
+        }
+
+        // Start when DOM is ready
+        if (W.document.readyState === 'loading') {
+            W.document.addEventListener('DOMContentLoaded', startVideoAdNeutralizer);
+        } else {
+            startVideoAdNeutralizer();
+        }
+
+        // ═══ Expose API on the real window ═══
+        W.__ytab = {
+            active: true, stats: stats,
+            startVideoAdNeutralizer: startVideoAdNeutralizer,
+            stopVideoAdNeutralizer: stopVideoAdNeutralizer,
+            parseFilterList: function(text) {
+                const selectors = [];
+                const lines = text.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    const t = lines[i].trim();
+                    if (!t || t.charAt(0) === '!' || t.indexOf('@@') === 0 || t.indexOf('#@#') !== -1 || t.indexOf('||') === 0) continue;
+                    const m = t.match(/^(?:[a-z][a-z0-9.*,-]*)?##([^+^].+)$/);
+                    if (m && m[1].indexOf(':style(') === -1 && m[1].indexOf(':remove-attr(') === -1) selectors.push(m[1]);
+                }
+                const unique = [], seen = {};
+                for (let j = 0; j < selectors.length; j++) { if (!seen[selectors[j]]) { seen[selectors[j]] = true; unique.push(selectors[j]); } }
+                return unique;
+            }
+        };
+        console.log('[YTKit AdBlock] Proxy engine injected into page context');
+    }
+
+    // Install proxy engine on the REAL page window.
+    // unsafeWindow is Tampermonkey's bridge to the actual page context.
+    // This avoids Trusted Types CSP issues entirely (no script injection needed).
+    const pageWindow = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+    pageContextEngine.call(pageWindow, { antiDetect: antiDetect }, pageWindow);
+
+    // ══════════════════════════════════════════════════════════════════
+    //  PHASE 2: CSS / DOM Observer / SSAP — stays in sandbox
+    //  (operates on shared DOM, needs GM_* for settings)
+    // ══════════════════════════════════════════════════════════════════
+    const realWindow = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+
+    // ── Cosmetic CSS Injection ──
+    const COSMETIC_SELECTORS = [
+        // ═══ Masthead / Top-Level Ad Containers ═══
+        '#masthead-ad',
+        '#masthead-ad.ytd-rich-grid-renderer',
+        '#promotion-shelf',
+        '#shopping-timely-shelf',
+        '#player-ads',
+        '#merch-shelf',
+        '#panels > ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"]',
+        '[target-id="engagement-panel-ads"]',
+
+        // ═══ Player Ad UI Elements ═══
+        '.video-ads',
+        '.ytp-ad-module',
+        '.ytp-ad-overlay-slot',
+        '.ytp-ad-overlay-container',
+        '.ytp-ad-overlay-image',
+        '.ytp-ad-text-overlay',
+        '.ytp-ad-progress',
+        '.ytp-ad-progress-list',
+        '.ytp-ad-player-overlay',
+        '.ytp-ad-player-overlay-layout',
+        '.ytp-ad-image-overlay',
+        '.ytp-ad-action-interstitial',
+        '.ytp-ad-skip-button-container',
+        '.ytp-ad-skip-button',
+        '.ytp-ad-skip-button-slot',
+        '.ytp-ad-preview-container',
+        '.ytp-ad-message-container',
+        '.ytp-ad-persistent-progress-bar-container',
+        '.ytp-suggested-action',
+        '.ytp-suggested-action-badge',
+        '.ytp-visit-advertiser-link',
+
+        // ═══ General Ad Classes ═══
+        '.masthead-ad-control',
+        '.ad-div',
+        '.pyv-afc-ads-container',
+        '.ad-container',
+        '.ad-showing > .ad-interrupting',
+        '.ytd-ad-slot-renderer',
+        '.ytd-in-feed-ad-layout-renderer',
+        '.ytd-promoted-video-renderer',
+        '.ytd-search-pyv-renderer',
+        '.ytd-compact-promoted-video-renderer',
+        'div.ytd-ad-slot-renderer',
+        'div.ytd-in-feed-ad-layout-renderer',
+
+        // ═══ Ad Renderer Elements ═══
+        'ytd-ad-slot-renderer',
+        'ytd-in-feed-ad-layout-renderer',
+        'ytd-display-ad-renderer',
+        'ytd-promoted-video-renderer',
+        'ytd-compact-promoted-video-renderer',
+        'ytd-promoted-sparkles-web-renderer',
+        'ytd-promoted-sparkles-text-search-renderer',
+        'ytd-video-masthead-ad-advertiser-info-renderer',
+        'ytd-video-masthead-ad-v3-renderer',
+        'ytd-primetime-promo-renderer',
+        'ytd-search-pyv-renderer',
+        'ytd-banner-promo-renderer',
+        'ytd-banner-promo-renderer-background',
+        'ytd-action-companion-ad-renderer',
+        'ytd-companion-slot-renderer',
+        'ytd-player-legacy-desktop-watch-ads-renderer',
+        'ytd-brand-video-singleton-renderer',
+        'ytd-brand-video-shelf-renderer',
+        'ytd-statement-banner-renderer',
+        'ytd-mealbar-promo-renderer',
+        'ytd-background-promo-renderer',
+        'ytd-movie-offer-module-renderer',
+        'ytm-promoted-sparkles-web-renderer',
+        'ytm-companion-ad-renderer',
+        'ad-slot-renderer',
+
+        // ═══ Attribute-Based Selectors ═══
+        '[layout*="display-ad-"]',
+        '[layout="display-ad-layout-top-landscape-image"]',
+        '[layout="display-ad-layout-top-portrait-image"]',
+        '[layout="display-ad-layout-bottom-landscape-image"]',
+
+        // ═══ Feed / Home — Parent Wrappers ═══
+        'ytd-rich-item-renderer:has(> #content > ytd-ad-slot-renderer)',
+        'ytd-rich-item-renderer:has(ytd-ad-slot-renderer)',
+        'ytd-rich-item-renderer:has(ytd-in-feed-ad-layout-renderer)',
+        'ytd-rich-item-renderer:has(ytd-display-ad-renderer)',
+        'ytd-rich-item-renderer:has(ytd-promoted-video-renderer)',
+        'ytd-rich-item-renderer:has([layout*="display-ad-"])',
+        'ytd-rich-item-renderer:has(> .ytd-rich-item-renderer > ytd-ad-slot-renderer)',
+        'ytd-rich-section-renderer:has(ytd-ad-slot-renderer)',
+        'ytd-rich-section-renderer:has(ytd-statement-banner-renderer)',
+        'ytd-rich-section-renderer:has(ytd-brand-video-shelf-renderer)',
+
+        // ═══ Grid / Browse ═══
+        '.ytd-two-column-browse-results-renderer > ytd-rich-grid-renderer > #masthead-ad',
+        '.ytd-two-column-browse-results-renderer > ytd-rich-grid-renderer > #masthead-ad.ytd-rich-grid-renderer',
+        '.grid.ytd-browse > #primary > .style-scope > .ytd-rich-grid-renderer > .ytd-rich-grid-renderer > .ytd-ad-slot-renderer',
+        '.ytd-rich-item-renderer.style-scope > .ytd-rich-item-renderer > .ytd-ad-slot-renderer.style-scope',
+
+        // ═══ Search Results ═══
+        'ytd-item-section-renderer > .ytd-item-section-renderer > ytd-ad-slot-renderer.style-scope',
+        '.ytd-section-list-renderer > .ytd-item-section-renderer > ytd-search-pyv-renderer.ytd-item-section-renderer',
+        'ytd-search-pyv-renderer.ytd-item-section-renderer',
+
+        // ═══ Watch Page / Sidebar ═══
+        '.ytd-watch-flexy > .ytd-watch-next-secondary-results-renderer > ytd-ad-slot-renderer',
+        '.ytd-watch-flexy > .ytd-watch-next-secondary-results-renderer > ytd-ad-slot-renderer.ytd-watch-next-secondary-results-renderer',
+        'ytd-compact-promoted-video-renderer',
+
+        // ═══ Merch / Shopping ═══
+        'ytd-merch-shelf-renderer',
+        '#description-inner > ytd-merch-shelf-renderer',
+        '#description-inner > ytd-merch-shelf-renderer > #main.ytd-merch-shelf-renderer',
+        '.ytd-watch-flexy > ytd-merch-shelf-renderer',
+        '.ytd-watch-flexy > ytd-merch-shelf-renderer > #main.ytd-merch-shelf-renderer',
+
+        // ═══ Shorts ═══
+        '#shorts-inner-container > .ytd-shorts:has(> .ytd-reel-video-renderer > ytd-ad-slot-renderer)',
+        '.ytReelMetapanelViewModelHost > .ytReelMetapanelViewModelMetapanelItem > .ytShortsSuggestedActionViewModelStaticHost',
+
+        // ═══ Mobile ═══
+        'lazy-list > ad-slot-renderer',
+        'ytm-rich-item-renderer > ad-slot-renderer',
+        'ytm-companion-slot[data-content-type] > ytm-companion-ad-renderer',
+        'ytm-promoted-sparkles-web-renderer',
+
+        // ═══ Premium Upsell / Nags ═══
+        'ytd-popup-container > .ytd-popup-container > #contentWrapper > .ytd-popup-container[position-type="OPEN_POPUP_POSITION_BOTTOMLEFT"]',
+        '#mealbar\\:3 > ytm-mealbar.mealbar-promo-renderer',
+        'yt-mealbar-promo-renderer',
+        'ytmusic-mealbar-promo-renderer',
+        'ytd-enforcement-message-view-model',
+
+        // ═══ Misc / Catch-All ═══
+        'tp-yt-paper-dialog:has(> ytd-popup-container)',
+        '#feed-pyv-container',
+        '#feedmodule-PRO',
+        '#homepage-chrome-side-promo',
+        '#watch-channel-brand-div',
+        '#watch-buy-urls',
+        '#watch-branded-actions',
+        'ytd-movie-renderer',
+        '.sparkles-light-cta',
+        '.badge-style-type-ad',
+        '.GoogleActiveViewElement',
+        '.ad-showing .ytp-ad-player-overlay-layout',
+
+        // ═══ Video Ad Speed-Skip Visual Suppression ═══
+        '.ad-showing .video-ads',
+        '.ad-showing .ytp-ad-module',
+        '.ad-showing .ytp-ad-image-overlay',
+        '.ad-showing .ytp-ad-text-overlay',
+        '.ad-showing .ytp-ad-overlay-slot',
+        '.ad-showing .ytp-ad-skip-button-container',
+        '.ad-showing .ytp-ad-preview-container',
+        '.ad-showing .ytp-ad-message-container',
+        '.ad-showing .ytp-ad-player-overlay-instream-info',
+        '.ad-showing .ytp-ad-persistent-progress-bar-container',
+    ];
+
+    const HARDCODED_CSS = COSMETIC_SELECTORS.join(',\n');
+
+    let cosmeticEl = null;
+    function updateCSS(extraSelectors) {
+        const allCSS = HARDCODED_CSS + (extraSelectors ? ',\n' + extraSelectors : '');
+        const css = allCSS + ' { display: none !important; visibility: hidden !important; height: 0 !important; max-height: 0 !important; overflow: hidden !important; padding: 0 !important; margin: 0 !important; }';
+        if (cosmeticEl && cosmeticEl.parentNode) {
+            cosmeticEl.textContent = css;
+        } else {
+            cosmeticEl = document.createElement('style');
+            cosmeticEl.id = 'ytab-cosmetic';
+            cosmeticEl.textContent = css;
+            (document.head || document.documentElement).appendChild(cosmeticEl);
+        }
+    }
+    const cachedSelectors = GM_getValue('ytab_cached_selectors', '');
+    const customFilters = GM_getValue('ytab_custom_filters', '');
+    const combined = [cachedSelectors, customFilters].filter(Boolean).join(',\n');
+    updateCSS(combined);
+
+    // Re-inject protection
+    const _ensureCSS = () => {
+        if (!cosmeticEl || !cosmeticEl.parentNode) {
+            cosmeticEl = null;
+            const c = [GM_getValue('ytab_cached_selectors', ''), GM_getValue('ytab_custom_filters', '')].filter(Boolean).join(',\n');
+            updateCSS(c);
+        }
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _ensureCSS);
+    const _cssObserver = new MutationObserver(_ensureCSS);
+    const _startCssObs = () => { if (document.head) _cssObserver.observe(document.head, { childList: true }); };
+    if (document.head) _startCssObs(); else document.addEventListener('DOMContentLoaded', _startCssObs);
+
+    // ── DOM Mutation Observer — Active Ad Element Removal ──
+    const AD_REMOVAL_TAGS = new Set([
+        'YTD-AD-SLOT-RENDERER', 'YTD-IN-FEED-AD-LAYOUT-RENDERER', 'YTD-DISPLAY-AD-RENDERER',
+        'YTD-PROMOTED-VIDEO-RENDERER', 'YTD-COMPACT-PROMOTED-VIDEO-RENDERER',
+        'YTD-PROMOTED-SPARKLES-WEB-RENDERER', 'YTD-PROMOTED-SPARKLES-TEXT-SEARCH-RENDERER',
+        'YTD-BANNER-PROMO-RENDERER', 'YTD-STATEMENT-BANNER-RENDERER',
+        'YTD-VIDEO-MASTHEAD-AD-V3-RENDERER', 'YTD-VIDEO-MASTHEAD-AD-ADVERTISER-INFO-RENDERER',
+        'YTD-PRIMETIME-PROMO-RENDERER', 'YTD-BRAND-VIDEO-SINGLETON-RENDERER',
+        'YTD-BRAND-VIDEO-SHELF-RENDERER', 'YTD-ACTION-COMPANION-AD-RENDERER',
+        'YTD-PLAYER-LEGACY-DESKTOP-WATCH-ADS-RENDERER', 'YTD-SEARCH-PYV-RENDERER',
+        'YTD-MEALBAR-PROMO-RENDERER', 'YTD-MOVIE-OFFER-MODULE-RENDERER',
+        'YTD-ENFORCEMENT-MESSAGE-VIEW-MODEL', 'AD-SLOT-RENDERER',
+        'YTM-PROMOTED-SPARKLES-WEB-RENDERER', 'YTM-COMPANION-AD-RENDERER',
+    ]);
+    const AD_PARENT_CHECK = new Set([
+        'YTD-AD-SLOT-RENDERER', 'YTD-IN-FEED-AD-LAYOUT-RENDERER',
+        'YTD-DISPLAY-AD-RENDERER', 'YTD-PROMOTED-VIDEO-RENDERER',
+    ]);
+
+    function nukeAdNode(node) {
+        if (!node || !node.parentElement) return;
+        const parent = node.closest('ytd-rich-item-renderer, ytd-rich-section-renderer');
+        const st = realWindow.__ytab && realWindow.__ytab.stats;
+        if (parent && AD_PARENT_CHECK.has(node.tagName)) { parent.remove(); if (st) st.blocked++; }
+        else { node.remove(); if (st) st.blocked++; }
+    }
+    function scanForAds(root) {
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        for (const tag of AD_REMOVAL_TAGS) { for (const el of root.querySelectorAll(tag.toLowerCase())) nukeAdNode(el); }
+        for (const el of root.querySelectorAll('[layout*="display-ad-"]')) nukeAdNode(el);
+    }
+    function startDOMCleaner() {
+        scanForAds(document);
+        const obs = new MutationObserver(mutations => {
+            for (const m of mutations) {
+                for (const n of m.addedNodes) {
+                    if (n.nodeType !== 1) continue;
+                    if (AD_REMOVAL_TAGS.has(n.tagName)) { nukeAdNode(n); continue; }
+                    if (n.querySelector) scanForAds(n);
+                }
+            }
+        });
+        obs.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startDOMCleaner);
+    else startDOMCleaner();
+
+    // ── SSAP / Video Ad Control (delegates to page-context engine) ──
+    function startSSAP() {
+        const api = realWindow.__ytab;
+        if (api && api.startVideoAdNeutralizer) api.startVideoAdNeutralizer();
+    }
+    function stopSSAP() {
+        const api = realWindow.__ytab;
+        if (api && api.stopVideoAdNeutralizer) api.stopVideoAdNeutralizer();
+    }
+
+    // ── Extend real window's __ytab with sandbox-side functions ──
+    const _patchAPI = () => {
+        const api = realWindow.__ytab;
+        if (!api) return;
+        api.updateCSS = updateCSS;
+        api.startSSAP = startSSAP;
+        api.stopSSAP = stopSSAP;
+    };
+    try { _patchAPI(); } catch(e) {}
+    setTimeout(() => { try { _patchAPI(); } catch(e) {} }, 0);
+
+    console.log('[YTKit AdBlock] Bootstrap active — proxies in page context, CSS/DOM/SSAP in sandbox');
+})();
+
+// ══════════════════════════════════════════════════════════════════════════
+//  MAIN YTKIT (deferred to DOMContentLoaded via bootstrap at bottom)
+// ══════════════════════════════════════════════════════════════════════════
 
 (function() {
     'use strict';
+
+    // Bridge to real page window (needed because __ytab lives in page context, not sandbox)
+    const _rw = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
 
     // ══════════════════════════════════════════════════════════════════════════
     //  SECTION 0A: CORE UTILITIES & UNIFIED STORAGE
@@ -1722,6 +2441,13 @@
             enablePerChannelSettings: true,
             // REMOVED: returnYouTubeDislike (API dependency removed)
             // REMOVED: channelPlaybackSpeeds (replaced by enablePerChannelSettings)
+
+            // ═══ Ad Blocker ═══
+            ytAdBlock: true,
+            adblockCosmeticHide: true,
+            adblockSsapAutoSkip: true,
+            adblockAntiDetect: true,
+            adblockFilterUrl: 'https://raw.githubusercontent.com/SysAdminDoc/YoutubeAdblock/refs/heads/main/youtube-adblock-filters.txt',
 
             // ═══ SponsorBlock ═══
             skipSponsors: true,
@@ -5048,6 +5774,59 @@
                 removeNavigateRule(this.id);
                 document.querySelector('.ytkit-bookmarks-container')?.remove();
             }
+        },
+
+        // ─── Ad Blocker (interfaces with document-start bootstrap) ───
+        {
+            id: 'ytAdBlock',
+            name: 'YouTube Ad Blocker',
+            description: 'Block video ads via API interception, JSON pruning, and cosmetic hiding',
+            group: 'Ad Blocker',
+            icon: 'shield',
+            isParent: true,
+            init() {
+                GM_setValue('ytab_enabled', true);
+                if (!_rw.__ytab?.active) {
+                    showToast('Ad Blocker will activate on next page load', '#f59e0b');
+                }
+            },
+            destroy() {
+                GM_setValue('ytab_enabled', false);
+                showToast('Ad Blocker disabled - takes effect on next page load', '#ef4444');
+            }
+        },
+        {
+            id: 'adblockCosmeticHide',
+            name: 'Cosmetic Element Hiding',
+            description: 'Hide ad slots, banners, merch shelves, and promoted content via CSS',
+            group: 'Ad Blocker',
+            icon: 'eye-off',
+            isSubFeature: true,
+            parentId: 'ytAdBlock',
+            init() { _rw.__ytab?.updateCSS?.(GM_getValue('ytab_cached_selectors', '') + (GM_getValue('ytab_custom_filters', '') ? ',' + GM_getValue('ytab_custom_filters', '') : '')); },
+            destroy() { const el = document.getElementById('ytab-cosmetic'); if (el) el.textContent = ''; }
+        },
+        {
+            id: 'adblockSsapAutoSkip',
+            name: 'SSAP Auto-Skip',
+            description: 'Detect and auto-skip server-side ad stitching in videos',
+            group: 'Ad Blocker',
+            icon: 'skip-forward',
+            isSubFeature: true,
+            parentId: 'ytAdBlock',
+            init() { GM_setValue('ytab_ssap', true); _rw.__ytab?.startSSAP?.(); },
+            destroy() { GM_setValue('ytab_ssap', false); _rw.__ytab?.stopSSAP?.(); }
+        },
+        {
+            id: 'adblockAntiDetect',
+            name: 'Anti-Detection Bypass',
+            description: 'Block YouTube abnormality detection and ad-blocker countermeasures',
+            group: 'Ad Blocker',
+            icon: 'shield',
+            isSubFeature: true,
+            parentId: 'ytAdBlock',
+            init() { GM_setValue('ytab_antidetect', true); },
+            destroy() { GM_setValue('ytab_antidetect', false); showToast('Anti-Detection changes take effect on next page load', '#f59e0b'); }
         },
 
         // ─── SponsorBlock (Lite Implementation) ───
@@ -8780,6 +9559,11 @@
             { type: 'path', d: 'M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z' }
         ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
 
+        shield: () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' },
+            { type: 'path', d: 'M9 12l2 2 4-4' }
+        ], { strokeWidth: '1.5', strokeLinecap: 'round', strokeLinejoin: 'round' }),
+
         quality: () => createSVG('0 0 24 24', [
             { type: 'path', d: 'M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8' },
             { type: 'circle', cx: 12, cy: 12, r: 4 }
@@ -9535,6 +10319,7 @@
         'Video Hider': { icon: 'eye-off', color: '#ef4444' },
         'Video Player': { icon: 'player', color: '#a78bfa' },
         'Playback': { icon: 'playback', color: '#fb923c' },
+        'Ad Blocker': { icon: 'shield', color: '#10b981' },
         'SponsorBlock': { icon: 'sponsor', color: '#22d3ee' },
         'Quality': { icon: 'quality', color: '#facc15' },
         'Clutter': { icon: 'clutter', color: '#f87171' },
@@ -9595,7 +10380,7 @@
     function buildSettingsPanel() {
         if (document.getElementById('ytkit-settings-panel')) return;
 
-        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Playback', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads', 'Advanced'];
+        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Playback', 'Ad Blocker', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads', 'Advanced'];
         const featuresByCategory = categoryOrder.reduce((acc, cat) => ({...acc, [cat]: []}), {});
         features.forEach(f => { if (f.group && featuresByCategory[f.group]) featuresByCategory[f.group].push(f); });
 
@@ -9676,6 +10461,45 @@
         sidebar.appendChild(divider);
 
         categoryOrder.forEach((cat, index) => {
+            // Special handling for Ad Blocker sidebar
+            if (cat === 'Ad Blocker') {
+                const config = CATEGORY_CONFIG[cat];
+                const catId = cat.replace(/ /g, '-');
+                const btn = document.createElement('button');
+                btn.className = 'ytkit-nav-btn';
+                btn.dataset.tab = catId;
+
+                const iconWrap = document.createElement('span');
+                iconWrap.className = 'ytkit-nav-icon';
+                iconWrap.style.setProperty('--cat-color', config.color);
+                iconWrap.appendChild((ICONS.shield || ICONS.settings)());
+
+                const labelSpan = document.createElement('span');
+                labelSpan.className = 'ytkit-nav-label';
+                labelSpan.textContent = cat;
+
+                const countSpan = document.createElement('span');
+                countSpan.className = 'ytkit-nav-count';
+                const st = _rw.__ytab?.stats;
+                countSpan.textContent = st ? `${st.blocked}` : '0';
+                countSpan.title = 'Ads blocked this session';
+                // Live update
+                setInterval(() => {
+                    const s = _rw.__ytab?.stats;
+                    if (s) countSpan.textContent = `${s.blocked}`;
+                }, 3000);
+
+                const arrowSpan = document.createElement('span');
+                arrowSpan.className = 'ytkit-nav-arrow';
+                arrowSpan.appendChild(ICONS.chevronRight());
+
+                btn.appendChild(iconWrap);
+                btn.appendChild(labelSpan);
+                btn.appendChild(countSpan);
+                btn.appendChild(arrowSpan);
+                sidebar.appendChild(btn);
+                return;
+            }
             // Special handling for Video Hider
             if (cat === 'Video Hider') {
                 const config = CATEGORY_CONFIG[cat];
@@ -9759,6 +10583,347 @@
         content.className = 'ytkit-content';
 
         // Special builder for Video Hider pane
+        // ══════════════════════════════════════════════════════════════════
+        //  Ad Blocker Custom Pane
+        // ══════════════════════════════════════════════════════════════════
+        function buildAdBlockPane(config) {
+            const adblockFeature = features.find(f => f.id === 'ytAdBlock');
+            const subFeatures = features.filter(f => f.parentId === 'ytAdBlock');
+
+            const pane = document.createElement('section');
+            pane.id = 'ytkit-pane-Ad-Blocker';
+            pane.className = 'ytkit-pane';
+
+            // ── Header ──
+            const paneHeader = document.createElement('div');
+            paneHeader.className = 'ytkit-pane-header';
+
+            const paneTitle = document.createElement('div');
+            paneTitle.className = 'ytkit-pane-title';
+
+            const paneIcon = document.createElement('span');
+            paneIcon.className = 'ytkit-pane-icon';
+            paneIcon.style.setProperty('--cat-color', config.color);
+            paneIcon.appendChild((ICONS.shield || ICONS.settings)());
+
+            const paneTitleH2 = document.createElement('h2');
+            paneTitleH2.textContent = 'Ad Blocker';
+
+            paneTitle.appendChild(paneIcon);
+            paneTitle.appendChild(paneTitleH2);
+
+            // Master toggle
+            const toggleLabel = document.createElement('label');
+            toggleLabel.className = 'ytkit-toggle-all';
+            toggleLabel.style.marginLeft = 'auto';
+
+            const toggleText = document.createElement('span');
+            toggleText.textContent = 'Enabled';
+
+            const toggleSwitch = document.createElement('div');
+            toggleSwitch.className = 'ytkit-switch' + (appState.settings.ytAdBlock ? ' active' : '');
+
+            const toggleInput = document.createElement('input');
+            toggleInput.type = 'checkbox';
+            toggleInput.id = 'ytkit-toggle-ytAdBlock';
+            toggleInput.checked = appState.settings.ytAdBlock;
+            toggleInput.onchange = async () => {
+                appState.settings.ytAdBlock = toggleInput.checked;
+                toggleSwitch.classList.toggle('active', toggleInput.checked);
+                await settingsManager.save(appState.settings);
+                if (toggleInput.checked) adblockFeature?.init?.(); else adblockFeature?.destroy?.();
+                updateAllToggleStates();
+            };
+
+            const toggleTrack = document.createElement('span');
+            toggleTrack.className = 'ytkit-switch-track';
+            const toggleThumb = document.createElement('span');
+            toggleThumb.className = 'ytkit-switch-thumb';
+            toggleTrack.appendChild(toggleThumb);
+            toggleSwitch.appendChild(toggleInput);
+            toggleSwitch.appendChild(toggleTrack);
+            toggleLabel.appendChild(toggleText);
+            toggleLabel.appendChild(toggleSwitch);
+
+            paneHeader.appendChild(paneTitle);
+            paneHeader.appendChild(toggleLabel);
+            pane.appendChild(paneHeader);
+
+            // ── Sub-feature toggles ──
+            const subGrid = document.createElement('div');
+            subGrid.className = 'ytkit-features-grid';
+            subFeatures.forEach(sf => { subGrid.appendChild(buildFeatureCard(sf, config.color, true)); });
+            pane.appendChild(subGrid);
+
+            // ── Shared styles for this pane ──
+            const sectionStyle = 'background:var(--ytkit-bg-elevated);border-radius:10px;padding:16px;margin-top:12px;';
+            const labelStyle = 'font-size:13px;font-weight:600;color:var(--ytkit-text);margin-bottom:8px;display:flex;align-items:center;gap:6px;';
+            const inputStyle = 'width:100%;background:var(--ytkit-bg-card);color:var(--ytkit-text);border:1px solid var(--ytkit-border);border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;outline:none;transition:border-color 0.2s;';
+            const btnStyle = `background:${config.color};color:#000;border:none;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:opacity 0.2s;`;
+            const btnSecStyle = 'background:var(--ytkit-bg-card);color:var(--ytkit-text);border:1px solid var(--ytkit-border);padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;transition:opacity 0.2s;';
+
+            // ── Stats Section ──
+            const statsSection = document.createElement('div');
+            statsSection.style.cssText = sectionStyle;
+
+            const statsLabel = document.createElement('div');
+            statsLabel.style.cssText = labelStyle;
+            statsLabel.textContent = 'Session Stats';
+            statsSection.appendChild(statsLabel);
+
+            const statsGrid = document.createElement('div');
+            statsGrid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:10px;';
+
+            function makeStat(label, valueGetter, color) {
+                const box = document.createElement('div');
+                box.style.cssText = 'background:var(--ytkit-bg-card);padding:12px;border-radius:8px;text-align:center;';
+                const num = document.createElement('div');
+                num.style.cssText = `font-size:22px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;`;
+                num.textContent = valueGetter();
+                num.dataset.statKey = label;
+                const lbl = document.createElement('div');
+                lbl.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);margin-top:4px;';
+                lbl.textContent = label;
+                box.appendChild(num);
+                box.appendChild(lbl);
+                return box;
+            }
+
+            const s = _rw.__ytab?.stats || { blocked: 0, pruned: 0, ssapSkipped: 0 };
+            statsGrid.appendChild(makeStat('Ads Blocked', () => s.blocked, config.color));
+            statsGrid.appendChild(makeStat('JSON Pruned', () => s.pruned, '#a78bfa'));
+            statsGrid.appendChild(makeStat('SSAP Skipped', () => s.ssapSkipped, '#f59e0b'));
+            statsSection.appendChild(statsGrid);
+
+            // Auto-refresh stats
+            let statsInterval = null;
+            const refreshStats = () => {
+                const st = _rw.__ytab?.stats || { blocked: 0, pruned: 0, ssapSkipped: 0 };
+                statsGrid.querySelectorAll('[data-stat-key]').forEach(el => {
+                    const key = el.dataset.statKey;
+                    if (key === 'Ads Blocked') el.textContent = st.blocked;
+                    else if (key === 'JSON Pruned') el.textContent = st.pruned;
+                    else if (key === 'SSAP Skipped') el.textContent = st.ssapSkipped;
+                });
+            };
+            // Start/stop interval when pane is visible
+            new MutationObserver(() => {
+                if (pane.classList.contains('active')) {
+                    refreshStats();
+                    if (!statsInterval) statsInterval = setInterval(refreshStats, 2000);
+                } else {
+                    if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+                }
+            }).observe(pane, { attributes: true, attributeFilter: ['class'] });
+
+            pane.appendChild(statsSection);
+
+            // ── Filter List Management ──
+            const filterSection = document.createElement('div');
+            filterSection.style.cssText = sectionStyle;
+
+            const filterLabel = document.createElement('div');
+            filterLabel.style.cssText = labelStyle;
+            filterLabel.textContent = 'Remote Filter List';
+            filterSection.appendChild(filterLabel);
+
+            // URL row
+            const urlRow = document.createElement('div');
+            urlRow.style.cssText = 'display:flex;gap:8px;align-items:center;';
+            const urlInput = document.createElement('input');
+            urlInput.type = 'text';
+            urlInput.style.cssText = inputStyle + 'flex:1;';
+            urlInput.value = appState.settings.adblockFilterUrl || '';
+            urlInput.placeholder = 'Filter list URL (.txt format)';
+            urlInput.spellcheck = false;
+
+            const saveUrlBtn = document.createElement('button');
+            saveUrlBtn.style.cssText = btnSecStyle;
+            saveUrlBtn.textContent = 'Save';
+            saveUrlBtn.onclick = async () => {
+                appState.settings.adblockFilterUrl = urlInput.value.trim();
+                await settingsManager.save(appState.settings);
+                createToast('Filter URL saved', 'success');
+            };
+
+            urlRow.appendChild(urlInput);
+            urlRow.appendChild(saveUrlBtn);
+            filterSection.appendChild(urlRow);
+
+            // Info + Update row
+            const infoRow = document.createElement('div');
+            infoRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-top:10px;';
+
+            const filterInfo = document.createElement('div');
+            filterInfo.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
+            const cachedTime = GM_getValue('ytab_filter_update_time', 0);
+            const cachedCount = GM_getValue('ytab_cached_selector_count', 0);
+            filterInfo.textContent = cachedTime
+                ? `${cachedCount} selectors | Updated ${new Date(cachedTime).toLocaleString()}`
+                : 'No filters loaded yet';
+
+            const updateBtn = document.createElement('button');
+            updateBtn.style.cssText = btnStyle;
+            updateBtn.textContent = 'Update Filters';
+            updateBtn.onclick = () => {
+                updateBtn.textContent = 'Fetching...';
+                updateBtn.style.opacity = '0.6';
+                const url = (appState.settings.adblockFilterUrl || '').trim();
+                if (!url) { createToast('No filter URL set', 'error'); updateBtn.textContent = 'Update Filters'; updateBtn.style.opacity = '1'; return; }
+
+                GM.xmlHttpRequest({
+                    method: 'GET',
+                    url: url + '?_=' + Date.now(),
+                    timeout: 15000,
+                    onload(resp) {
+                        if (resp.status >= 200 && resp.status < 400) {
+                            const text = resp.responseText || '';
+                            const selectors = _rw.__ytab?.parseFilterList?.(text) || [];
+                            const selectorStr = selectors.join(',\n');
+                            GM_setValue('ytab_cached_selectors', selectorStr);
+                            GM_setValue('ytab_filter_update_time', Date.now());
+                            GM_setValue('ytab_cached_selector_count', selectors.length);
+                            GM_setValue('ytab_raw_filters', text);
+                            // Apply live
+                            const custom = GM_getValue('ytab_custom_filters', '');
+                            const combined = [selectorStr, custom].filter(Boolean).join(',\n');
+                            _rw.__ytab?.updateCSS?.(combined);
+                            filterInfo.textContent = `${selectors.length} selectors | Updated ${new Date().toLocaleString()}`;
+                            createToast(`Filters updated: ${selectors.length} cosmetic selectors parsed`, 'success');
+                            // Refresh preview if open
+                            if (previewArea.style.display !== 'none') renderPreview();
+                        } else {
+                            createToast(`Filter fetch failed: HTTP ${resp.status}`, 'error');
+                        }
+                        updateBtn.textContent = 'Update Filters';
+                        updateBtn.style.opacity = '1';
+                    },
+                    onerror() { createToast('Filter fetch failed (network error)', 'error'); updateBtn.textContent = 'Update Filters'; updateBtn.style.opacity = '1'; },
+                    ontimeout() { createToast('Filter fetch timed out', 'error'); updateBtn.textContent = 'Update Filters'; updateBtn.style.opacity = '1'; }
+                });
+            };
+
+            infoRow.appendChild(filterInfo);
+            infoRow.appendChild(updateBtn);
+            filterSection.appendChild(infoRow);
+
+            // ── Bootstrap Status Indicator ──
+            const statusRow = document.createElement('div');
+            statusRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:10px;padding:8px 10px;background:var(--ytkit-bg-card);border-radius:6px;';
+            const statusDot = document.createElement('span');
+            const isActive = !!_rw.__ytab?.active;
+            statusDot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${isActive ? config.color : '#ef4444'};flex-shrink:0;`;
+            const statusText = document.createElement('span');
+            statusText.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
+            statusText.textContent = isActive
+                ? 'Proxy engines active (installed at document-start)'
+                : 'Proxies not installed - enable Ad Blocker and reload page';
+            statusRow.appendChild(statusDot);
+            statusRow.appendChild(statusText);
+            filterSection.appendChild(statusRow);
+
+            pane.appendChild(filterSection);
+
+            // ── Custom Filters Section ──
+            const customSection = document.createElement('div');
+            customSection.style.cssText = sectionStyle;
+
+            const customLabel = document.createElement('div');
+            customLabel.style.cssText = labelStyle;
+            customLabel.textContent = 'Custom Filters';
+
+            const customHint = document.createElement('span');
+            customHint.style.cssText = 'font-weight:400;color:var(--ytkit-text-muted);font-size:11px;';
+            customHint.textContent = '(CSS selectors, one per line)';
+            customLabel.appendChild(customHint);
+            customSection.appendChild(customLabel);
+
+            const customTextarea = document.createElement('textarea');
+            customTextarea.style.cssText = inputStyle + 'min-height:100px;resize:vertical;font-family:"Cascadia Code","Fira Code",monospace;font-size:12px;line-height:1.5;';
+            customTextarea.value = (GM_getValue('ytab_custom_filters', '') || '').replace(/,\n/g, '\n').replace(/,/g, '\n');
+            customTextarea.placeholder = 'ytd-merch-shelf-renderer\n.ytp-ad-overlay-slot\n#custom-ad-element';
+            customTextarea.spellcheck = false;
+
+            customSection.appendChild(customTextarea);
+
+            const customBtnRow = document.createElement('div');
+            customBtnRow.style.cssText = 'display:flex;gap:8px;margin-top:10px;';
+
+            const saveCustomBtn = document.createElement('button');
+            saveCustomBtn.style.cssText = btnStyle;
+            saveCustomBtn.textContent = 'Apply Filters';
+            saveCustomBtn.onclick = () => {
+                const lines = customTextarea.value.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('!') && !l.startsWith('//'));
+                const selectorStr = lines.join(',\n');
+                GM_setValue('ytab_custom_filters', selectorStr);
+                // Apply live
+                const remote = GM_getValue('ytab_cached_selectors', '');
+                const combined = [remote, selectorStr].filter(Boolean).join(',\n');
+                _rw.__ytab?.updateCSS?.(combined);
+                createToast(`${lines.length} custom filter${lines.length !== 1 ? 's' : ''} applied`, 'success');
+            };
+
+            const clearCustomBtn = document.createElement('button');
+            clearCustomBtn.style.cssText = btnSecStyle;
+            clearCustomBtn.textContent = 'Clear';
+            clearCustomBtn.onclick = () => {
+                customTextarea.value = '';
+                GM_setValue('ytab_custom_filters', '');
+                const remote = GM_getValue('ytab_cached_selectors', '');
+                _rw.__ytab?.updateCSS?.(remote);
+                createToast('Custom filters cleared', 'success');
+            };
+
+            customBtnRow.appendChild(saveCustomBtn);
+            customBtnRow.appendChild(clearCustomBtn);
+            customSection.appendChild(customBtnRow);
+            pane.appendChild(customSection);
+
+            // ── Active Filters Preview (collapsible) ──
+            const previewSection = document.createElement('div');
+            previewSection.style.cssText = sectionStyle;
+
+            const previewHeader = document.createElement('div');
+            previewHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;cursor:pointer;';
+
+            const previewLabel = document.createElement('div');
+            previewLabel.style.cssText = labelStyle + 'margin-bottom:0;';
+            previewLabel.textContent = 'Active Filters Preview';
+
+            const previewToggle = document.createElement('span');
+            previewToggle.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
+            previewToggle.textContent = 'Show';
+
+            previewHeader.appendChild(previewLabel);
+            previewHeader.appendChild(previewToggle);
+
+            const previewArea = document.createElement('pre');
+            previewArea.style.cssText = 'display:none;margin-top:10px;padding:10px;background:var(--ytkit-bg-card);border-radius:6px;font-size:11px;color:var(--ytkit-text-muted);font-family:"Cascadia Code","Fira Code",monospace;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6;';
+
+            function renderPreview() {
+                const remote = (GM_getValue('ytab_cached_selectors', '') || '').split(',\n').filter(Boolean);
+                const custom = (GM_getValue('ytab_custom_filters', '') || '').split(',\n').filter(Boolean);
+                let text = '';
+                if (remote.length) text += `/* Remote (${remote.length}) */\n` + remote.join('\n') + '\n\n';
+                if (custom.length) text += `/* Custom (${custom.length}) */\n` + custom.join('\n');
+                if (!text) text = 'No filters loaded. Click "Update Filters" to fetch from remote URL.';
+                previewArea.textContent = text;
+            }
+
+            previewHeader.onclick = () => {
+                const showing = previewArea.style.display !== 'none';
+                previewArea.style.display = showing ? 'none' : 'block';
+                previewToggle.textContent = showing ? 'Show' : 'Hide';
+                if (!showing) renderPreview();
+            };
+
+            previewSection.appendChild(previewHeader);
+            previewSection.appendChild(previewArea);
+            pane.appendChild(previewSection);
+
+            return pane;
+        }
+
         function buildVideoHiderPane(config) {
             const videoHiderFeature = features.find(f => f.id === 'hideVideosFromHome');
 
@@ -10230,6 +11395,12 @@
         }
 
         categoryOrder.forEach((cat, index) => {
+            // Special handling for Ad Blocker
+            if (cat === 'Ad Blocker') {
+                const config = CATEGORY_CONFIG[cat];
+                content.appendChild(buildAdBlockPane(config));
+                return;
+            }
             // Special handling for Video Hider
             if (cat === 'Video Hider') {
                 const config = CATEGORY_CONFIG[cat];
@@ -10424,7 +11595,7 @@ pause
 
         const versionSpan = document.createElement('span');
         versionSpan.className = 'ytkit-version';
-        versionSpan.textContent = 'v12.4';
+        versionSpan.textContent = 'v15';
 
         const shortcutSpan = document.createElement('span');
         shortcutSpan.className = 'ytkit-shortcut';
@@ -11918,8 +13089,8 @@ ytd-live-chat-frame {
         // Initialize statistics tracker
         await StatsTracker.load();
 
-        console.log('[YTKit] v12.5 Initialized - Sticky Video Edition');
-        DebugManager.log('Init', 'YTKit v12.5 started', { page: appState.currentPage, features: Object.keys(appState.settings).filter(k => appState.settings[k]).length });
+        console.log('[YTKit] v16 Initialized');
+        DebugManager.log('Init', 'YTKit v15 started', { page: appState.currentPage, features: Object.keys(appState.settings).filter(k => appState.settings[k]).length });
     }
 
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
