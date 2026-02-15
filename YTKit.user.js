@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YTKit
-// @version      20.1
-// @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more. Uses YTYT-Downloader for local downloads.
+// @version      25.0
+// @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, ChapterForge AI chapters, DeArrow clickbait removal, and more.
 // @author       Matthew Parker
 // @match        https://*.youtube.com/*
 // @match        https://*.youtube-nocookie.com/*
@@ -20,7 +20,21 @@
 // @grant        GM_addStyle
 // @grant        GM_openInTab
 // @connect      sponsor.ajay.app
+// @connect      dearrow-thumb.ajay.app
 // @connect      raw.githubusercontent.com
+// @connect      googlevideo.com
+// @connect      gstatic.com
+// @connect      cdn-lfs-us-1.hf.co
+// @connect      cdn-lfs.hf.co
+// @connect      huggingface.co
+// @connect      cobalt-api.meowing.de
+// @connect      cobalt.meowing.de
+// @connect      meowing.de
+// @connect      api.openai.com
+// @connect      openrouter.ai
+// @connect      localhost
+// @connect      127.0.0.1
+// @connect      *
 // @resource     betterDarkMode https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/youtube-dark-theme.css
 // @resource     catppuccinMocha https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/Themes/youtube-catppuccin-theme.css
 // @updateURL    https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js
@@ -459,7 +473,6 @@
                 return unique;
             }
         };
-        console.log('[YTKit AdBlock] Proxy engine injected into page context');
     }
 
     // Install proxy engine on the REAL page window.
@@ -569,8 +582,6 @@
         'ytd-rich-section-renderer:has(ytd-brand-video-shelf-renderer)',
 
         // ═══ Grid / Browse ═══
-        '.ytd-two-column-browse-results-renderer > ytd-rich-grid-renderer > #masthead-ad',
-        '.ytd-two-column-browse-results-renderer > ytd-rich-grid-renderer > #masthead-ad.ytd-rich-grid-renderer',
         '.grid.ytd-browse > #primary > .style-scope > .ytd-rich-grid-renderer > .ytd-rich-grid-renderer > .ytd-ad-slot-renderer',
         '.ytd-rich-item-renderer.style-scope > .ytd-rich-item-renderer > .ytd-ad-slot-renderer.style-scope',
 
@@ -739,8 +750,6 @@
     };
     try { _patchAPI(); } catch(e) {}
     setTimeout(() => { try { _patchAPI(); } catch(e) {} }, 0);
-
-    console.log('[YTKit AdBlock] Bootstrap active — proxies in page context, CSS/DOM/SSAP in sandbox');
 })();
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -787,14 +796,23 @@
         return PageTypes.OTHER;
     }
 
+    // ── Timing Constants ──
+    const TIMING = {
+        NAV_DEBOUNCE: 150,        // Navigation detection debounce (ms)
+        MUTATION_THROTTLE: 500,   // Mutation observer throttle (ms)
+        BUTTON_DEBOUNCE: 300,     // Button checker mutation debounce (ms)
+        SAVE_DEBOUNCE: 500,       // Settings save debounce (ms)
+        NAV_SETTLE: 1000,         // Time for YouTube SPA to settle after nav (ms)
+        ELEMENT_TIMEOUT: 10000,   // waitForElement timeout (ms)
+        LABEL_MAX_ATTEMPTS: 20,   // SponsorBlock label retry limit
+    };
+
     // ══════════════════════════════════════════════════════════════════════════
     //  Trusted Types Safe HTML Helper
     // ══════════════════════════════════════════════════════════════════════════
     // YouTube enforces Trusted Types which blocks direct innerHTML assignments
     const TrustedHTML = (() => {
         let policy = null;
-
-        // Try to create a Trusted Types policy
         if (typeof window.trustedTypes !== 'undefined' && window.trustedTypes.createPolicy) {
             try {
                 policy = window.trustedTypes.createPolicy('ytkit-policy', {
@@ -802,46 +820,26 @@
                 });
             } catch (e) {
                 // Policy already exists or can't be created
-                console.log('[YTKit] Trusted Types policy creation failed, using fallback');
             }
         }
 
         return {
-            // Set innerHTML safely
             setHTML(element, html) {
                 if (policy) {
                     element.innerHTML = policy.createHTML(html);
                 } else {
-                    // Fallback: use DOMParser to parse HTML safely
-                    try {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(`<template>${html}</template>`, 'text/html');
-                        const template = doc.querySelector('template');
-                        element.innerHTML = '';
-                        if (template && template.content) {
-                            element.appendChild(template.content.cloneNode(true));
-                        }
-                    } catch (e) {
-                        // Last resort: use Range.createContextualFragment
-                        try {
-                            const range = document.createRange();
-                            range.selectNode(document.body);
-                            const fragment = range.createContextualFragment(html);
-                            element.innerHTML = '';
-                            element.appendChild(fragment);
-                        } catch (e2) {
-                            console.error('[YTKit] Failed to set HTML:', e2);
-                        }
+                    // Fallback: DOMParser (covers non-TrustedTypes browsers)
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(`<template>${html}</template>`, 'text/html');
+                    const template = doc.querySelector('template');
+                    element.innerHTML = '';
+                    if (template && template.content) {
+                        element.appendChild(template.content.cloneNode(true));
                     }
                 }
             },
-
-            // Create HTML string (for cases where we need TrustedHTML)
             create(html) {
-                if (policy) {
-                    return policy.createHTML(html);
-                }
-                return html;
+                return policy ? policy.createHTML(html) : html;
             }
         };
     })();
@@ -852,12 +850,12 @@
         _dirty: new Set(),
         _saveTimeout: null,
 
-        async get(key, defaultVal = null) {
+        get(key, defaultVal = null) {
             if (this._cache.hasOwnProperty(key)) {
                 return this._cache[key];
             }
             try {
-                const val = await GM_getValue(key, defaultVal);
+                const val = GM_getValue(key, defaultVal);
                 this._cache[key] = val;
                 return val;
             } catch (e) {
@@ -866,7 +864,7 @@
             }
         },
 
-        async set(key, value) {
+        set(key, value) {
             this._cache[key] = value;
             this._dirty.add(key);
             this._scheduleSave();
@@ -874,27 +872,19 @@
 
         _scheduleSave() {
             if (this._saveTimeout) return;
-            this._saveTimeout = setTimeout(() => this._flush(), 500);
+            this._saveTimeout = setTimeout(() => this._flush(), TIMING.SAVE_DEBOUNCE);
         },
 
-        async _flush() {
+        _flush() {
             this._saveTimeout = null;
             const toSave = [...this._dirty];
             this._dirty.clear();
             for (const key of toSave) {
                 try {
-                    await GM_setValue(key, this._cache[key]);
+                    GM_setValue(key, this._cache[key]);
                 } catch (e) {
                     console.error('[YTKit Storage] Failed to save:', key, e);
                 }
-            }
-        },
-
-        async getSync(key, defaultVal = null) {
-            try {
-                return GM_getValue(key, defaultVal);
-            } catch (e) {
-                return defaultVal;
             }
         },
 
@@ -1342,7 +1332,7 @@
             }
         },
 
-        async migrate(settings) {
+        migrate(settings) {
             let currentVersion = settings._version || 1;
             let migrated = { ...settings };
 
@@ -1399,46 +1389,46 @@
     // Debug Mode Manager
     const DebugManager = { log() {} };
     // Statistics Tracker
-    const StatsTracker = { async load() {}, increment() {}, async getAll() { return {}; }, formatTime() { return '0s'; }, async reset() {} };
+    const StatsTracker = { load() {}, increment() {}, getAll() { return {}; }, formatTime() { return '0s'; }, reset() {} };
     // Per-Channel Settings Manager
     const ChannelSettingsManager = {
         _STORAGE_KEY: 'ytkit-channel-settings',
         _settings: null,
 
-        async load() {
+        load() {
             if (this._settings) return this._settings;
-            this._settings = await StorageManager.get(this._STORAGE_KEY, {});
+            this._settings = StorageManager.get(this._STORAGE_KEY, {});
             return this._settings;
         },
 
-        async save() {
+        save() {
             if (!this._settings) return;
-            await StorageManager.set(this._STORAGE_KEY, this._settings);
+            StorageManager.set(this._STORAGE_KEY, this._settings);
         },
 
-        async getForChannel(channelId) {
-            await this.load();
+        getForChannel(channelId) {
+            this.load();
             return this._settings[channelId] || null;
         },
 
-        async setForChannel(channelId, settings) {
-            await this.load();
+        setForChannel(channelId, settings) {
+            this.load();
             this._settings[channelId] = {
                 ...this._settings[channelId],
                 ...settings,
                 updatedAt: Date.now()
             };
-            await this.save();
+            this.save();
         },
 
-        async removeChannel(channelId) {
-            await this.load();
+        removeChannel(channelId) {
+            this.load();
             delete this._settings[channelId];
-            await this.save();
+            this.save();
         },
 
-        async getAllChannels() {
-            await this.load();
+        getAllChannels() {
+            this.load();
             return Object.entries(this._settings).map(([id, settings]) => ({
                 id,
                 ...settings
@@ -1461,17 +1451,17 @@
             return channelName?.textContent?.trim() || null;
         },
 
-        async exportAll() {
-            await this.load();
+        exportAll() {
+            this.load();
             return JSON.stringify(this._settings, null, 2);
         },
 
-        async importAll(jsonStr) {
+        importAll(jsonStr) {
             try {
                 const data = JSON.parse(jsonStr);
                 if (typeof data !== 'object') return false;
                 this._settings = data;
-                await this.save();
+                this.save();
                 return true;
             } catch { return false; }
         }
@@ -1528,18 +1518,15 @@
     const navigateRules = new Map();
     let isNavigateListenerAttached = false;
 
-    function waitForElement(selector, callback, timeout = 10000) {
-        const intervalTime = 100;
-        let elapsedTime = 0;
-        const interval = setInterval(() => {
-            const element = document.querySelector(selector);
-            if (element) {
-                clearInterval(interval);
-                callback(element);
-            }
-            elapsedTime += intervalTime;
-            if (elapsedTime >= timeout) clearInterval(interval);
-        }, intervalTime);
+    function waitForElement(selector, callback, timeout = TIMING.ELEMENT_TIMEOUT) {
+        const el = document.querySelector(selector);
+        if (el) { callback(el); return; }
+        const obs = new MutationObserver(() => {
+            const el = document.querySelector(selector);
+            if (el) { obs.disconnect(); callback(el); }
+        });
+        obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => obs.disconnect(), timeout);
     }
 
     // Global toast notification function with optional action button
@@ -1628,7 +1615,7 @@
 
     function registerPersistentButton(id, parentSelector, checkSelector, injectFn) {
         persistentButtons.set(id, { parentSelector, checkSelector, injectFn });
-        console.log(`[YTKit Buttons] Registered: ${id} (total: ${persistentButtons.size})`);
+        DebugManager.log('Buttons', `Registered: ${id} (total: ${persistentButtons.size})`);
         startButtonChecker();
         // Try immediately
         tryInjectButton(id);
@@ -1704,7 +1691,7 @@
 
         try {
             config.injectFn(target);
-            console.log(`[YTKit Buttons] Injected ${id} into`, target.tagName + '#' + (target.id || ''));
+            DebugManager.log('Buttons', `Injected ${id} into`, target.tagName + '#' + (target.id || ''));
             return true;
         } catch (e) {
             console.error(`[YTKit] Failed to inject ${id}:`, e);
@@ -1722,7 +1709,7 @@
         const currentVideoId = new URLSearchParams(window.location.search).get('v');
         if (currentVideoId && currentVideoId !== lastVideoId) {
             lastVideoId = currentVideoId;
-            console.log(`[YTKit Buttons] New video: ${currentVideoId}, ${persistentButtons.size} buttons registered`);
+            DebugManager.log('Buttons', `New video: ${currentVideoId}, ${persistentButtons.size} buttons registered`);
         }
 
         if (persistentButtons.size === 0) return;
@@ -1739,18 +1726,16 @@
         // Debounce timer for observer
         let debounceTimer = null;
         let lastCheckTime = 0;
-        const MIN_CHECK_INTERVAL = 500; // Don't check more than once per 500ms
+        const MIN_CHECK_INTERVAL = 500;
 
         // MutationObserver to detect when button container appears OR buttons are removed
         if (!buttonObserver) {
             buttonObserver = new MutationObserver((mutations) => {
-                // Skip if we checked very recently
                 if (Date.now() - lastCheckTime < MIN_CHECK_INTERVAL) return;
 
                 let needsRecheck = false;
 
                 for (const m of mutations) {
-                    // Check for added containers
                     if (m.type === 'childList' && m.addedNodes.length > 0) {
                         for (const node of m.addedNodes) {
                             if (node.nodeType === 1) {
@@ -1765,7 +1750,6 @@
                         }
                     }
 
-                    // Check for removed YTKit buttons (with proper grouping)
                     if (m.type === 'childList' && m.removedNodes.length > 0) {
                         for (const node of m.removedNodes) {
                             if (node.nodeType === 1 && node.classList && (
@@ -1775,7 +1759,8 @@
                                 node.classList.contains('ytkit-embed-btn') ||
                                 node.classList.contains('ytkit-mpv-btn') ||
                                 node.classList.contains('ytkit-dlplay-btn') ||
-                                node.classList.contains('ytkit-transcript-btn'))) {
+                                node.classList.contains('ytkit-transcript-btn') ||
+                                node.classList.contains('ytkit-summarize-btn'))) {
                                 needsRecheck = true;
                                 break;
                             }
@@ -1785,7 +1770,6 @@
                     if (needsRecheck) break;
                 }
 
-                // Debounce: wait 300ms for mutations to settle before checking
                 if (needsRecheck && !debounceTimer) {
                     debounceTimer = setTimeout(() => {
                         debounceTimer = null;
@@ -1797,14 +1781,21 @@
             buttonObserver.observe(document.body, { childList: true, subtree: true });
         }
 
-        // Initial checks - staggered
+        // Initial checks
         checkAllButtons();
         setTimeout(checkAllButtons, 500);
         setTimeout(checkAllButtons, 1500);
-        setTimeout(checkAllButtons, 3000);
 
-        // Less aggressive backup - every 3 seconds
-        buttonCheckInterval = setInterval(checkAllButtons, 1500);
+        // SPA navigation — use navigate rule system instead of separate listener
+        let spaTimers = [];
+        addNavigateRule('_buttonChecker', () => {
+            spaTimers.forEach(t => clearTimeout(t));
+            spaTimers = [];
+            lastVideoId = null;
+            spaTimers.push(setTimeout(checkAllButtons, 300));
+            spaTimers.push(setTimeout(checkAllButtons, 1000));
+            spaTimers.push(setTimeout(checkAllButtons, 2500));
+        });
     }
 
 
@@ -1818,71 +1809,29 @@
     let navigateDebounceTimer = null;
     const debouncedRunNavigateRules = () => {
         if (navigateDebounceTimer) clearTimeout(navigateDebounceTimer);
-        navigateDebounceTimer = setTimeout(runNavigateRules, 50);
+        navigateDebounceTimer = setTimeout(runNavigateRules, TIMING.NAV_DEBOUNCE);
     };
 
     const ensureNavigateListener = () => {
         if (isNavigateListenerAttached) return;
 
-        // Method 1: yt-navigate-finish event (SPA navigation)
-        window.addEventListener('yt-navigate-finish', debouncedRunNavigateRules);
+        // Primary: yt-navigate-finish (covers 99.9% of YouTube SPA navigations)
+        document.addEventListener('yt-navigate-finish', debouncedRunNavigateRules);
 
-        // Method 2: yt-page-data-updated event (data loaded)
-        window.addEventListener('yt-page-data-updated', debouncedRunNavigateRules);
-
-        // Method 3: popstate for browser back/forward
+        // Fallback: popstate for browser back/forward
         window.addEventListener('popstate', debouncedRunNavigateRules);
 
-        // Method 4: MutationObserver on ytd-app and ytd-watch-flexy
-        const pageObserver = new MutationObserver((mutations) => {
-            for (const m of mutations) {
-                // Check for video-id changes or page-subtype changes
-                if (m.type === 'attributes' &&
-                    (m.attributeName === 'video-id' ||
-                     m.attributeName === 'page-subtype' ||
-                     m.attributeName === 'player-state')) {
-                    debouncedRunNavigateRules();
-                    return;
-                }
-                // Check for added nodes that indicate page change
-                if (m.type === 'childList' && m.addedNodes.length > 0) {
-                    for (const node of m.addedNodes) {
-                        if (node.nodeType === 1 &&
-                            (node.tagName === 'YTD-WATCH-FLEXY' ||
-                             node.id === 'movie_player' ||
-                             node.id === 'top-level-buttons-computed')) {
-                            debouncedRunNavigateRules();
-                            return;
-                        }
-                    }
-                }
-            }
-        });
+        // Targeted attribute observer: watch video-id changes on ytd-watch-flexy (lightweight)
+        const watchFlexy = document.querySelector('ytd-watch-flexy');
+        if (watchFlexy) {
+            const attrObserver = new MutationObserver(() => debouncedRunNavigateRules());
+            attrObserver.observe(watchFlexy, { attributes: true, attributeFilter: ['video-id'] });
+        }
 
-        // Observe document body for major changes
-        pageObserver.observe(document.body, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['video-id', 'page-subtype', 'player-state', 'hidden']
-        });
-
-        // Method 5: Interval check for initial load (fallback)
-        let checkCount = 0;
-        const maxChecks = 20;
-        const initialLoadCheck = setInterval(() => {
-            checkCount++;
-            runNavigateRules();
-            if (checkCount >= maxChecks) {
-                clearInterval(initialLoadCheck);
-            }
-        }, 500);
-
-        // Also run immediately
+        // Run immediately
         runNavigateRules();
 
         isNavigateListenerAttached = true;
-        console.log('[YTKit] Navigation listeners attached');
     };
 
     function addNavigateRule(id, ruleFn) {
@@ -2050,7 +1999,7 @@
             autoResumeThreshold: 15, // seconds from start before saving position
             playbackSpeedOSD: true,
             watchTimeTracker: true,
-            speedIndicatorBadge: true,
+            speedIndicatorBadge: false,
 
             // hideInfoPanel removed — consolidated into hideInfoPanels (Content group)
             hideDescriptionExtras: true,
@@ -2099,6 +2048,7 @@
             showVlcQueueButton: false,
             showLocalDownloadButton: true,
             showMp3DownloadButton: true,
+            showSummarizeButton: true,
             showDownloadPlayButton: false,
             subsVlcPlaylist: true,
             videoContextMenu: true,
@@ -2111,6 +2061,51 @@
             hideCollaborations: true,
             useIntersectionObserver: true,
             hideInfoPanels: true,
+
+            // ═══ ChapterForge ═══
+            chapterForge: false,
+
+            // ═══ DeArrow ═══
+            deArrow: false,
+            daReplaceTitles: true,
+            daReplaceThumbs: true,
+            daTitleFormat: 'sentence',    // 'sentence' | 'title_case' | 'original'
+            daFallbackFormat: true,       // format original titles when no submission
+            daShowOriginalHover: true,    // show original title/thumb on hover
+            daCacheTTL: '4',               // hours to cache branding data before background refresh
+            daDebugLog: false,             // verbose DeArrow console logging (off by default)
+            cfMode: 'manual',          // 'manual' | 'auto'
+            cfLlmProvider: 'builtin',  // 'builtin' | 'openai' | 'ollama' | 'openrouter' | 'custom'
+            cfLlmEndpoint: '',         // custom API endpoint (auto-set for known providers)
+            cfLlmApiKey: '',           // API key for provider
+            cfLlmModel: 'gpt-4o',// model name
+            cfShowChapters: true,
+            cfShowPOIs: true,
+            cfChapterOpacity: 0.35,
+            cfTranscriptMethod: 'auto',     // 'auto' | 'captions-only' | 'whisper-only'
+            cfWhisperModel: 'whisper-tiny.en',  // 'whisper-tiny.en' | 'whisper-base.en'
+            cfMaxAutoDuration: 60,          // max minutes for auto-processing
+            cfShowPlayerButton: true,       // show player button even in auto mode
+            cfUseInnertube: true,           // audio download via Innertube adaptive formats
+            cfUseCobalt: true,              // audio download via Cobalt API
+            cfUseCapture: true,             // audio capture from player element
+            cfPoiColor: '#ff6b6b',          // POI marker color
+            cfDebugLog: false,              // verbose console logging
+            cfSpeedControl: false,          // chapter-aware speed control
+            cfBrowserAiModel: 'SmolLM2-360M-Instruct', // browser AI model for local LLM
+            cfShowChapterHUD: false,         // show chapter name overlay on video player
+            cfHudPosition: 'top-left',     // 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+            cfCustomSummaryPrompt: '',     // user-editable summary system prompt (empty = use default)
+            cfCustomChapterPrompt: '',     // user-editable chapter system prompt (empty = use default)
+            cfFillerDetect: true,          // detect filler words in transcript (OpenCut: filler word detection)
+            cfShowFillerMarkers: true,     // show filler markers on progress bar
+            cfFillerWords: 'um, uh, uhh, umm, hmm, hm, er, erm, ah, mhm, you know, I mean, sort of, kind of, okay so, so yeah, yeah so, like',
+            cfTranslateLang: '',           // target language for AI translation (empty = disabled)
+            cfAutoSkipMode: 'off',         // 'off' | 'gentle' | 'normal' | 'aggressive'
+            cfAutoModel: true,             // auto-select best Ollama model for video length
+            cfSummaryMode: 'paragraph',    // 'paragraph' (clean prose) or 'timestamped' (indexed)
+            cfSummaryLength: 'standard',   // 'brief', 'standard', 'detailed'
+            cfChapterMode: 'standard',     // 'standard' or 'seo' (keyword-optimized titles)
         },
 
         // Migration map for old settings to new
@@ -2137,16 +2132,16 @@
             },
         },
 
-        async load() {
-            let savedSettings = await StorageManager.get('ytSuiteSettings', {});
+        load() {
+            let savedSettings = StorageManager.get('ytSuiteSettings', {});
 
             // Migrate old settings to new format
             savedSettings = this._migrateOldSettings(savedSettings);
 
             // Run version migrations if needed
             if (!savedSettings._version || savedSettings._version < SETTINGS_VERSION) {
-                savedSettings = await SettingsMigration.migrate(savedSettings);
-                await this.save(savedSettings);
+                savedSettings = SettingsMigration.migrate(savedSettings);
+                this.save(savedSettings);
             }
             return { ...this.defaults, ...savedSettings };
         },
@@ -2243,26 +2238,26 @@
             return migrated;
         },
 
-        async save(settings) {
+        save(settings) {
             settings._version = SETTINGS_VERSION;
-            await StorageManager.set('ytSuiteSettings', settings);
+            StorageManager.set('ytSuiteSettings', settings);
         },
-        async getFirstRunStatus() {
-            return await StorageManager.get('ytSuiteHasRun', false);
+        getFirstRunStatus() {
+            return StorageManager.get('ytSuiteHasRun', false);
         },
-        async setFirstRunStatus(hasRun) {
-            await StorageManager.set('ytSuiteHasRun', hasRun);
+        setFirstRunStatus(hasRun) {
+            StorageManager.set('ytSuiteHasRun', hasRun);
         },
-        async exportAllSettings() {
-            const settings = await this.load();
+        exportAllSettings() {
+            const settings = this.load();
             // Include hidden videos, blocked channels, and bookmarks in export
             let hiddenVideos = [];
             let blockedChannels = [];
             let bookmarks = {};
             try {
-                hiddenVideos = await StorageManager.get('ytkit-hidden-videos', []);
-                blockedChannels = await StorageManager.get('ytkit-blocked-channels', []);
-                bookmarks = await StorageManager.get('ytkit-bookmarks', {});
+                hiddenVideos = StorageManager.get('ytkit-hidden-videos', []);
+                blockedChannels = StorageManager.get('ytkit-blocked-channels', []);
+                bookmarks = StorageManager.get('ytkit-bookmarks', {});
             } catch(e) {
                 console.warn('[YTKit] Failed to load data for export:', e);
             }
@@ -2277,7 +2272,7 @@
             };
             return JSON.stringify(exportData, null, 2);
         },
-        async importAllSettings(jsonString) {
+        importAllSettings(jsonString) {
             try {
                 const importedData = JSON.parse(jsonString);
                 if (typeof importedData !== 'object' || importedData === null) return false;
@@ -2305,17 +2300,17 @@
                 }
 
                 const newSettings = { ...this.defaults, ...settings };
-                await this.save(newSettings);
+                this.save(newSettings);
 
                 // Import hidden videos, blocked channels, and bookmarks if present
                 if (hiddenVideos !== null) {
-                    await StorageManager.set('ytkit-hidden-videos', hiddenVideos);
+                    StorageManager.set('ytkit-hidden-videos', hiddenVideos);
                 }
                 if (blockedChannels !== null) {
-                    await StorageManager.set('ytkit-blocked-channels', blockedChannels);
+                    StorageManager.set('ytkit-blocked-channels', blockedChannels);
                 }
                 if (bookmarks !== null) {
-                    await StorageManager.set('ytkit-bookmarks', bookmarks);
+                    StorageManager.set('ytkit-bookmarks', bookmarks);
                 }
 
                 return true;
@@ -2335,15 +2330,15 @@
         const f = {
             id, name, description, group, icon,
             _styleElement: null,
-            init() { this._styleElement = injectStyle(isRaw ? css : css, this.id, isRaw); },
-            destroy() { this._styleElement?.remove(); }
+            init() { this._styleElement = injectStyle(css, this.id, isRaw); },
+            destroy() { this._styleElement?.remove(); this._styleElement = null; }
         };
-        if (!isRaw) {
-            f.init = function() { this._styleElement = injectStyle(css, this.id); };
-        }
         if (extra) Object.assign(f, extra);
         return f;
     }
+
+    // App state - declared before features so feature closures can reference it
+    let appState = {};
 
     const features = [
         // ─── Interface ───
@@ -2618,14 +2613,12 @@
                 // Initial scan
                 scanPage();
 
-                // Targeted observer - only processes newly added nodes
-                this._observer = new MutationObserver(mutations => {
-                    if (isExemptPage()) return;
-                    for (const m of mutations) {
-                        for (const node of m.addedNodes) processNode(node);
+                // Use shared observer for new content
+                addMutationRule(this.id, () => {
+                    if (!isExemptPage()) {
+                        document.querySelectorAll('a[href^="/shorts"]').forEach(hideShort);
                     }
                 });
-                this._observer.observe(document.body, { childList: true, subtree: true });
 
                 // Re-scan on navigation
                 addNavigateRule(this.id, scanPage);
@@ -2646,8 +2639,7 @@
                 this._searchPageRule();
             },
             destroy() {
-                this._observer?.disconnect();
-                this._observer = null;
+                removeMutationRule(this.id);
                 removeNavigateRule(this.id);
                 removeNavigateRule(this.id + '-search');
                 this._styleElement?.remove();
@@ -3140,13 +3132,9 @@
             },
 
             _createSVG(pathD) {
-                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                svg.setAttribute('viewBox', '0 0 24 24');
+                const svg = createSVG('0 0 24 24', [{ type: 'path', d: pathD, fill: 'currentColor' }], { fill: 'currentColor', stroke: false });
                 svg.setAttribute('width', '14');
                 svg.setAttribute('height', '14');
-                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                path.setAttribute('d', pathD);
-                svg.appendChild(path);
                 return svg;
             },
 
@@ -3159,25 +3147,14 @@
             },
 
             _showToast(message, buttons = []) {
-                let toast = document.getElementById('ytkit-hide-toast');
-                if (!toast) {
-                    toast = document.createElement('div');
-                    toast.id = 'ytkit-hide-toast';
-                    document.body.appendChild(toast);
-                }
-                toast.textContent = '';
-                const span = document.createElement('span');
-                span.textContent = message;
-                toast.appendChild(span);
-                buttons.forEach(b => {
-                    const btn = document.createElement('button');
-                    btn.textContent = b.text;
-                    btn.addEventListener('click', b.onClick);
-                    toast.appendChild(btn);
-                });
+                // Remove legacy toast if present
+                document.getElementById('ytkit-hide-toast')?.remove();
                 if (this._toastTimeout) clearTimeout(this._toastTimeout);
-                requestAnimationFrame(() => toast.classList.add('show'));
-                this._toastTimeout = setTimeout(() => toast.classList.remove('show'), 5000);
+                const primaryAction = buttons[0];
+                showToast(message, '#6b7280', {
+                    duration: 5,
+                    action: primaryAction ? { text: primaryAction.text, onClick: primaryAction.onClick } : undefined
+                });
             },
 
             _hideVideo(videoId, element) {
@@ -3551,7 +3528,7 @@
                 // Initial check for subscriptions page
                 checkSubsPage();
 
-                console.log('[YTKit] Video Hider initialized:', this._getHiddenVideos().length, 'videos,', this._getBlockedChannels().length, 'channels');
+                DebugManager.log('VideoHider', 'Initialized:', this._getHiddenVideos().length, 'videos,', this._getBlockedChannels().length, 'channels');
             },
 
             destroy() {
@@ -3605,20 +3582,15 @@
                     }
                 };
                 document.addEventListener('copy', this._clipboardHandler, true);
-                // Also intercept the share panel URL display
-                this._observer = new MutationObserver((mutations) => {
-                    for (const m of mutations) {
-                        for (const node of m.addedNodes) {
-                            if (node.nodeType !== 1) continue;
-                            const input = node.querySelector?.('input#share-url') || (node.id === 'share-url' ? node : null);
-                            if (input && input.value) {
-                                const cleaned = cleanUrl(input.value);
-                                if (cleaned !== input.value) input.value = cleaned;
-                            }
-                        }
+                // Also intercept the share panel URL display via shared observer
+                this._cleanShareUrl = () => {
+                    const input = document.querySelector('input#share-url');
+                    if (input && input.value && !input.dataset.ytkitCleaned) {
+                        const cleaned = cleanUrl(input.value);
+                        if (cleaned !== input.value) { input.value = cleaned; input.dataset.ytkitCleaned = '1'; }
                     }
-                });
-                this._observer.observe(document.body, { childList: true, subtree: true });
+                };
+                addMutationRule(this.id, this._cleanShareUrl);
                 // Also clean address bar on navigation
                 this._cleanAddressBar = () => {
                     const url = window.location.href;
@@ -3638,7 +3610,7 @@
             },
             destroy() {
                 document.removeEventListener('copy', this._clipboardHandler, true);
-                this._observer?.disconnect();
+                removeMutationRule(this.id);
                 removeNavigateRule('cleanShareUrlBar');
             }
         },
@@ -3829,38 +3801,60 @@
                 this._styleEl = GM_addStyle(`
                     #ytkit-player-overlay {
                         position: absolute;
-                        top: 12px;
-                        left: 12px;
+                        top: 0;
+                        left: 0;
                         display: flex;
                         align-items: center;
-                        gap: 10px;
-                        padding: 6px 12px;
-                        background: rgba(0, 0, 0, 0.65);
-                        backdrop-filter: blur(12px);
-                        -webkit-backdrop-filter: blur(12px);
-                        border: 1px solid rgba(255, 255, 255, 0.1);
-                        border-radius: 8px;
+                        gap: 0;
+                        padding: 0;
+                        margin: 0;
+                        padding-left: 0; padding-right: 0; padding-top: 0; padding-bottom: 0;
+                        margin-left: 6px; margin-right: 0; margin-top: -12px; margin-bottom: 0;
+                        background: rgba(0, 0, 0, 0.45);
+                        backdrop-filter: blur(8px);
+                        -webkit-backdrop-filter: blur(8px);
+                        border: 1px solid rgba(255, 255, 255, 0.04);
+                        border-radius: 0 0 6px 6px;
                         z-index: 59;
                         opacity: 0;
                         pointer-events: none;
-                        transition: opacity 0.25s ease, transform 0.25s ease;
-                        transform: translateY(-4px);
+                        transition: opacity 0.25s ease, margin-top 0.25s ease;
                     }
-                    #movie_player:hover #ytkit-player-overlay,
-                    #ytkit-player-overlay:hover {
-                        opacity: 1;
+                    #movie_player:hover #ytkit-player-overlay {
+                        opacity: 0.1;
                         pointer-events: auto;
-                        transform: translateY(0);
+                        margin-top: 0;
+                    }
+                    #ytkit-player-overlay:hover {
+                        opacity: 1 !important;
+                        pointer-events: auto;
+                        margin-top: 0;
+                    }
+                    a.ytkit-po-btn.ytkit-po-logo {
+                        padding-top: 0; padding-bottom: 0; padding-left: 0; padding-right: 0;
+                        margin-top: 0; margin-bottom: 0; margin-right: 0; margin-left: 0;
+                    }
+                    button.ytkit-po-btn.ytkit-po-gear {
+                        padding-top: 0; padding-bottom: 0; padding-left: 0; padding-right: 0;
+                        margin-top: 0; margin-bottom: 0; margin-right: 0; margin-left: -7px;
+                    }
+                    #ytkit-player-overlay yt-icon span div {
+                        padding: 0; margin: 0;
+                        margin-left: -34px;
+                    }
+                    #ytkit-player-overlay yt-icon.style-scope.ytd-logo {
+                        padding: 0; margin: 0;
+                        margin-right: -12px;
                     }
                     .ytkit-po-btn {
                         display: flex;
                         align-items: center;
                         justify-content: center;
-                        padding: 4px 8px;
+                        padding: 0;
                         border: none;
                         background: transparent;
                         cursor: pointer;
-                        border-radius: 6px;
+                        border-radius: 4px;
                         transition: background 0.2s;
                         text-decoration: none;
                         color: #fff;
@@ -3874,8 +3868,6 @@
                     .ytkit-po-gear:hover svg {
                         transform: rotate(45deg);
                     }
-                    /* Hide when player controls are showing to avoid overlap */
-                    .ytp-autohide #ytkit-player-overlay { }
                 `);
 
                 const self = this;
@@ -4878,12 +4870,12 @@
                     }
                 };
                 this._navHandler = () => setTimeout(pauseRule, 500);
-                window.addEventListener('yt-navigate-finish', this._navHandler);
+                document.addEventListener('yt-navigate-finish', this._navHandler);
                 setTimeout(pauseRule, 500);
             },
             destroy() {
                 if (this._navHandler) {
-                    window.removeEventListener('yt-navigate-finish', this._navHandler);
+                    document.removeEventListener('yt-navigate-finish', this._navHandler);
                     this._navHandler = null;
                 }
             }
@@ -5209,6 +5201,13 @@
                 const videoId = new URLSearchParams(window.location.search).get('v');
                 if (!video || !videoId) return;
 
+                // Remove previous handlers if any (prevents stacking on SPA nav)
+                if (this._progressHandlers) {
+                    const prev = this._progressHandlers;
+                    prev.video.removeEventListener('timeupdate', prev.handler);
+                    prev.video.removeEventListener('pause', prev.handler);
+                }
+
                 const saveProgress = () => {
                     if (video.duration > 0) {
                         const percent = (video.currentTime / video.duration) * 100;
@@ -5225,6 +5224,7 @@
                 };
                 video.addEventListener('timeupdate', saveProgress);
                 video.addEventListener('pause', saveProgress);
+                this._progressHandlers = { video, handler: saveProgress };
             },
 
             _showProgressBars() {
@@ -5259,15 +5259,20 @@
                 this._styleElement = injectStyle(css, this.id, true);
                 this._trackProgress();
                 this._showProgressBars();
-                this._observer = new MutationObserver(() => this._showProgressBars());
-                this._observer.observe(document.body, { childList: true, subtree: true });
+                addMutationRule(this.id + '_bars', () => this._showProgressBars());
                 addNavigateRule(this.id, () => { this._trackProgress(); this._showProgressBars(); });
             },
 
             destroy() {
                 this._styleElement?.remove();
-                this._observer?.disconnect();
+                removeMutationRule(this.id + '_bars');
                 removeNavigateRule(this.id);
+                if (this._progressHandlers) {
+                    const prev = this._progressHandlers;
+                    prev.video.removeEventListener('timeupdate', prev.handler);
+                    prev.video.removeEventListener('pause', prev.handler);
+                    this._progressHandlers = null;
+                }
                 document.querySelectorAll('.ytkit-progress-bar').forEach(b => b.remove());
             }
         },
@@ -5729,6 +5734,15 @@
             },
 
             _reset() {
+                // Remove video event listeners before clearing references
+                if (this._state.video) {
+                    if (this._state._playHandler) this._state.video.removeEventListener("play", this._state._playHandler);
+                    if (this._state._pauseHandler) this._state.video.removeEventListener("pause", this._state._pauseHandler);
+                    if (this._state._seekedHandler) this._state.video.removeEventListener("seeked", this._state._seekedHandler);
+                    this._state._playHandler = null;
+                    this._state._pauseHandler = null;
+                    this._state._seekedHandler = null;
+                }
                 this._state.videoID = null;
                 this._state.segments = [];
                 this._state.skippableSegments = [];
@@ -5760,7 +5774,9 @@
             },
 
             _createVideoLabel(videoLabel) {
+                let labelAttempts = 0;
                 const check = () => {
+                    if (++labelAttempts > TIMING.LABEL_MAX_ATTEMPTS) return;
                     const title = document.querySelector("#title h1, h1.title.ytd-video-primary-info-renderer");
                     if (title) {
                         const category = videoLabel.category;
@@ -5791,9 +5807,12 @@
                     if (video) {
                         clearInterval(checkVideo);
                         this._state.video = video;
-                        video.addEventListener("play", () => this._startRAFSkipLoop());
-                        video.addEventListener("pause", () => this._stopRAFSkipLoop());
-                        video.addEventListener("seeked", () => { this._state.lastSkippedUUID = null; });
+                        this._state._playHandler = () => this._startRAFSkipLoop();
+                        this._state._pauseHandler = () => this._stopRAFSkipLoop();
+                        this._state._seekedHandler = () => { this._state.lastSkippedUUID = null; };
+                        video.addEventListener("play", this._state._playHandler);
+                        video.addEventListener("pause", this._state._pauseHandler);
+                        video.addEventListener("seeked", this._state._seekedHandler);
                         this._loadSegmentsAndSetup();
                     } else if (attempts >= 50) {
                         clearInterval(checkVideo);
@@ -6551,6 +6570,78 @@
             }
         },
         {
+            id: 'showSummarizeButton',
+            name: 'Summarize Button',
+            description: 'Add a Summarize button next to video actions — shows AI summary in a popup bubble',
+            group: 'ChapterForge',
+            icon: 'file-text',
+            dependsOn: 'chapterForge',
+            _createButton(parent) {
+                const btn = document.createElement('button');
+                btn.className = 'ytkit-summarize-btn';
+                btn.title = 'AI Summary (ChapterForge)';
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('viewBox', '0 0 24 24');
+                svg.setAttribute('width', '18');
+                svg.setAttribute('height', '18');
+                svg.setAttribute('fill', 'none');
+                svg.setAttribute('stroke', 'white');
+                svg.setAttribute('stroke-width', '2');
+                svg.setAttribute('stroke-linecap', 'round');
+                svg.setAttribute('stroke-linejoin', 'round');
+                const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                p1.setAttribute('d', 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z');
+                const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+                p2.setAttribute('points', '14 2 14 8 20 8');
+                const p3 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                p3.setAttribute('x1', '16'); p3.setAttribute('y1', '13'); p3.setAttribute('x2', '8'); p3.setAttribute('y2', '13');
+                const p4 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                p4.setAttribute('x1', '16'); p4.setAttribute('y1', '17'); p4.setAttribute('x2', '8'); p4.setAttribute('y2', '17');
+                svg.append(p1, p2, p3, p4);
+                btn.appendChild(svg);
+                btn.appendChild(document.createTextNode(' TL;DR'));
+                btn.style.cssText = `display:inline-flex;align-items:center;gap:6px;padding:0 16px;height:36px;margin-left:8px;border-radius:18px;border:none;background:#3b82f6;color:white;font-family:"Roboto","Arial",sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.2s;`;
+                btn.onmouseenter = () => { btn.style.background = '#2563eb'; };
+                btn.onmouseleave = () => { btn.style.background = '#3b82f6'; };
+                btn.addEventListener('click', async () => {
+                    const cf = features.find(f => f.id === 'chapterForge');
+                    if (!cf) { showToast('Enable ChapterForge first', '#ef4444'); return; }
+                    // If summary already exists, toggle bubble
+                    if (cf._lastSummary) {
+                        const existing = document.getElementById('cf-summary-bubble');
+                        if (existing) { cf._hideSummaryBubble(); return; }
+                        cf._showSummaryBubble(cf._lastSummary);
+                        return;
+                    }
+                    btn.disabled = true; btn.style.opacity = '0.6';
+                    showToast('Generating summary...', '#3b82f6', { duration: 3 });
+                    try {
+                        await cf._generateSummary(true);
+                    } catch(e) {
+                        console.warn('[YTKit] TL;DR error:', e);
+                        showToast('Summary failed: ' + (e.message || 'unknown error'), '#ef4444');
+                    }
+                    btn.disabled = false; btn.style.opacity = '1';
+                });
+                parent.appendChild(btn);
+            },
+            init() {
+                registerPersistentButton('summarizeButton', '#top-level-buttons-computed', '.ytkit-summarize-btn', this._createButton.bind(this));
+                startButtonChecker();
+                // Reset summary on navigation
+                addNavigateRule('summaryBubbleReset', () => {
+                    const cf = features.find(f => f.id === 'chapterForge');
+                    if (cf) { cf._hideSummaryBubble(); cf._lastSummary = null; }
+                });
+            },
+            destroy() {
+                unregisterPersistentButton('summarizeButton');
+                document.querySelector('.ytkit-summarize-btn')?.remove();
+                document.getElementById('cf-summary-bubble')?.remove();
+                removeNavigateRule('summaryBubbleReset');
+            }
+        },
+        {
             id: 'autoDownloadOnVisit',
             name: 'Auto-Download Videos',
             description: 'Automatically start download when visiting a video page',
@@ -6941,22 +7032,21 @@
                 };
 
                 // Check on navigation
-                document.addEventListener('yt-navigate-finish', checkAndCreate);
+                addNavigateRule(this.id + '_nav', checkAndCreate);
                 checkAndCreate();
 
                 // Re-apply marks when new content loads
-                const observer = new MutationObserver(() => {
+                addMutationRule(this.id + '_marks', () => {
                     if (window.location.pathname === '/feed/subscriptions') {
                         this._applyQueuedMarks();
                     }
                 });
-                observer.observe(document.body, { childList: true, subtree: true });
-                this._observer = observer;
             },
 
             destroy() {
                 this._styleElement?.remove();
-                this._observer?.disconnect();
+                removeMutationRule(this.id + '_marks');
+                removeNavigateRule(this.id + '_nav');
                 document.querySelector('.ytkit-subs-vlc-btn')?.remove();
                 document.querySelector('.ytkit-subs-clear-btn')?.remove();
                 document.querySelectorAll('.ytkit-queued-badge').forEach(el => el.remove());
@@ -7307,40 +7397,7 @@
             },
 
             _showToast(message) {
-                const toast = document.createElement('div');
-                toast.textContent = message;
-                toast.style.cssText = `
-                    position: fixed;
-                    bottom: 20px;
-                    left: 50%;
-                    transform: translateX(-50%);
-                    background: #22c55e;
-                    color: white;
-                    padding: 12px 24px;
-                    border-radius: 8px;
-                    font-family: "Roboto", Arial, sans-serif;
-                    font-size: 14px;
-                    z-index: 999999;
-                    animation: ytkit-toast-fade 2s ease-out forwards;
-                `;
-
-                // Add animation keyframes if not exists
-                if (!document.getElementById('ytkit-toast-animation')) {
-                    const style = document.createElement('style');
-                    style.id = 'ytkit-toast-animation';
-                    style.textContent = `
-                        @keyframes ytkit-toast-fade {
-                            0% { opacity: 0; transform: translateX(-50%) translateY(20px); }
-                            15% { opacity: 1; transform: translateX(-50%) translateY(0); }
-                            85% { opacity: 1; transform: translateX(-50%) translateY(0); }
-                            100% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
-                        }
-                    `;
-                    document.head.appendChild(style);
-                }
-
-                document.body.appendChild(toast);
-                setTimeout(() => toast.remove(), 2000);
+                showToast(message, '#22c55e');
             },
 
             init() {
@@ -7455,23 +7512,12 @@
                 // Check periodically
                 this._checkInterval = setInterval(dismissPopup, 2000);
 
-                // Also observe for new dialogs
-                this._observer = new MutationObserver((mutations) => {
-                    for (const mutation of mutations) {
-                        if (mutation.addedNodes.length > 0) {
-                            setTimeout(dismissPopup, 100);
-                        }
-                    }
-                });
-
-                this._observer.observe(document.body, {
-                    childList: true,
-                    subtree: true
-                });
+                // Also detect new dialogs via shared observer
+                addMutationRule(this.id, () => setTimeout(dismissPopup, 100));
             },
             destroy() {
                 if (this._checkInterval) clearInterval(this._checkInterval);
-                if (this._observer) this._observer.disconnect();
+                removeMutationRule(this.id);
             }
         },
 
@@ -7682,7 +7728,7 @@
             icon: 'users',
             _lastVideoId: null,
             init() {
-                const applyChannelSettings = async () => {
+                const applyChannelSettings = () => {
                     if (!window.location.pathname.startsWith('/watch')) return;
 
                     const videoId = new URLSearchParams(window.location.search).get('v');
@@ -7692,7 +7738,7 @@
                     const channelId = ChannelSettingsManager.getCurrentChannelId();
                     if (!channelId) return;
 
-                    const settings = await ChannelSettingsManager.getForChannel(channelId);
+                    const settings = ChannelSettingsManager.getForChannel(channelId);
                     if (!settings) return;
 
                     const video = document.querySelector('video');
@@ -7711,7 +7757,7 @@
                 };
 
                 // Save current settings for channel
-                const saveChannelSettings = async () => {
+                const saveChannelSettings = () => {
                     if (!window.location.pathname.startsWith('/watch')) return;
 
                     const channelId = ChannelSettingsManager.getCurrentChannelId();
@@ -7721,7 +7767,7 @@
                     const video = document.querySelector('video');
                     if (!video) return;
 
-                    await ChannelSettingsManager.setForChannel(channelId, {
+                    ChannelSettingsManager.setForChannel(channelId, {
                         name: channelName,
                         playbackSpeed: video.playbackRate,
                         volume: video.volume
@@ -7811,11 +7857,5061 @@
                 this._styleElement?.remove();
             }
         },
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  CHAPTERFORGE — AI Chapter & POI Generation
+        // ═══════════════════════════════════════════════════════════════════
+        {
+            id: 'chapterForge',
+            name: 'ChapterForge',
+            description: 'AI-powered chapter & POI generation for YouTube videos using WebLLM + Whisper transcription + Browser AI',
+            group: 'ChapterForge',
+            icon: 'player',
+            isParent: true,
+
+            // ── Internal state ──
+            _whisperPipeline: null,
+            _browserLLMPipeline: null,
+            _browserLLMModelId: null,
+            _transformersLib: null,
+            _isGenerating: false,
+            _currentVideoId: null,
+            _currentDuration: 0,
+            _chapterData: null,
+            _lastTranscriptSegments: null,
+            _panelEl: null,
+            _activeTab: 'chapters',
+            _searchQuery: '',
+            _searchResults: null,
+            _globalSearchQuery: '',
+            _globalSearchResults: null,
+            _styleElement: null,
+            _resizeObserver: null,
+            _clickHandler: null,
+            _navHandler: null,
+            _barObsHandler: null,
+            _chapterHUDEl: null,
+            _chapterTrackingRAF: null,
+            _lastActiveChapterIdx: -1,
+            _fillerData: null,             // [{time, duration, word, segStart, segEnd}] detected filler words
+            _pauseData: null,              // [{start, end, duration}] detected pauses
+            _autoSkipRAF: null,            // single RAF handle for unified skip loop
+            _autoSkipActive: false,        // whether autoskip is currently running
+            _autoSkipSavedRate: null,      // saved playback rate before silence speedup
+            _lastOllamaModels: null,       // cached list of installed Ollama model names
+            _translatedSummary: null,      // translated summary text
+            _translatedChapters: null,     // translated chapter titles
+            _paceData: null,               // [{start, end, wpm}] speech pace per segment
+            _keywordsPerChapter: null,     // [[keyword,...], ...] per chapter
+            _chatHistory: [],              // [{role:'user'|'assistant', content}] Q&A chat
+            _chatLoading: false,           // chat response in progress
+            _flashcards: null,             // [{q, a}] generated flashcards
+            _flashcardIdx: 0,              // current flashcard index
+            _flashcardFlipped: false,      // whether current card is flipped
+            _flashcardLoading: false,      // flashcard generation in progress
+            _sbChapters: null,             // SponsorBlock community chapters
+            _mindMapData: null,            // mind map outline text
+            _mindMapLoading: false,        // mind map generation in progress
+            _blogLoading: false,           // blog post generation in progress
+
+            _CF_PROVIDERS: {
+                builtin:    { name: 'Built-in (NLP)', endpoint: null, needsKey: false, defaultModel: null },
+                ollama:     { name: 'Local AI (Ollama)', endpoint: 'http://localhost:11434/v1/chat/completions', needsKey: false, defaultModel: 'qwen3:32b' },
+                openai:     { name: 'Web AI - OpenAI', endpoint: 'https://api.openai.com/v1/chat/completions', needsKey: true, defaultModel: 'gpt-4o' },
+                openrouter: { name: 'Web AI - OpenRouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', needsKey: true, defaultModel: 'qwen/qwen3-32b' },
+                custom:     { name: 'Web AI - Custom', endpoint: '', needsKey: false, defaultModel: '' },
+            },
+
+
+
+            _CF_CACHE_PREFIX: 'cf_cache_',
+            _CF_TRANSCRIPT_PREFIX: 'cf_tx_',
+            _CF_NOTES_PREFIX: 'cf_notes_',
+            // Distinct, high-contrast chapter colors — each clearly identifiable
+            _CF_COLORS: ['#7c3aed', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#06b6d4'],
+            // Readable foreground for each color
+            _CF_COLORS_FG: ['#e0d4fc', '#cceeff', '#c6f7e2', '#fef3c7', '#fecaca', '#fce7f3', '#ddd6fe', '#cffafe'],
+
+            _CF_SUMMARY_STYLES: {
+                paragraph: { name: 'Paragraph', prompt: null },
+                timestamped: { name: 'Timestamped', prompt: null },
+                takeaways: { name: 'Key Takeaways', prompt: `ROLE: Video analyst. Extract the most important insights.\n\nTASK: List 5-10 key takeaways from this video transcript.\n\nCONSTRAINTS:\n- Each takeaway is one clear sentence starting with a bullet dash (-)\n- Focus on actionable insights, surprising facts, or core arguments\n- Order from most to least important\n- No timestamps, headers, preamble, or commentary\n- Output ONLY the bullet list. Nothing before. Nothing after.` },
+                bullets: { name: 'Bullet Points', prompt: `ROLE: Video summarizer.\n\nTASK: Summarize this video as a concise bullet-point list.\n\nCONSTRAINTS:\n- Write 6-12 bullet points using dash (-) prefix\n- Each bullet is one sentence covering a distinct topic from the video\n- Cover topics in chronological order\n- No timestamps, headers, preamble, or commentary\n- Output ONLY the bullet list. Nothing before. Nothing after.` },
+                studynotes: { name: 'Study Notes', prompt: `ROLE: Educational note-taker.\n\nTASK: Create structured study notes from this video transcript.\n\nCONSTRAINTS:\n- Start with a one-sentence TOPIC line\n- Group content into 3-5 sections with bold **Section Title** headers\n- Under each section, write 2-4 concise bullet points (dash prefix)\n- Include key terms, definitions, and examples mentioned\n- End with a "KEY TERMS:" line listing important vocabulary (comma-separated)\n- No timestamps, preamble, or commentary\n- Output ONLY the study notes. Nothing before. Nothing after.` },
+                actionitems: { name: 'Action Items', prompt: `ROLE: Productivity assistant.\n\nTASK: Extract all actionable items, recommendations, and steps from this video.\n\nCONSTRAINTS:\n- List each action item as a checkbox line: [ ] Action description\n- Only include concrete, actionable recommendations the speaker makes\n- If the video has no actionable content, output: "No action items found in this video."\n- Order by sequence of appearance\n- No timestamps, headers, preamble, or commentary\n- Output ONLY the action items. Nothing before. Nothing after.` },
+                blog: { name: 'Blog Post', prompt: `ROLE: Blog writer converting video content into a polished article.\n\nTASK: Transform this video transcript into a well-structured blog post.\n\nCONSTRAINTS:\n- Start with a compelling one-sentence hook (no "In this video" openings)\n- Use 3-5 bold **Section Headers** to organize the content\n- Write 2-4 sentences per section in engaging, readable prose\n- Preserve the speaker's key arguments, examples, and data points\n- End with a brief conclusion or takeaway paragraph\n- Write in third person ("the presenter explains..." not "I")\n- Total length: 400-800 words\n- No timestamps, no bullet points, no disclaimers\n- Output ONLY the blog post. Nothing before. Nothing after.` },
+            },
+
+            // ── Debug logging ──
+
+            _log(...args) {
+                if (appState.settings?.cfDebugLog) console.log('[ChapterForge]', ...args);
+            },
+            _warn(...args) {
+                console.warn('[ChapterForge]', ...args);
+            },
+            _esc(str) {
+                if (!str) return '';
+                return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            },
+
+            // ── Helpers ──
+            _getVideoId() { return new URLSearchParams(window.location.search).get('v'); },
+            _formatTime(seconds) {
+                const s = Math.floor(seconds); const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60); const sec = s % 60;
+                if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+                return `${m}:${String(sec).padStart(2,'0')}`;
+            },
+            _seekTo(seconds) { const v = document.querySelector('video.html5-main-video'); if (v) v.currentTime = seconds; },
+            _getVideoDuration() { const v = document.querySelector('video.html5-main-video'); return v ? v.duration : 0; },
+            _getCachedData(videoId) { try { const raw = localStorage.getItem(this._CF_CACHE_PREFIX + videoId); return raw ? JSON.parse(raw) : null; } catch { return null; } },
+            _setCachedData(videoId, data) {
+                try { localStorage.setItem(this._CF_CACHE_PREFIX + videoId, JSON.stringify(data)); } catch(e) {
+                    const keys = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(this._CF_CACHE_PREFIX)) keys.push(k); }
+                    if (keys.length > 20) { keys.slice(0, 5).forEach(k => localStorage.removeItem(k)); try { localStorage.setItem(this._CF_CACHE_PREFIX + videoId, JSON.stringify(data)); } catch(e2) {} }
+                }
+            },
+            _countCache() { let c = 0; for (let i = 0; i < localStorage.length; i++) { if (localStorage.key(i).startsWith(this._CF_CACHE_PREFIX)) c++; } return c; },
+            _clearCache() { const keys = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(this._CF_CACHE_PREFIX)) keys.push(k); } keys.forEach(k => localStorage.removeItem(k)); },
+
+            // ═══ TRANSCRIPT CACHE (for cross-video search) ═══
+            _cacheTranscript(videoId, segments, title) {
+                try {
+                    const compact = segments.map(s => ({ s: Math.round(s.start), t: s.text }));
+                    localStorage.setItem(this._CF_TRANSCRIPT_PREFIX + videoId, JSON.stringify({ title: title || videoId, segments: compact }));
+                } catch(e) {
+                    const keys = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(this._CF_TRANSCRIPT_PREFIX)) keys.push(k); }
+                    if (keys.length > 30) { keys.slice(0, 10).forEach(k => localStorage.removeItem(k)); try { localStorage.setItem(this._CF_TRANSCRIPT_PREFIX + videoId, JSON.stringify({ title: title || videoId, segments: segments.map(s => ({ s: Math.round(s.start), t: s.text })) })); } catch(e2) {} }
+                }
+            },
+            _getCachedTranscript(videoId) { try { const raw = localStorage.getItem(this._CF_TRANSCRIPT_PREFIX + videoId); return raw ? JSON.parse(raw) : null; } catch { return null; } },
+            _countTranscriptCache() { let c = 0; for (let i = 0; i < localStorage.length; i++) { if (localStorage.key(i).startsWith(this._CF_TRANSCRIPT_PREFIX)) c++; } return c; },
+
+            // ═══ NOTES STORAGE ═══
+            _getNotes(videoId) { try { const raw = localStorage.getItem(this._CF_NOTES_PREFIX + videoId); return raw ? JSON.parse(raw) : []; } catch { return []; } },
+            _setNotes(videoId, notes) { try { localStorage.setItem(this._CF_NOTES_PREFIX + videoId, JSON.stringify(notes)); } catch(e) {} },
+            _addNote(videoId, time, text) {
+                const notes = this._getNotes(videoId);
+                notes.push({ time: Math.round(time), text, ts: Date.now() });
+                notes.sort((a, b) => a.time - b.time);
+                this._setNotes(videoId, notes);
+            },
+            _removeNote(videoId, index) {
+                const notes = this._getNotes(videoId);
+                notes.splice(index, 1);
+                this._setNotes(videoId, notes);
+            },
+
+            // ═══ SEARCH WITHIN VIDEO ═══
+            _searchTranscript(query) {
+                if (!this._lastTranscriptSegments?.length || !query?.trim()) return [];
+                const q = query.toLowerCase().trim();
+                const results = [];
+                for (const seg of this._lastTranscriptSegments) {
+                    const idx = seg.text.toLowerCase().indexOf(q);
+                    if (idx !== -1) {
+                        results.push({ time: seg.start, text: seg.text, matchIdx: idx });
+                    }
+                }
+                return results;
+            },
+
+            // ═══ CROSS-VIDEO TRANSCRIPT SEARCH ═══
+            _searchAllTranscripts(query) {
+                if (!query?.trim()) return [];
+                const q = query.toLowerCase().trim();
+                const results = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (!key.startsWith(this._CF_TRANSCRIPT_PREFIX)) continue;
+                    const videoId = key.slice(this._CF_TRANSCRIPT_PREFIX.length);
+                    try {
+                        const data = JSON.parse(localStorage.getItem(key));
+                        if (!data?.segments) continue;
+                        const matches = [];
+                        for (const seg of data.segments) {
+                            if (seg.t.toLowerCase().includes(q)) {
+                                matches.push({ time: seg.s, text: seg.t });
+                            }
+                        }
+                        if (matches.length) results.push({ videoId, title: data.title || videoId, matches });
+                    } catch(e) {}
+                }
+                return results;
+            },
+
+            // ═══ VIDEO SUMMARY ═══
+            async _generateSummary(showBubble) {
+                const videoId = this._getVideoId();
+                if (!videoId) { this._log('Summary: no videoId'); return null; }
+                const btn = document.getElementById('cf-summary-btn');
+                const actionBtn = document.querySelector('.ytkit-summarize-btn');
+                const _resetButtons = () => {
+                    if (btn) { btn.disabled = false; btn.textContent = 'Summarize'; }
+                    if (actionBtn) { actionBtn.disabled = false; actionBtn.style.opacity = '1'; }
+                };
+                if (btn) { btn.disabled = true; btn.textContent = 'Generating...'; }
+                if (actionBtn) { actionBtn.disabled = true; actionBtn.style.opacity = '0.6'; }
+                this._updateStatus('Summarizing...', 'loading', 20);
+
+                try {
+                let segments = this._lastTranscriptSegments;
+                if (!segments?.length) {
+                    this._log('Summary: fetching transcript...');
+                    segments = await this._fetchTranscript(videoId, (m, s, p) => this._updateStatus(m, s, p));
+                    if (segments?.length) this._lastTranscriptSegments = segments;
+                }
+                if (!segments?.length) {
+                    _resetButtons();
+                    this._updateStatus('No transcript', 'error', 0);
+                    showToast('No transcript available', '#ef4444');
+                    return null;
+                }
+                this._log('Summary: got', segments.length, 'segments, provider:', appState.settings.cfLlmProvider || 'builtin');
+
+                const provider = appState.settings.cfLlmProvider || 'builtin';
+                const summaryMode = appState.settings.cfSummaryMode || 'paragraph';
+                let summary;
+
+                // ── System prompts ──
+                const paragraphPrompt = `ROLE: Video summarizer. You write concise, readable summaries.
+
+TASK: Write a clear summary of this video transcript in 3-6 sentences as flowing prose.
+
+CONSTRAINTS:
+- Write in plain paragraphs with NO timestamps, NO bullet points, NO headers, NO formatting
+- Start with what the video is about, then cover the key points
+- Use clear, direct language — no filler phrases like "In this video" or "The speaker goes on to"
+- Do NOT add opinions, disclaimers, fact-checks, or commentary
+- Report claims neutrally: "X explains that..." not "X controversially claims..."
+- Output ONLY the summary paragraph(s). Nothing before. Nothing after.`;
+
+                const timestampedPrompt = `ROLE: Transcript indexer. You extract timestamps and topics from transcripts. You are a machine that outputs structured data. You have no opinions.
+
+TASK: Read the transcript. Output ONLY this format:
+
+TOPIC: [1 sentence: who is speaking and what subject they discuss]
+
+[MM:SS] Speaker discusses [topic]
+[MM:SS] Speaker mentions [topic]
+[MM:SS] Speaker claims [topic]
+
+REFS: [comma list of proper nouns mentioned]
+
+CONSTRAINTS:
+- Output NOTHING before TOPIC and NOTHING after REFS
+- Every line between TOPIC and REFS must begin with a [MM:SS] timestamp from the transcript
+- Use ONLY the verbs: discusses, mentions, claims, describes, states, explains, references, lists, compares, asks
+- Write 5-10 timestamp lines
+- Bold proper nouns with **double asterisks**
+- NEVER add disclaimers, warnings, evaluations, context, fact-checks, or commentary
+- Your output must be a neutral index. Nothing more.`;
+
+                // Allow user override, otherwise use mode-based prompt
+                const stylePreset = this._CF_SUMMARY_STYLES[summaryMode];
+                const presetPrompt = stylePreset?.prompt || (summaryMode === 'timestamped' ? timestampedPrompt : paragraphPrompt);
+                // Apply length modifier
+                const lengthSetting = appState.settings.cfSummaryLength || 'standard';
+                const lengthMod = { brief: '\n\nLENGTH: Keep it very brief — 2-3 sentences or 3-5 bullet points max.', detailed: '\n\nLENGTH: Be thorough — 8-12 sentences or 10-15 bullet points, covering all major topics discussed.' };
+                const basePrompt = presetPrompt + (lengthMod[lengthSetting] || '');
+                const effectivePrompt = appState.settings.cfCustomSummaryPrompt || basePrompt;
+
+                // Post-process: strip any preamble/disclaimer the model adds despite instructions
+                const _stripEditorializing = (text) => {
+                    if (!text) return text;
+                    let lines = text.split('\n');
+                    if (summaryMode === 'timestamped') {
+                        const topicIdx = lines.findIndex(l => /^TOPIC:/i.test(l.trim()));
+                        if (topicIdx > 0) lines = lines.slice(topicIdx);
+                        const refsIdx = lines.findIndex(l => /^REFS:/i.test(l.trim()) || /^NAMES\/REFS:/i.test(l.trim()));
+                        if (refsIdx >= 0) lines = lines.slice(0, refsIdx + 1);
+                    }
+                    const banPatterns = [
+                        /^(it'?s |note:|disclaimer:|important|please |remember |keep in mind|here are|this (is|view|transcript)|consider |be (wary|careful)|crucial|fascinating|controversial|\*\*it)/i,
+                        /critical thinking|healthy skepticism|multiple sources|fact.?check|mainstream support|lacks.*evidence|important to note/i,
+                        /^(in this video|in this transcript|the video|the speaker|this content)/i,
+                    ];
+                    lines = lines.filter(l => {
+                        const t = l.trim();
+                        if (!t) return true;
+                        return !banPatterns.some(p => p.test(t));
+                    });
+                    return lines.join('\n').trim();
+                };
+
+                // TextRank extractive fallback (used by builtin + as error fallback)
+                const _extractiveSummary = (segs) => {
+                    try {
+                    const allText = segs.map(s => s.text).join(' ');
+                    const rawSentences = allText.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 25 && s.trim().length < 300);
+                    if (rawSentences.length < 3) return allText.slice(0, 500);
+                    const ranked = this._nlpTextRank(rawSentences, Math.min(6, Math.ceil(rawSentences.length * 0.15)));
+                    return ranked.map(r => r.text.trim()).join(' ');
+                    } catch(e) { this._warn('Extractive summary error:', e); return segs.map(s => s.text).join(' ').slice(0, 500); }
+                };
+
+                if (provider === 'builtin') {
+                    this._log('Summary: using builtin TextRank');
+                    summary = _extractiveSummary(segments);
+                    if (summary.length > 800) summary = summary.slice(0, 797) + '...';
+                } else {
+                    try {
+                        const isLocal = this._isLocalProvider();
+                        const txLimit = isLocal ? 200000 : 30000;
+                        const transcriptText = this._buildTranscriptText(segments, txLimit);
+                        const vidTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || '';
+                        const durationMin = Math.ceil((this._getVideoDuration() || 0) / 60);
+                        this._updateStatus(isLocal ? `Summarizing full transcript locally (${Math.round(transcriptText.length/1000)}K chars)...` : 'Summarizing via API...', 'loading', 50);
+                        const userMsg = summaryMode === 'timestamped'
+                            ? `INDEX THIS TRANSCRIPT. Output TOPIC, timestamped lines, and REFS. Nothing else.\n\nVideo: ${durationMin} minutes${vidTitle ? ', "' + vidTitle + '"' : ''}\n\n${transcriptText}`
+                            : `Process this ${durationMin}-minute video${vidTitle ? ' titled "' + vidTitle + '"' : ''} transcript as instructed.\n\n${transcriptText}`;
+                        this._log('Summary: calling LLM API, mode:', summaryMode, 'prompt:', transcriptText.length, 'chars');
+                        const rawText = await this._callLlmApi(effectivePrompt, userMsg, null);
+                        this._log('Summary: got response,', rawText?.length, 'chars');
+                        summary = (appState.settings.cfCustomSummaryPrompt || stylePreset?.prompt) ? rawText?.trim() : _stripEditorializing(rawText?.trim());
+                    } catch(e) {
+                        this._warn('Summary API error, falling back to extractive:', e.message);
+                        summary = _extractiveSummary(segments);
+                    }
+                }
+
+                this._lastSummary = summary;
+                this._log('Summary: done,', summary?.length, 'chars');
+                this._updateStatus('Done', 'ready', 100);
+                _resetButtons();
+                this._renderPanel();
+                if (showBubble && summary) this._showSummaryBubble(summary);
+                return summary;
+
+                } catch(outerErr) {
+                    this._warn('Summary unexpected error:', outerErr);
+                    showToast('Summary failed: ' + (outerErr.message || 'unknown error'), '#ef4444');
+                    _resetButtons();
+                    this._updateStatus('Summary error', 'error', 0);
+                    return null;
+                }
+            },
+
+            _formatSummaryHTML(text) {
+                if (!text) return '';
+                let html = text
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*(.+?)\*/g, '<em>$1</em>');
+                // Style TOPIC: and REFS: headers
+                html = html.replace(/^TOPIC:\s*/gm, '<span class="cf-bubble-label">TOPIC</span> ');
+                html = html.replace(/^(REFS|NAMES\/REFS):\s*/gm, '<span class="cf-bubble-label">REFS</span> ');
+                html = html.replace(/^OUTLINE:\s*$/gm, '');
+                // Convert [MM:SS] or [H:MM:SS] timestamps to clickable links
+                html = html.replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (match, ts) => {
+                    const parts = ts.split(':').map(Number);
+                    let seconds = 0;
+                    if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+                    else seconds = parts[0] * 60 + parts[1];
+                    return `<a class="cf-bubble-ts" data-cf-seek="${seconds}">[${ts}]</a>`;
+                });
+                // Convert markdown-style lists (- item) to styled lines
+                html = html.replace(/^- /gm, '<span class="cf-bubble-bullet"></span>');
+                // Line breaks, collapse multiple blanks
+                html = html.replace(/\n{3,}/g, '\n\n').replace(/\n/g, '<br>');
+                return html;
+            },
+
+            _showSummaryBubble(summary) {
+                this._hideSummaryBubble();
+                const player = document.getElementById('movie_player');
+                if (!player) return;
+
+                const bubble = document.createElement('div');
+                bubble.id = 'cf-summary-bubble';
+                const providerLabel = this._CF_PROVIDERS[appState.settings.cfLlmProvider || 'builtin']?.name || 'Built-in';
+
+                const headerHTML = `<div class="cf-bubble-header">
+                    <div class="cf-bubble-title-row">
+                        <div class="cf-bubble-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
+                        <span class="cf-bubble-title">TL;DR</span>
+                        <span class="cf-bubble-provider">${providerLabel}</span>
+                    </div>
+                    <div class="cf-bubble-actions">
+                        <button class="cf-bubble-btn" id="cf-bubble-copy" title="Copy"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                        <button class="cf-bubble-btn cf-bubble-close-btn" id="cf-bubble-close" title="Close"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                    </div>
+                </div>`;
+
+                const bodyHTML = `<div class="cf-bubble-body">${this._formatSummaryHTML(summary)}</div>`;
+
+                TrustedHTML.setHTML(bubble, headerHTML + bodyHTML);
+
+                bubble.querySelector('#cf-bubble-close')?.addEventListener('click', () => this._hideSummaryBubble());
+                bubble.querySelector('#cf-bubble-copy')?.addEventListener('click', () => {
+                    navigator.clipboard.writeText(summary);
+                    const btn = bubble.querySelector('#cf-bubble-copy');
+                    if (btn) { TrustedHTML.setHTML(btn, '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>'); setTimeout(() => { TrustedHTML.setHTML(btn, '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'); }, 1500); }
+                });
+                // Clickable timestamps seek the video
+                bubble.querySelectorAll('.cf-bubble-ts').forEach(ts => {
+                    ts.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const seconds = parseInt(ts.dataset.cfSeek, 10);
+                        if (!isNaN(seconds)) {
+                            const video = document.querySelector('video.html5-main-video');
+                            if (video) video.currentTime = seconds;
+                        }
+                    });
+                });
+
+                // Escape key closes
+                bubble._keyHandler = (e) => { if (e.key === 'Escape') this._hideSummaryBubble(); };
+                document.addEventListener('keydown', bubble._keyHandler);
+
+                // Close on click outside
+                bubble._outsideClick = (e) => { if (!bubble.contains(e.target) && !e.target.closest('.ytkit-summarize-btn')) this._hideSummaryBubble(); };
+                setTimeout(() => document.addEventListener('click', bubble._outsideClick), 200);
+
+                // Overlay on the player
+                player.style.position = 'relative';
+                player.appendChild(bubble);
+
+                // Animate in
+                requestAnimationFrame(() => { bubble.classList.add('cf-bubble-visible'); });
+            },
+
+            _hideSummaryBubble() {
+                const existing = document.getElementById('cf-summary-bubble');
+                if (existing) {
+                    if (existing._outsideClick) document.removeEventListener('click', existing._outsideClick);
+                    if (existing._keyHandler) document.removeEventListener('keydown', existing._keyHandler);
+                    existing.classList.remove('cf-bubble-visible');
+                    existing.classList.add('cf-bubble-hiding');
+                    setTimeout(() => existing.remove(), 250);
+                }
+            },
+            _lastSummary: null,
+
+            // ═══ EXPORT CHAPTERS ═══
+            _exportChaptersYouTube() {
+                if (!this._chapterData?.chapters?.length) return;
+                const lines = this._chapterData.chapters.map(ch => `${this._formatTime(ch.start)} ${ch.title}`);
+                navigator.clipboard.writeText(lines.join('\n'));
+            },
+            _exportChaptersJSON() {
+                if (!this._chapterData) return;
+                const blob = new Blob([JSON.stringify(this._chapterData, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = `chapters_${this._getVideoId()}.json`;
+                document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+            },
+
+            // ═══ SMART CLIP LINKS ═══
+            _copyClipLink(startTime, endTime) {
+                const videoId = this._getVideoId();
+                if (!videoId) return;
+                let url = `https://youtu.be/${videoId}?t=${Math.round(startTime)}`;
+                if (endTime) url = `https://youtube.com/clip/${videoId}?t=${Math.round(startTime)}&end=${Math.round(endTime)}`;
+                navigator.clipboard.writeText(url);
+            },
+
+            // ═══ Q&A CHAT ═══
+            async _sendChatMessage(question) {
+                if (!question?.trim() || this._chatLoading) return;
+                const provider = appState.settings.cfLlmProvider || 'builtin';
+                if (provider === 'builtin') { showToast('Q&A Chat requires an AI provider (Ollama, OpenAI, etc.)', '#f59e0b'); return; }
+
+                this._chatHistory.push({ role: 'user', content: question.trim() });
+                this._chatLoading = true;
+                this._renderPanel();
+
+                try {
+                    let segments = this._lastTranscriptSegments;
+                    if (!segments?.length) {
+                        segments = await this._fetchTranscript(this._getVideoId(), null);
+                        if (segments?.length) this._lastTranscriptSegments = segments;
+                    }
+                    if (!segments?.length) throw new Error('No transcript available');
+
+                    const isLocal = this._isLocalProvider();
+                    const txLimit = isLocal ? 200000 : 30000;
+                    const transcriptText = this._buildTranscriptText(segments, txLimit);
+                    const vidTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || '';
+
+                    const systemPrompt = `You are a helpful assistant answering questions about a YouTube video. Use ONLY the transcript provided to answer. If the answer isn't in the transcript, say so. Be concise and direct. When referencing specific moments, include timestamps in [MM:SS] format.`;
+
+                    // Build conversation context (last 6 messages max for context window)
+                    const recentHistory = this._chatHistory.slice(-7, -1);
+                    let userMsg = `Video: "${vidTitle}"\n\nTranscript:\n${transcriptText}\n\n`;
+                    if (recentHistory.length > 0) {
+                        userMsg += `Previous conversation:\n`;
+                        recentHistory.forEach(m => { userMsg += `${m.role === 'user' ? 'Q' : 'A'}: ${m.content}\n`; });
+                        userMsg += `\n`;
+                    }
+                    userMsg += `Question: ${question.trim()}`;
+
+                    const response = await this._callLlmApi(systemPrompt, userMsg, null);
+                    this._chatHistory.push({ role: 'assistant', content: response.trim() });
+                } catch (e) {
+                    this._warn('Chat error:', e);
+                    this._chatHistory.push({ role: 'assistant', content: `Error: ${e.message}` });
+                }
+                this._chatLoading = false;
+                this._renderPanel();
+                // Scroll chat to bottom
+                setTimeout(() => {
+                    const chatBox = this._panelEl?.querySelector('.cf-chat-messages');
+                    if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+                }, 60);
+            },
+
+            // ═══ FLASHCARD GENERATION ═══
+            async _generateFlashcards() {
+                const provider = appState.settings.cfLlmProvider || 'builtin';
+                if (provider === 'builtin') { showToast('Flashcards require an AI provider (Ollama, OpenAI, etc.)', '#f59e0b'); return; }
+                if (this._flashcardLoading) return;
+                this._flashcardLoading = true;
+                this._renderPanel();
+
+                try {
+                    let segments = this._lastTranscriptSegments;
+                    if (!segments?.length) {
+                        segments = await this._fetchTranscript(this._getVideoId(), null);
+                        if (segments?.length) this._lastTranscriptSegments = segments;
+                    }
+                    if (!segments?.length) throw new Error('No transcript available');
+
+                    const isLocal = this._isLocalProvider();
+                    const txLimit = isLocal ? 200000 : 30000;
+                    const transcriptText = this._buildTranscriptText(segments, txLimit);
+                    const vidTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || '';
+
+                    const systemPrompt = `ROLE: Educational flashcard generator.
+
+TASK: Generate 8-15 study flashcards from this video transcript.
+
+OUTPUT FORMAT: Output ONLY valid JSON — an array of objects with "q" (question) and "a" (answer) keys.
+Example: [{"q":"What is X?","a":"X is..."},{"q":"How does Y work?","a":"Y works by..."}]
+
+CONSTRAINTS:
+- Questions should test understanding of key concepts, facts, and processes discussed
+- Answers should be concise (1-3 sentences max)
+- Cover different topics from throughout the video
+- Include a mix of: definitions, cause/effect, comparisons, and application questions
+- Do NOT include timestamps
+- Output ONLY the JSON array. No markdown fences, no preamble, no commentary.`;
+
+                    const userMsg = `Generate study flashcards for this video${vidTitle ? ' titled "' + vidTitle + '"' : ''}.\n\n${transcriptText}`;
+                    const rawText = await this._callLlmApi(systemPrompt, userMsg, null);
+
+                    // Parse JSON — strip markdown fences if present
+                    const cleaned = rawText.replace(/```(?:json)?\s*/g, '').replace(/```\s*$/g, '').trim();
+                    const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+                    if (!jsonMatch) throw new Error('LLM did not return valid JSON');
+                    const cards = JSON.parse(jsonMatch[0]);
+                    if (!Array.isArray(cards) || !cards.length || !cards[0].q) throw new Error('Invalid flashcard format');
+
+                    this._flashcards = cards;
+                    this._flashcardIdx = 0;
+                    this._flashcardFlipped = false;
+                    showToast(`Generated ${cards.length} flashcards`, '#10b981');
+                } catch (e) {
+                    this._warn('Flashcard error:', e);
+                    showToast('Flashcard generation failed: ' + e.message, '#ef4444');
+                }
+                this._flashcardLoading = false;
+                this._renderPanel();
+            },
+
+            _exportFlashcardsAnki() {
+                if (!this._flashcards?.length) return;
+                const lines = this._flashcards.map(c => `${c.q}\t${c.a}`);
+                const blob = new Blob([lines.join('\n')], { type: 'text/tab-separated-values' });
+                const url = URL.createObjectURL(blob);
+                const title = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim()?.replace(/[^\w\s-]/g, '').slice(0, 50) || this._getVideoId();
+                const a = document.createElement('a'); a.href = url; a.download = `flashcards_${title}.tsv`;
+                document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                showToast('Exported as TSV (Anki/Quizlet)', '#10b981');
+            },
+
+            // ═══ MIND MAP GENERATION ═══
+            async _generateMindMap() {
+                const provider = appState.settings.cfLlmProvider || 'builtin';
+                if (provider === 'builtin') { showToast('Mind Map requires an AI provider (Ollama, OpenAI, etc.)', '#f59e0b'); return; }
+                if (this._mindMapLoading) return;
+                this._mindMapLoading = true;
+                this._renderPanel();
+
+                try {
+                    let segments = this._lastTranscriptSegments;
+                    if (!segments?.length) {
+                        segments = await this._fetchTranscript(this._getVideoId(), null);
+                        if (segments?.length) this._lastTranscriptSegments = segments;
+                    }
+                    if (!segments?.length) throw new Error('No transcript available');
+
+                    const isLocal = this._isLocalProvider();
+                    const txLimit = isLocal ? 200000 : 30000;
+                    const transcriptText = this._buildTranscriptText(segments, txLimit);
+                    const vidTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || '';
+
+                    const systemPrompt = `ROLE: Content outline generator.
+
+TASK: Create a hierarchical mind map outline of this video's content.
+
+OUTPUT FORMAT: Use indented text with these markers:
+# Main Topic (the video's central subject)
+## Major Section 1
+  - Key point
+  - Key point
+    - Sub-detail
+## Major Section 2
+  - Key point
+  - Key point
+
+CONSTRAINTS:
+- 3-6 major sections (##) covering distinct topics
+- 2-5 key points (-) per section
+- Sub-details only when genuinely important
+- Keep each line under 60 characters
+- No timestamps, no preamble, no commentary
+- Start with exactly one # line for the video's central topic
+- Output ONLY the outline. Nothing before. Nothing after.`;
+
+                    const userMsg = `Generate a mind map outline for this video${vidTitle ? ' titled "' + vidTitle + '"' : ''}.\n\n${transcriptText}`;
+                    const rawText = await this._callLlmApi(systemPrompt, userMsg, null);
+                    this._mindMapData = rawText?.trim();
+                    showToast('Mind map generated', '#10b981');
+                } catch (e) {
+                    this._warn('Mind map error:', e);
+                    showToast('Mind map failed: ' + e.message, '#ef4444');
+                }
+                this._mindMapLoading = false;
+                this._renderPanel();
+            },
+
+            _exportMindMapMermaid() {
+                if (!this._mindMapData) return;
+                const lines = this._mindMapData.split('\n').filter(l => l.trim());
+                let mermaid = 'mindmap\n';
+                lines.forEach(line => {
+                    const stripped = line.replace(/^#+\s*/, '').replace(/^-\s*/, '').trim();
+                    if (!stripped) return;
+                    if (line.match(/^#\s/)) mermaid += `  root((${stripped}))\n`;
+                    else if (line.match(/^##\s/)) mermaid += `    ${stripped}\n`;
+                    else if (line.match(/^\s{4,}-/)) mermaid += `        ${stripped}\n`;
+                    else if (line.match(/^\s*-/)) mermaid += `      ${stripped}\n`;
+                });
+                navigator.clipboard.writeText(mermaid);
+                showToast('Mermaid mind map copied to clipboard', '#10b981');
+            },
+
+            _exportBlogMarkdown() {
+                if (!this._lastSummary) { showToast('Generate a Blog Post summary first', '#f59e0b'); return; }
+                const vidTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || 'Untitled Video';
+                const videoId = this._getVideoId();
+                const url = videoId ? `https://www.youtube.com/watch?v=${videoId}` : '';
+                const md = `# ${vidTitle}\n\n${this._lastSummary}\n\n---\n*Source: [${vidTitle}](${url})*\n`;
+                const blob = new Blob([md], { type: 'text/markdown' });
+                const dlUrl = URL.createObjectURL(blob);
+                const safeName = vidTitle.replace(/[^\w\s-]/g, '').slice(0, 50).trim();
+                const a = document.createElement('a'); a.href = dlUrl; a.download = `${safeName}.md`;
+                document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(dlUrl);
+                showToast('Blog post exported as Markdown', '#10b981');
+            },
+
+            // ═══ CUSTOM PROMPT LIBRARY ═══
+            _getSavedPrompts() {
+                try { return JSON.parse(GM_getValue('cf_prompt_library', '[]')); } catch { return []; }
+            },
+            _savePrompt(name, prompt) {
+                const library = this._getSavedPrompts();
+                const existing = library.findIndex(p => p.name === name);
+                if (existing >= 0) library[existing].prompt = prompt;
+                else library.push({ name, prompt });
+                GM_setValue('cf_prompt_library', JSON.stringify(library));
+                showToast(`Prompt "${name}" saved`, '#10b981');
+            },
+            _deletePrompt(name) {
+                const library = this._getSavedPrompts().filter(p => p.name !== name);
+                GM_setValue('cf_prompt_library', JSON.stringify(library));
+                showToast(`Prompt "${name}" deleted`, '#10b981');
+            },
+            _loadPrompt(name) {
+                const prompt = this._getSavedPrompts().find(p => p.name === name);
+                if (prompt) {
+                    appState.settings.cfCustomSummaryPrompt = prompt.prompt;
+                    settingsManager.save(appState.settings);
+                    showToast(`Loaded prompt: "${name}"`, '#10b981');
+                }
+            },
+
+            // ═══ SPONSORBLOCK CHAPTER IMPORT ═══
+            async _importSBChapters() {
+                const videoId = this._getVideoId();
+                if (!videoId) return;
+                try {
+                    const data = await new Promise((resolve, reject) => {
+                        GM_xmlhttpRequest({
+                            method: 'GET',
+                            url: `https://sponsor.ajay.app/api/skipSegments?videoID=${videoId}&categories=["chapter"]`,
+                            headers: { 'Accept': 'application/json' },
+                            timeout: 10000,
+                            onload: (r) => {
+                                if (r.status === 200) { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(new Error('Invalid JSON')); } }
+                                else if (r.status === 404) resolve(null);
+                                else reject(new Error(`HTTP ${r.status}`));
+                            },
+                            onerror: () => reject(new Error('Network error')),
+                            ontimeout: () => reject(new Error('Timeout'))
+                        });
+                    });
+                    if (!data || !data.length) {
+                        showToast('No SponsorBlock chapters found for this video', '#f59e0b');
+                        this._sbChapters = [];
+                        return;
+                    }
+                    // Convert SB format to CF chapter format
+                    const chapters = data
+                        .filter(s => s.actionType === 'chapter')
+                        .sort((a, b) => a.segment[0] - b.segment[0])
+                        .map(s => ({ start: s.segment[0], end: s.segment[1], title: s.description || 'Chapter' }));
+                    if (!chapters.length) {
+                        showToast('No SponsorBlock chapters found', '#f59e0b');
+                        this._sbChapters = [];
+                        return;
+                    }
+                    this._sbChapters = chapters;
+                    showToast(`Imported ${chapters.length} SponsorBlock chapters`, '#10b981');
+                    this._renderPanel();
+                } catch (e) {
+                    this._warn('SponsorBlock import error:', e);
+                    showToast('SponsorBlock: ' + e.message, '#ef4444');
+                }
+            },
+
+            _applySBChapters() {
+                if (!this._sbChapters?.length) return;
+                this._chapterData = { chapters: this._sbChapters.map(c => ({ ...c })), pois: [] };
+                this._renderProgressBarOverlay();
+                this._startChapterTracking();
+                this._renderPanel();
+                showToast('Applied SponsorBlock chapters', '#10b981');
+            },
+
+            // ═══ CHAPTER-AWARE SPEED CONTROL ═══
+            _speedControlActive: false,
+            _speedControlRAF: null,
+            _speedSettings: { introSpeed: 2, outroSpeed: 2, normalSpeed: 1, skipChapters: {} },
+
+            _toggleSpeedControl() {
+                this._speedControlActive = !this._speedControlActive;
+                appState.settings.cfSpeedControl = this._speedControlActive;
+                settingsManager.save(appState.settings);
+                if (this._speedControlActive) this._startSpeedControl();
+                else this._stopSpeedControl();
+            },
+            _startSpeedControl() {
+                if (this._speedControlRAF) return;
+                const check = () => {
+                    if (!this._speedControlActive) return;
+                    const video = document.querySelector('video.html5-main-video, video');
+                    if (video && this._chapterData?.chapters?.length >= 2 && !video.paused) {
+                        const ct = video.currentTime;
+                        const chapters = this._chapterData.chapters;
+                        const currentChapter = chapters.findIndex((ch, i) => ct >= ch.start && (i === chapters.length - 1 || ct < chapters[i + 1].start));
+
+                        let targetSpeed = this._speedSettings.normalSpeed;
+
+                        if (currentChapter >= 0 && this._speedSettings.skipChapters[currentChapter]) {
+                            const nextChapter = chapters[currentChapter + 1];
+                            if (nextChapter) { video.currentTime = nextChapter.start; }
+                        } else if (currentChapter === 0) {
+                            targetSpeed = this._speedSettings.introSpeed;
+                        } else if (currentChapter === chapters.length - 1) {
+                            targetSpeed = this._speedSettings.outroSpeed;
+                        }
+
+                        if (Math.abs(video.playbackRate - targetSpeed) > 0.01) {
+                            video.playbackRate = targetSpeed;
+                        }
+                    }
+                    this._speedControlRAF = requestAnimationFrame(check);
+                };
+                this._speedControlRAF = requestAnimationFrame(check);
+            },
+            _stopSpeedControl() {
+                if (this._speedControlRAF) { cancelAnimationFrame(this._speedControlRAF); this._speedControlRAF = null; }
+                const video = document.querySelector('video.html5-main-video, video');
+                if (video) video.playbackRate = 1;
+            },
+
+            // ── GM helpers ──
+            _gmGet(url, extraHeaders = {}) {
+                return new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({ method: 'GET', url, anonymous: false,
+                        headers: Object.keys(extraHeaders).length ? extraHeaders : undefined,
+                        onload: (r) => {
+                            this._log(`GM GET ${r.status} ${url.slice(0,80)}... (${(r.responseText||'').length} chars)`);
+                            if (r.status >= 400) { reject(new Error(`GM GET HTTP ${r.status}`)); return; }
+                            resolve(r.responseText || '');
+                        },
+                        onerror: (e) => { this._warn('GM GET error:', url.slice(0,80)); reject(new Error('GM GET error: ' + (e?.statusText || 'unknown'))); },
+                        ontimeout: () => reject(new Error('GM GET timeout')),
+                        timeout: 30000 });
+                });
+            },
+            _gmPostJson(url, data, extraHeaders = {}, customTimeout = 30000) {
+                return new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({ method: 'POST', url, anonymous: false,
+                        headers: { 'Content-Type': 'application/json', ...extraHeaders },
+                        data: typeof data === 'string' ? data : JSON.stringify(data),
+                        onload: (r) => {
+                            this._log(`GM POST ${r.status} ${url.slice(0,80)}... (${(r.responseText||'').length} chars)`);
+                            if (r.status >= 400) { reject(new Error(`GM POST HTTP ${r.status}: ${(r.responseText||'').slice(0,200)}`)); return; }
+                            try { resolve(JSON.parse(r.responseText)); } catch(e) {
+                                // Fallback: try to reassemble streaming NDJSON (SSE) response
+                                const text = r.responseText || '';
+                                if (text.includes('data: ')) {
+                                    try {
+                                        let content = '';
+                                        for (const line of text.split('\n')) {
+                                            if (!line.startsWith('data: ') || line.trim() === 'data: [DONE]') continue;
+                                            const chunk = JSON.parse(line.slice(6));
+                                            const delta = chunk?.choices?.[0]?.delta?.content;
+                                            if (delta) content += delta;
+                                        }
+                                        if (content) {
+                                            resolve({ choices: [{ message: { content } }] });
+                                            return;
+                                        }
+                                    } catch(e2) { /* fall through */ }
+                                }
+                                reject(new Error('GM POST JSON parse error'));
+                            }
+                        },
+                        onerror: (e) => { this._warn('GM POST error:', url.slice(0,80)); reject(new Error('GM POST error')); },
+                        ontimeout: () => reject(new Error('GM POST timeout')),
+                        timeout: customTimeout });
+                });
+            },
+            async _buildSapisidAuth() {
+                try {
+                    const cookies = document.cookie.split(';').map(c => c.trim());
+                    const sapisid = cookies.find(c => c.startsWith('SAPISID=') || c.startsWith('__Secure-3PAPISID='));
+                    if (!sapisid) return null;
+                    const val = sapisid.split('=')[1]; const origin = 'https://www.youtube.com'; const ts = Math.floor(Date.now() / 1000);
+                    const hashBuffer = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(`${ts} ${val} ${origin}`));
+                    const hash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+                    return { authorization: `SAPISIDHASH ${ts}_${hash}`, 'x-origin': origin };
+                } catch(e) { return null; }
+            },
+
+            // ═══════════════════════════════════════════
+            //  TRANSCRIPT FETCHER
+            // ═══════════════════════════════════════════
+            async _fetchTranscript(videoId, onStatus) {
+                const transcriptMethod = appState.settings.cfTranscriptMethod || 'auto';
+
+                if (transcriptMethod === 'whisper-only') {
+                    this._log('Transcript method: whisper-only — skipping captions');
+                    return null;
+                }
+
+                this._log('=== Fetching transcript for:', videoId, '(method:', transcriptMethod, ') ===');
+                onStatus?.('Fetching transcript...', 'loading', 5);
+
+                // ── PRIMARY: Use YTKit's TranscriptService ──
+                try {
+                    onStatus?.('Trying YTKit TranscriptService...', 'loading', 8);
+                    this._log('Method 1: YTKit TranscriptService._getCaptionTracks');
+                    const trackData = await TranscriptService._getCaptionTracks(videoId);
+                    if (trackData?.tracks?.length) {
+                        this._log('TranscriptService found', trackData.tracks.length, 'tracks:', trackData.tracks.map(t => `${t.languageCode}(${t.kind})`).join(', '));
+                        const selectedTrack = TranscriptService._selectBestTrack(trackData.tracks);
+                        this._log('Selected track:', selectedTrack.languageCode, selectedTrack.kind);
+
+                        if (selectedTrack.baseUrl) {
+                            try {
+                                const tsSegments = await TranscriptService._fetchTranscriptContent(selectedTrack.baseUrl);
+                                if (tsSegments?.length) {
+                                    this._log('TranscriptService delivered', tsSegments.length, 'segments');
+                                    return tsSegments.map(s => ({
+                                        start: (s.startMs || 0) / 1000,
+                                        dur: ((s.endMs || 0) - (s.startMs || 0)) / 1000,
+                                        text: s.text
+                                    }));
+                                }
+                            } catch(e) {
+                                this._log('TranscriptService._fetchTranscriptContent failed:', e.message);
+                            }
+
+                            this._log('Trying GM-backed caption download as fallback...');
+                            onStatus?.('Trying GM caption fetch...', 'loading', 15);
+                            const gmSegments = await this._gmDownloadCaptions(selectedTrack, videoId);
+                            if (gmSegments?.length) {
+                                this._log('GM caption download got', gmSegments.length, 'segments');
+                                return gmSegments;
+                            }
+                        }
+                    } else {
+                        this._log('TranscriptService found no tracks');
+                    }
+                } catch(e) {
+                    this._log('TranscriptService failed:', e.message);
+                }
+
+                // ── FALLBACK 2: Direct page-level variable access via unsafeWindow ──
+                try {
+                    onStatus?.('Trying page context access...', 'loading', 20);
+                    this._log('Method 2: unsafeWindow.ytInitialPlayerResponse');
+                    const pw = _rw;
+                    const pr = pw.ytInitialPlayerResponse;
+                    if (pr?.videoDetails?.videoId === videoId) {
+                        const ct = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+                        if (ct?.length) {
+                            this._log('Found', ct.length, 'tracks via unsafeWindow');
+                            const segments = await this._gmDownloadCaptions(ct[0], videoId, ct);
+                            if (segments?.length) return segments;
+                        } else {
+                            this._log('unsafeWindow PR exists but no captionTracks (captions:', !!pr?.captions, ')');
+                        }
+                    } else {
+                        this._log('unsafeWindow PR missing or stale (prVid:', pr?.videoDetails?.videoId, 'wanted:', videoId, ')');
+                    }
+                } catch(e) {
+                    this._log('unsafeWindow access failed:', e.message);
+                }
+
+                // ── FALLBACK 3: Polymer element data ──
+                try {
+                    onStatus?.('Trying Polymer element data...', 'loading', 25);
+                    this._log('Method 3: ytd-watch-flexy Polymer data');
+                    const wf = document.querySelector('ytd-watch-flexy');
+                    if (wf) {
+                        for (const path of ['playerData_', '__data', 'data']) {
+                            let pr = wf[path]; if (pr?.playerResponse) pr = pr.playerResponse;
+                            if (!pr?.videoDetails || pr.videoDetails.videoId !== videoId) continue;
+                            const ct = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+                            if (ct?.length) {
+                                this._log('Found', ct.length, 'tracks via flexy.' + path);
+                                const segments = await this._gmDownloadCaptions(ct[0], videoId, ct);
+                                if (segments?.length) return segments;
+                            }
+                        }
+                    }
+                    this._log('Polymer element: no tracks found');
+                } catch(e) {
+                    this._log('Polymer access failed:', e.message);
+                }
+
+                // ── FALLBACK 4: GM-backed fresh page fetch ──
+                try {
+                    onStatus?.('Fetching fresh page via GM...', 'loading', 30);
+                    this._log('Method 4: GM page fetch');
+                    const html = await this._gmGet(`https://www.youtube.com/watch?v=${videoId}`);
+                    this._log('Got', html.length, 'chars, captionTracks:', html.includes('captionTracks'), 'timedtext:', html.includes('timedtext'));
+
+                    // 4A: ytInitialPlayerResponse
+                    const prMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var\s+(?:meta|head)|<\/script|\n)/s);
+                    if (prMatch) {
+                        try {
+                            const pr = JSON.parse(prMatch[1]);
+                            const ct = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+                            if (ct?.length) {
+                                this._log('4A: found', ct.length, 'tracks from page PR');
+                                const segments = await this._gmDownloadCaptions(ct[0], videoId, ct);
+                                if (segments?.length) return segments;
+                            }
+                        } catch(e) { this._log('4A: JSON parse failed:', e.message?.slice(0,80)); }
+                    }
+
+                    // 4B: captionTracks regex
+                    if (html.includes('captionTracks')) {
+                        for (const pat of [/"captionTracks":\s*(\[.*?\])(?=\s*,\s*")/s, /"captionTracks":\s*(\[(?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*\])/]) {
+                            const m = html.match(pat);
+                            if (m) {
+                                try {
+                                    const parsed = JSON.parse(m[1]);
+                                    if (parsed?.length) {
+                                        this._log('4B: regex found', parsed.length, 'tracks');
+                                        const segments = await this._gmDownloadCaptions(parsed[0], videoId, parsed);
+                                        if (segments?.length) return segments;
+                                    }
+                                } catch(e) {}
+                            }
+                        }
+                    }
+
+                    // 4C: timedtext URL
+                    if (html.includes('timedtext')) {
+                        const urlMatch = html.match(/(https?:\\\/\\\/[^"]*timedtext[^"]*)/);
+                        if (urlMatch) {
+                            const cleanUrl = urlMatch[1].replace(/\\\//g, '/').replace(/\\u0026/g, '&');
+                            this._log('4C: extracted timedtext URL');
+                            const segments = await this._gmDownloadCaptions({ baseUrl: cleanUrl, languageCode: 'en' }, videoId);
+                            if (segments?.length) return segments;
+                        }
+                    }
+                } catch(e) {
+                    this._log('GM page fetch failed:', e.message);
+                }
+
+                // ── FALLBACK 5: Innertube player API via GM ──
+                try {
+                    onStatus?.('Trying Innertube player API...', 'loading', 40);
+                    this._log('Method 5: Innertube player API');
+                    const pw = _rw;
+                    let apiKey; try { apiKey = pw.ytcfg?.get?.('INNERTUBE_API_KEY'); } catch(e) {}
+                    if (!apiKey) apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+                    let clientVersion; try { clientVersion = pw.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION'); } catch(e) {}
+                    if (!clientVersion) clientVersion = '2.20250210.01.00';
+
+                    const body = { context: { client: { clientName: 'WEB', clientVersion, hl: 'en', gl: 'US' } }, videoId };
+                    const authHeaders = await this._buildSapisidAuth() || {};
+                    const data = await this._gmPostJson(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`, body, authHeaders);
+                    const ct = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+                    if (ct?.length) {
+                        this._log('M5: found', ct.length, 'tracks');
+                        const segments = await this._gmDownloadCaptions(ct[0], videoId, ct);
+                        if (segments?.length) return segments;
+                    } else {
+                        this._log('M5: status:', data?.playabilityStatus?.status, 'reason:', data?.playabilityStatus?.reason?.slice(0,80) || 'none');
+                    }
+                } catch(e) {
+                    this._log('Innertube player API failed:', e.message);
+                }
+
+                // ── FALLBACK 6: Innertube get_transcript ──
+                try {
+                    onStatus?.('Trying Innertube get_transcript...', 'loading', 50);
+                    this._log('Method 6: Innertube get_transcript');
+                    const segments = await this._fetchTranscriptViaInnertube(videoId, 'en');
+                    if (segments?.length) {
+                        this._log('get_transcript delivered', segments.length, 'segments');
+                        return segments;
+                    }
+                } catch(e) {
+                    this._log('get_transcript failed:', e.message);
+                }
+
+                // ── FALLBACK 7: DOM scrape ──
+                try {
+                    onStatus?.('Trying DOM transcript scrape...', 'loading', 55);
+                    this._log('Method 7: DOM scrape');
+                    const segments = await this._scrapeTranscriptFromDOM();
+                    if (segments?.length) {
+                        this._log('DOM scrape got', segments.length, 'segments');
+                        return segments;
+                    }
+                } catch(e) {
+                    this._log('DOM scrape failed:', e.message);
+                }
+
+                this._warn('ALL transcript methods failed for video:', videoId);
+                return null;
+            },
+
+            // GM-backed caption download with SAPISIDHASH auth and multi-format fallback
+            async _gmDownloadCaptions(trackOrFirst, videoId, allTracks) {
+                let track = trackOrFirst;
+                if (allTracks?.length) {
+                    track = allTracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
+                         || allTracks.find(t => t.languageCode === 'en')
+                         || allTracks.find(t => t.languageCode?.startsWith('en'))
+                         || allTracks[0];
+                }
+                if (!track?.baseUrl) { this._log('No baseUrl in track:', JSON.stringify(track)?.slice(0,200)); return null; }
+
+                let baseUrl = track.baseUrl;
+                if (baseUrl.includes('\\u0026')) baseUrl = baseUrl.replace(/\\u0026/g, '&');
+                if (baseUrl.includes('\\u002F')) baseUrl = baseUrl.replace(/\\u002F/g, '/');
+                if (track.languageCode && !baseUrl.includes('&lang=')) baseUrl += '&lang=' + encodeURIComponent(track.languageCode);
+                if (track.kind && !baseUrl.includes('&kind=')) baseUrl += '&kind=' + encodeURIComponent(track.kind);
+                if (typeof track.name === 'string' && !baseUrl.includes('&name=')) baseUrl += '&name=' + encodeURIComponent(track.name);
+
+                this._log('Downloading captions for track:', track.languageCode, track.kind || 'manual');
+
+                const authHeaders = await this._buildSapisidAuth() || {};
+                for (const fmt of ['json3', null, 'srv3']) {
+                    try {
+                        const url = fmt ? baseUrl + '&fmt=' + fmt : baseUrl;
+                        this._log('A(GM): fmt=' + (fmt || 'xml'));
+                        const text = await this._gmGet(url, authHeaders);
+                        if (!text.length) continue;
+                        const segments = this._parseCaptionResponse(text, fmt);
+                        if (segments?.length) { this._log('A(GM): got', segments.length, 'segments via fmt=' + (fmt || 'xml')); return segments; }
+                    } catch(e) { this._log('A(GM): fmt=' + (fmt || 'xml'), 'error:', e.message); }
+                }
+
+                for (const fmt of ['json3', null, 'srv3']) {
+                    try {
+                        const url = fmt ? baseUrl + '&fmt=' + fmt : baseUrl;
+                        this._log('B(fetch): fmt=' + (fmt || 'xml'));
+                        const resp = await fetch(url, { credentials: 'include' });
+                        const text = await resp.text();
+                        if (!text.length) continue;
+                        const segments = this._parseCaptionResponse(text, fmt);
+                        if (segments?.length) { this._log('B(fetch): got', segments.length, 'segments via fmt=' + (fmt || 'xml')); return segments; }
+                    } catch(e) { this._log('B(fetch): fmt=' + (fmt || 'xml'), 'error:', e.message); }
+                }
+
+                this._log('All caption download methods failed for track:', track.languageCode);
+                return null;
+            },
+
+            _parseCaptionResponse(text, fmt) {
+                if (fmt === 'json3') {
+                    try {
+                        const data = JSON.parse(text); if (!data.events?.length) return null;
+                        const segments = [];
+                        for (const evt of data.events) { if (!evt.segs) continue; const t = evt.segs.map(s => s.utf8 || '').join('').trim(); if (!t || t === '\n') continue; segments.push({ start: (evt.tStartMs || 0) / 1000, dur: (evt.dDurationMs || 0) / 1000, text: t.replace(/\n/g, ' ').trim() }); }
+                        return segments.length ? segments : null;
+                    } catch(e) { return null; }
+                }
+                if (fmt === 'srv3') {
+                    const segments = []; const re = /<p\s+t="(\d+)"(?:\s+d="(\d+)")?[^>]*>([\s\S]*?)<\/p>/g; let m;
+                    while ((m = re.exec(text)) !== null) { const raw = (m[3] || '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\n/g, ' ').trim(); if (raw) segments.push({ start: parseInt(m[1]||'0')/1000, dur: parseInt(m[2]||'0')/1000, text: raw }); }
+                    return segments.length ? segments : null;
+                }
+                const segments = []; const re = /<text\s+start="([^"]*)"(?:\s+dur="([^"]*)")?[^>]*>([\s\S]*?)<\/text>/g; let m;
+                while ((m = re.exec(text)) !== null) { const raw = (m[3] || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/\n/g, ' ').trim(); if (raw) segments.push({ start: parseFloat(m[1]||'0'), dur: parseFloat(m[2]||'0'), text: raw }); }
+                return segments.length ? segments : null;
+            },
+
+            async _fetchTranscriptViaInnertube(videoId, lang) {
+                const pw = _rw;
+                const vidBytes = [...new TextEncoder().encode(videoId)]; const langBytes = [...new TextEncoder().encode(lang || 'en')];
+                function varint(val) { const b = []; while (val > 0x7f) { b.push((val & 0x7f) | 0x80); val >>>= 7; } b.push(val & 0x7f); return b; }
+                function lenField(fieldNum, data) { const tag = varint((fieldNum << 3) | 2); return [...tag, ...varint(data.length), ...data]; }
+                const f1 = lenField(1, vidBytes); const f2 = lenField(2, [...lenField(1, langBytes), ...lenField(3, [])]);
+                const params = btoa(String.fromCharCode(...f1, ...f2));
+                let apiKey; try { apiKey = pw.ytcfg?.get?.('INNERTUBE_API_KEY'); } catch(e) {}
+                if (!apiKey) apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+                let clientVersion; try { clientVersion = pw.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION'); } catch(e) {}
+                if (!clientVersion) clientVersion = '2.20250210.01.00';
+                const body = { context: { client: { clientName: 'WEB', clientVersion, hl: lang || 'en', gl: 'US' } }, params };
+                try { const si = pw.ytcfg?.get?.('SESSION_INDEX'); if (si !== undefined) body.context.request = { sessionIndex: String(si) }; } catch(e) {}
+                const authHeaders = await this._buildSapisidAuth() || {};
+                const data = await this._gmPostJson(`https://www.youtube.com/youtubei/v1/get_transcript?key=${apiKey}&prettyPrint=false`, body, authHeaders);
+                if (data.error) { this._log('get_transcript error:', data.error.code, data.error.message); return null; }
+                const paths = [data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.body?.transcriptBodyRenderer?.transcriptSegmentListRenderer?.initialSegments, data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body?.transcriptSegmentListRenderer?.initialSegments];
+                for (const segs of paths) { if (segs?.length) return this._parseTranscriptSegments(segs); }
+                this._log('get_transcript: no segments in response');
+                return null;
+            },
+
+            _parseTranscriptSegments(segments) {
+                const result = [];
+                for (const seg of segments) { const r = seg.transcriptSegmentRenderer; if (!r) continue; const text = r.snippet?.runs?.map(x => x.text || '').join('').trim(); if (!text) continue; result.push({ start: parseInt(r.startMs||'0')/1000, dur: (parseInt(r.endMs||'0')-parseInt(r.startMs||'0'))/1000, text: text.replace(/\n/g,' ').trim() }); }
+                return result.length ? result : null;
+            },
+
+            async _scrapeTranscriptFromDOM() {
+                const existing = document.querySelectorAll('ytd-transcript-segment-renderer');
+                if (existing.length) return this._extractTranscriptFromDOM(existing);
+
+                const descExpand = document.querySelector('tp-yt-paper-button#expand, #expand.button, #description-inline-expander #expand');
+                if (descExpand) descExpand.click();
+                await new Promise(r => setTimeout(r, 500));
+
+                const btnSelectors = ['button', 'ytd-button-renderer', 'yt-button-shape button'];
+                for (const sel of btnSelectors) {
+                    for (const btn of document.querySelectorAll(sel)) {
+                        const text = btn.textContent?.trim().toLowerCase() || '';
+                        if (text.includes('show transcript') || text.includes('transcript')) {
+                            this._log('DOM scrape: clicking transcript button:', text);
+                            btn.click();
+                            break;
+                        }
+                    }
+                }
+
+                for (let i = 0; i < 20; i++) {
+                    await new Promise(r => setTimeout(r, 300));
+                    const segs = document.querySelectorAll('ytd-transcript-segment-renderer');
+                    if (segs.length) return this._extractTranscriptFromDOM(segs);
+                }
+                return null;
+            },
+            _extractTranscriptFromDOM(segElements) {
+                const result = [];
+                for (const seg of segElements) {
+                    const timeEl = seg.querySelector('.segment-timestamp, [class*="timestamp"]');
+                    const textEl = seg.querySelector('.segment-text, [class*="text"], yt-formatted-string');
+                    if (!textEl?.textContent?.trim()) continue;
+                    const timeStr = timeEl?.textContent?.trim() || '0:00';
+                    const parts = timeStr.split(':').map(Number);
+                    let secs = 0;
+                    if (parts.length === 3) secs = parts[0]*3600 + parts[1]*60 + parts[2];
+                    else if (parts.length === 2) secs = parts[0]*60 + parts[1];
+                    else secs = parts[0] || 0;
+                    result.push({ start: secs, dur: 5, text: textEl.textContent.trim().replace(/\n/g, ' ') });
+                }
+                return result.length ? result : null;
+            },
+
+            _buildTranscriptText(segments, maxChars = 30000) {
+                // Build 30-second blocks from segments
+                const blocks = []; let currentBlock = { start: 0, texts: [] }; let lastBlockStart = 0;
+                for (const seg of segments) {
+                    if (seg.start - lastBlockStart >= 30 || blocks.length === 0) {
+                        if (currentBlock.texts.length) blocks.push(currentBlock);
+                        currentBlock = { start: seg.start, texts: [] }; lastBlockStart = seg.start;
+                    }
+                    currentBlock.texts.push(seg.text);
+                }
+                if (currentBlock.texts.length) blocks.push(currentBlock);
+                if (!blocks.length) return '';
+
+                const formatBlock = b => `[${this._formatTime(b.start)}] ${b.texts.join(' ')}\n`;
+
+                // If it all fits, return everything
+                const fullText = blocks.map(formatBlock).join('');
+                if (fullText.length <= maxChars) return fullText;
+
+                // Smart truncation: keep intro (25%) + conclusion (15%) + evenly sampled middle (60%)
+                const introCount = Math.max(2, Math.ceil(blocks.length * 0.25));
+                const outroCount = Math.max(1, Math.ceil(blocks.length * 0.15));
+                const introBlocks = blocks.slice(0, introCount);
+                const outroBlocks = blocks.slice(-outroCount);
+                const middleBlocks = blocks.slice(introCount, blocks.length - outroCount);
+
+                let result = '';
+                // Add intro
+                for (const b of introBlocks) {
+                    const line = formatBlock(b);
+                    if (result.length + line.length > maxChars * 0.3) break;
+                    result += line;
+                }
+
+                // Evenly sample middle to fill ~55% of budget
+                if (middleBlocks.length > 0) {
+                    const midBudget = maxChars * 0.55;
+                    const step = Math.max(1, Math.floor(middleBlocks.length / Math.ceil(midBudget / 120)));
+                    let midText = '';
+                    for (let i = 0; i < middleBlocks.length; i += step) {
+                        const line = formatBlock(middleBlocks[i]);
+                        if (midText.length + line.length > midBudget) break;
+                        midText += line;
+                    }
+                    if (midText && result.length > 0) result += '[...]\n';
+                    result += midText;
+                }
+
+                // Add conclusion
+                if (outroBlocks.length > 0) {
+                    const outroBudget = maxChars - result.length - 10;
+                    let outroText = '';
+                    for (const b of outroBlocks) {
+                        const line = formatBlock(b);
+                        if (outroText.length + line.length > outroBudget) break;
+                        outroText += line;
+                    }
+                    if (outroText) {
+                        result += '[...]\n' + outroText;
+                    }
+                }
+                return result;
+            },
+
+            // ═══ TRANSCRIPT DOWNLOAD ═══
+            async _downloadTranscript() {
+                const videoId = this._getVideoId();
+                if (!videoId) return;
+                const btn = document.getElementById('cf-dl-transcript');
+                if (btn) { btn.disabled = true; btn.textContent = 'Fetching...'; btn.classList.add('cf-loading'); }
+                this._updateStatus('Fetching transcript...', 'loading', 5);
+                const segments = await this._fetchTranscript(videoId, (msg, state, pct) => this._updateStatus(msg, state, pct));
+                if (!segments?.length) {
+                    this._updateStatus('No transcript found', 'error', 0);
+                    if (btn) { btn.disabled = false; btn.textContent = 'Transcript: TXT'; btn.classList.remove('cf-loading'); }
+                    return;
+                }
+
+                const title = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim()
+                    || document.querySelector('#title h1')?.textContent?.trim() || videoId;
+                this._lastTranscriptSegments = segments;
+                const safeName = title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, '_').slice(0, 60);
+                const lines = segments.map(s => `[${this._formatTime(s.start)}] ${s.text}`);
+                const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = `${safeName}_transcript.txt`;
+                document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                this._updateStatus('Done', 'ready', 100);
+                if (btn) { btn.disabled = false; btn.textContent = 'Transcript: TXT'; btn.classList.remove('cf-loading'); }
+            },
+
+            // ═══ LIVE VIDEO ROLLING CHAPTERS ═══
+            _liveIntervalId: null,
+            _liveAccumulated: [],
+            _liveLastGenTime: 0,
+            _liveNoNewCount: 0,
+
+            _isLiveVideo() {
+                return !!document.querySelector('.ytp-live-badge:not(.ytp-live-badge-disabled), .ytp-live, .html5-video-player.playing-mode.ytp-live');
+            },
+
+            _isVideoEnded() {
+                const vid = document.querySelector('video.html5-main-video, video');
+                if (!vid) return true;
+                return vid.ended || (vid.paused && vid.currentTime > 0 && vid.duration > 0 && Math.abs(vid.currentTime - vid.duration) < 1);
+            },
+
+            async _startLiveTracking() {
+                if (this._liveIntervalId) return;
+                this._liveAccumulated = [];
+                this._liveLastGenTime = 0;
+                this._liveNoNewCount = 0;
+                this._log('Live tracking started');
+                this._updateStatus('Live tracking...', 'loading', 0);
+
+                this._liveIntervalId = setInterval(async () => {
+                    const videoId = this._getVideoId();
+
+                    if (!videoId || this._isVideoEnded()) {
+                        this._log('Live: video ended or no video, stopping');
+                        this._stopLiveTracking();
+                        return;
+                    }
+                    if (!this._isLiveVideo()) {
+                        this._liveNoNewCount++;
+                        this._log('Live: no longer detected as live, stale count:', this._liveNoNewCount);
+                        if (this._liveNoNewCount >= 3) {
+                            this._stopLiveTracking();
+                            return;
+                        }
+                    }
+
+                    try {
+                        const segments = await this._fetchTranscript(videoId, null);
+                        if (segments?.length) {
+                            const existingTimes = new Set(this._liveAccumulated.map(s => s.start));
+                            let added = 0;
+                            for (const seg of segments) {
+                                if (!existingTimes.has(seg.start)) {
+                                    this._liveAccumulated.push(seg);
+                                    existingTimes.add(seg.start);
+                                    added++;
+                                }
+                            }
+
+                            if (added > 0) {
+                                this._liveNoNewCount = 0;
+                                this._log('Live: added', added, 'new segments, total:', this._liveAccumulated.length);
+                            } else {
+                                this._liveNoNewCount++;
+                            }
+
+                            if (this._liveNoNewCount >= 5) {
+                                this._log('Live: no new content for 5 polls, stopping');
+                                this._stopLiveTracking();
+                                return;
+                            }
+
+                            const now = Date.now();
+                            if (this._liveAccumulated.length >= 10 && now - this._liveLastGenTime > 120000) {
+                                this._liveLastGenTime = now;
+                                this._log('Live: regenerating chapters...');
+                                const duration = this._getVideoDuration() || (this._liveAccumulated[this._liveAccumulated.length - 1].start + 30);
+                                const provider = appState.settings.cfLlmProvider || 'builtin';
+                                let data;
+                                if (provider === 'builtin') {
+                                    data = this._generateChaptersHeuristic(this._liveAccumulated, duration);
+                                } else {
+                                    try {
+                                        const isLocal = this._isLocalProvider();
+                                        const txLimit = isLocal ? 200000 : 30000;
+                                        const transcriptText = this._buildTranscriptText(this._liveAccumulated, txLimit);
+                                        const durationMin = Math.ceil(duration / 60);
+                                        const systemPrompt = this._buildLiveChapterSystemPrompt(durationMin);
+                                        const rawText = await this._callLlmApi(systemPrompt, `Generate chapters for this ${durationMin}-minute live stream.\n\nTranscript (${transcriptText.length} chars):\n\n${transcriptText}`, null);
+                                        data = this._parseChapterJSON(rawText, duration);
+                                    } catch(e) {
+                                        this._log('Live: API failed, falling back to heuristic:', e.message);
+                                        data = this._generateChaptersHeuristic(this._liveAccumulated, duration);
+                                    }
+                                }
+                                if (data?.chapters?.length) {
+                                    this._chapterData = data;
+                                    this._setCachedData(videoId, data);
+                                    this._renderProgressBarOverlay();
+                                    if (this._panelEl?.classList.contains('cf-visible')) this._renderPanel();
+                                    this._log('Live: updated to', data.chapters.length, 'chapters');
+                                }
+                            }
+                        } else {
+                            this._liveNoNewCount++;
+                            this._log('Live: fetch returned empty, stale count:', this._liveNoNewCount);
+                            if (this._liveNoNewCount >= 5) {
+                                this._stopLiveTracking();
+                                return;
+                            }
+                        }
+                    } catch(e) {
+                        this._log('Live poll error:', e.message);
+                        this._liveNoNewCount++;
+                        if (this._liveNoNewCount >= 5) {
+                            this._stopLiveTracking();
+                        }
+                    }
+                }, 30000);
+            },
+
+            _stopLiveTracking() {
+                if (this._liveIntervalId) {
+                    clearInterval(this._liveIntervalId);
+                    this._liveIntervalId = null;
+                    this._liveNoNewCount = 0;
+                    this._log('Live tracking stopped');
+                    if (this._panelEl?.classList.contains('cf-visible')) this._renderPanel();
+                }
+            },
+
+            // ═══ SUBSCRIPTIONS BATCH PROCESSOR ═══
+            _batchProcessing: false,
+            _batchProgress: { done: 0, total: 0, current: '' },
+
+            async _batchProcessSubscriptions() {
+                if (this._batchProcessing) return;
+
+                const videoLinks = new Set();
+                document.querySelectorAll('a#video-title-link[href*="watch"], a.yt-simple-endpoint[href*="watch"], a[href*="/watch?v="]').forEach(a => {
+                    const match = a.href?.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+                    if (match) videoLinks.add(match[1]);
+                });
+                document.querySelectorAll('a#thumbnail[href*="watch"]').forEach(a => {
+                    const match = a.href?.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+                    if (match) videoLinks.add(match[1]);
+                });
+
+                if (!videoLinks.size) { return; }
+
+                const uncached = [...videoLinks].filter(id => !this._getCachedData(id));
+                if (!uncached.length) { return; }
+
+                this._batchProcessing = true;
+                this._batchProgress = { done: 0, total: uncached.length, current: '' };
+                this._updateBatchUI();
+
+                for (const videoId of uncached) {
+                    if (!this._batchProcessing) break;
+                    this._batchProgress.current = videoId;
+                    this._updateBatchUI();
+
+                    try {
+                        const segments = await this._fetchTranscript(videoId, null);
+                        if (segments?.length) {
+                            const provider = appState.settings.cfLlmProvider || 'builtin';
+                            let data;
+                            if (provider === 'builtin') {
+                                data = this._generateChaptersHeuristic(segments, 0);
+                            } else {
+                                try {
+                                    const isLocal = this._isLocalProvider();
+                                    const txLimit = isLocal ? 200000 : 30000;
+                                    const transcriptText = this._buildTranscriptText(segments, txLimit);
+                                    const systemPrompt = appState.settings.cfCustomChapterPrompt || this._buildChapterSystemPrompt(0);
+                                    const rawText = await this._callLlmApi(systemPrompt, `Generate chapters:\n\n${transcriptText}`, null);
+                                    data = this._parseChapterJSON(rawText, 0);
+                                } catch(e) {
+                                    data = this._generateChaptersHeuristic(segments, 0);
+                                }
+                            }
+                            if (data?.chapters?.length) this._setCachedData(videoId, data);
+                        }
+                    } catch(e) { this._log('Batch error for', videoId, ':', e.message); }
+
+                    this._batchProgress.done++;
+                    this._updateBatchUI();
+                    await new Promise(r => setTimeout(r, 500));
+                }
+
+                const done = this._batchProgress.done;
+                this._batchProcessing = false;
+                this._removeBatchUI();
+            },
+
+            _cancelBatch() { this._batchProcessing = false; },
+
+            _updateBatchUI() {
+                let bar = document.getElementById('cf-batch-bar');
+                if (!bar) {
+                    bar = document.createElement('div'); bar.id = 'cf-batch-bar';
+                    bar.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#1a1a24;border:1px solid rgba(124,58,237,0.4);border-radius:12px;padding:12px 16px;z-index:99999;font-family:-apple-system,sans-serif;color:#e0e0e8;font-size:12px;min-width:280px;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+                    document.body.appendChild(bar);
+                }
+                const { done, total, current } = this._batchProgress;
+                const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                TrustedHTML.setHTML(bar, `
+                    <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="font-weight:600;color:#a78bfa">ChapterForge Batch</span><span style="cursor:pointer;color:rgba(255,255,255,0.4)" id="cf-batch-cancel">&times;</span></div>
+                    <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:6px">${done}/${total} videos (${pct}%)</div>
+                    <div style="width:100%;height:4px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden"><div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#7c3aed,#a78bfa);border-radius:2px;transition:width 0.3s"></div></div>
+                `);
+                bar.querySelector('#cf-batch-cancel')?.addEventListener('click', () => { this._cancelBatch(); this._removeBatchUI(); });
+            },
+            _removeBatchUI() { document.getElementById('cf-batch-bar')?.remove(); },
+
+            _injectSubscriptionsButton() {
+                if (document.getElementById('cf-batch-btn')) return;
+                if (!window.location.pathname.startsWith('/feed/subscriptions')) return;
+
+                const headerButtons = document.querySelector('#masthead #end #buttons');
+                if (!headerButtons) { setTimeout(() => this._injectSubscriptionsButton(), 1000); return; }
+
+                const ns = 'http://www.w3.org/2000/svg';
+                const btn = document.createElement('button');
+                btn.id = 'cf-batch-btn';
+                btn.className = 'cf-batch-btn';
+                btn.title = 'ChapterForge: Process all videos on this page';
+                btn.style.cssText = 'display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:20px;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-family:"Roboto",Arial,sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.2s;box-shadow:0 2px 8px rgba(124,58,237,0.3);';
+
+                const svg = document.createElementNS(ns, 'svg');
+                svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '18'); svg.setAttribute('height', '18');
+                svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor');
+                svg.setAttribute('stroke-width', '2'); svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+                const p1 = document.createElementNS(ns, 'path'); p1.setAttribute('d', 'M3 12h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V6H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 6v2h14V6H7z');
+                p1.setAttribute('fill', 'currentColor'); p1.setAttribute('stroke', 'none');
+                svg.appendChild(p1);
+                btn.appendChild(svg);
+
+                const text = document.createElement('span');
+                text.textContent = 'Process All';
+                btn.appendChild(text);
+
+                btn.addEventListener('click', () => this._batchProcessSubscriptions());
+                btn.addEventListener('mouseenter', () => { btn.style.background = 'linear-gradient(135deg,#8b5cf6,#7c3aed)'; btn.style.boxShadow = '0 4px 16px rgba(124,58,237,0.5)'; });
+                btn.addEventListener('mouseleave', () => { btn.style.background = 'linear-gradient(135deg,#7c3aed,#6d28d9)'; btn.style.boxShadow = '0 2px 8px rgba(124,58,237,0.3)'; });
+
+                const hideAllBtn = headerButtons.querySelector('.ytkit-subs-hide-all-btn');
+                const vlcBtn = headerButtons.querySelector('.ytkit-subs-vlc-btn');
+                if (hideAllBtn) {
+                    hideAllBtn.after(btn);
+                } else if (vlcBtn) {
+                    headerButtons.insertBefore(btn, vlcBtn);
+                } else {
+                    headerButtons.appendChild(btn);
+                }
+            },
+
+            async _getAudioStreamUrl(videoId) {
+                const pw = _rw;
+                const sources = [];
+
+                try { const pr = pw.ytInitialPlayerResponse; if (pr?.videoDetails?.videoId === videoId && pr?.streamingData?.adaptiveFormats) { sources.push(...pr.streamingData.adaptiveFormats); this._log('Audio: page PR has', pr.streamingData.adaptiveFormats.length, 'adaptiveFormats'); } } catch(e) {}
+
+                try {
+                    const wf = document.querySelector('ytd-watch-flexy');
+                    for (const p of ['playerData_', '__data', 'data']) { let pr = wf?.[p]; if (pr?.playerResponse) pr = pr.playerResponse; if (pr?.videoDetails?.videoId === videoId && pr?.streamingData?.adaptiveFormats) { sources.push(...pr.streamingData.adaptiveFormats); break; } }
+                } catch(e) {}
+
+                if (!sources.some(f => f.mimeType?.startsWith('audio/') && f.url)) {
+                    let visitorData; try { visitorData = pw.ytcfg?.get?.('VISITOR_DATA'); } catch(e) {}
+                    let clientVersion; try { clientVersion = pw.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') || '2.20250210.01.00'; } catch(e) { clientVersion = '2.20250210.01.00'; }
+                    let apiKey; try { apiKey = pw.ytcfg?.get?.('INNERTUBE_API_KEY'); } catch(e) {}
+                    if (!apiKey) apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+
+                    const clients = [
+                        { name: 'WEB_CREATOR', body: { context: { client: { clientName: 'WEB_CREATOR', clientVersion: '1.20250210.01.00', hl: 'en', gl: 'US', ...(visitorData ? { visitorData } : {}) } }, videoId, contentCheckOk: true, racyCheckOk: true }, ua: null },
+                        { name: 'WEB', body: { context: { client: { clientName: 'WEB', clientVersion, hl: 'en', gl: 'US', ...(visitorData ? { visitorData } : {}) } }, videoId, contentCheckOk: true, racyCheckOk: true }, ua: null },
+                        { name: 'TVHTML5_EMBEDDED', body: { context: { client: { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', hl: 'en', gl: 'US' } }, videoId, contentCheckOk: true, racyCheckOk: true, thirdParty: { embedUrl: 'https://www.youtube.com' } }, ua: null },
+                        { name: 'ANDROID', body: { context: { client: { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30, hl: 'en', gl: 'US' } }, videoId, contentCheckOk: true, racyCheckOk: true }, ua: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip' },
+                    ];
+
+                    for (const client of clients) {
+                        try {
+                            const hdrs = client.ua ? { 'User-Agent': client.ua } : {};
+                            const sapi = await this._buildSapisidAuth();
+                            if (sapi) Object.assign(hdrs, sapi);
+                            this._log('Audio: trying', client.name, 'client');
+                            const data = await this._gmPostJson(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`, client.body, hdrs);
+                            if (data?.streamingData?.adaptiveFormats) {
+                                const fmts = data.streamingData.adaptiveFormats;
+                                if (client.ua) fmts.forEach(f => f._downloadUA = client.ua);
+                                sources.push(...fmts);
+                                const audioWithUrl = fmts.filter(f => f.mimeType?.startsWith('audio/') && f.url);
+                                this._log('Audio:', client.name, 'returned', fmts.length, 'formats,', audioWithUrl.length, 'audio w/ URL');
+                                if (audioWithUrl.length) break;
+                            }
+                        } catch(e) { this._log('Audio:', client.name, 'failed:', e.message); }
+                    }
+                }
+
+                const audioFormats = sources.filter(f => f.mimeType?.startsWith('audio/') && f.url).sort((a, b) => (a.bitrate || 999999) - (b.bitrate || 999999));
+                if (!audioFormats.length) { this._log('Audio: no usable audio streams found in', sources.length, 'total formats'); return null; }
+                const opus = audioFormats.find(f => f.mimeType?.includes('opus'));
+                const chosen = opus || audioFormats[0];
+                let url = chosen.url; if (url.includes('\\u0026')) url = url.replace(/\\u0026/g, '&');
+                this._log('Audio chosen:', chosen.mimeType, chosen.bitrate + 'bps');
+                return { url, ua: chosen._downloadUA || null };
+            },
+
+            _downloadAudioData(url, onProgress, userAgent) {
+                const self = this;
+                const attempts = [];
+                if (userAgent) attempts.push({ ua: userAgent, anon: true, label: 'custom-UA+anon' });
+                attempts.push({ ua: null, anon: true, label: 'default-UA+anon' });
+                attempts.push({ ua: null, anon: false, label: 'default-UA+cookies' });
+                let attemptIdx = 0;
+                function tryDownload(resolve, reject) {
+                    if (attemptIdx >= attempts.length) { reject(new Error('Audio download failed: all attempts exhausted')); return; }
+                    const attempt = attempts[attemptIdx]; const headers = {};
+                    if (attempt.ua) headers['User-Agent'] = attempt.ua;
+                    self._log('Audio download attempt', attemptIdx + 1, '/', attempts.length, '(' + attempt.label + ')');
+                    GM_xmlhttpRequest({ method: 'GET', url, responseType: 'arraybuffer', anonymous: attempt.anon, headers,
+                        onprogress: (evt) => { if (evt.total > 0) onProgress?.(`Downloading audio... ${Math.round((evt.loaded / evt.total) * 100)}%`, Math.round((evt.loaded / evt.total) * 100)); },
+                        onload: (resp) => {
+                            const bytes = resp.response?.byteLength || 0;
+                            self._log('Audio attempt', attemptIdx + 1, ':', resp.status, (bytes/1024/1024).toFixed(1) + 'MB');
+                            if (resp.status >= 400 || bytes < 1000) { attemptIdx++; tryDownload(resolve, reject); return; }
+                            resolve(resp.response);
+                        },
+                        onerror: () => { attemptIdx++; tryDownload(resolve, reject); },
+                        ontimeout: () => { attemptIdx++; tryDownload(resolve, reject); },
+                        timeout: 120000 });
+                }
+                return new Promise((resolve, reject) => tryDownload(resolve, reject));
+            },
+
+            async _decodeAndResample(arrayBuffer) {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                let audioBuffer;
+                try { audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0)); } finally { audioCtx.close(); }
+                let samples;
+                if (audioBuffer.numberOfChannels === 1) { samples = audioBuffer.getChannelData(0); } else { const ch0 = audioBuffer.getChannelData(0); const ch1 = audioBuffer.getChannelData(1); samples = new Float32Array(ch0.length); for (let i = 0; i < ch0.length; i++) samples[i] = (ch0[i] + ch1[i]) / 2; }
+                const srcRate = audioBuffer.sampleRate; if (srcRate === 16000) return samples;
+                const ratio = 16000 / srcRate; const newLen = Math.round(samples.length * ratio); const resampled = new Float32Array(newLen);
+                for (let i = 0; i < newLen; i++) { const srcIdx = i / ratio; const lo = Math.floor(srcIdx); const hi = Math.min(lo + 1, samples.length - 1); const frac = srcIdx - lo; resampled[i] = samples[lo] * (1 - frac) + samples[hi] * frac; }
+                this._log('Audio resampled:', srcRate + 'Hz -> 16000Hz,', (resampled.length / 16000).toFixed(1) + 's');
+                return resampled;
+            },
+
+            // ═══ SHARED: Transformers.js Library Loader ═══
+            async _loadTransformersLib() {
+                if (this._transformersLib) return this._transformersLib;
+                const cdnUrl = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.4.0/dist/transformers.min.js';
+                let transformers;
+                try {
+                    this._log('Transformers.js: trying GM fetch + blob import...');
+                    const code = await this._gmGet(cdnUrl);
+                    if (code.length < 1000) throw new Error('Fetched code too small: ' + code.length);
+                    const blob = new Blob([code], { type: 'text/javascript' });
+                    const blobUrl = URL.createObjectURL(blob);
+                    try { transformers = await import(blobUrl); } finally { URL.revokeObjectURL(blobUrl); }
+                    this._log('Transformers.js: blob import succeeded');
+                } catch(e1) {
+                    this._log('Transformers.js: blob import failed:', e1.message, '- trying direct import...');
+                    try { transformers = await import(cdnUrl); }
+                    catch(e2) {
+                        this._warn('Transformers.js: all import methods blocked by CSP.');
+                        throw new Error('Transformers.js blocked by YouTube CSP. Try "Captions Only" transcript mode or use an API provider.');
+                    }
+                }
+                transformers.env.allowLocalModels = false;
+                this._transformersLib = transformers;
+                return transformers;
+            },
+
+            async _loadWhisperPipeline(onProgress) {
+                if (this._whisperPipeline) return this._whisperPipeline;
+                const modelId = 'onnx-community/' + (appState.settings.cfWhisperModel || 'whisper-tiny.en');
+                this._log('Loading Whisper model:', modelId);
+                onProgress?.('Loading Whisper library...', 0);
+
+                const transformers = await this._loadTransformersLib();
+                const { pipeline } = transformers;
+
+                onProgress?.('Loading Whisper model: ' + modelId + '...', 10);
+                this._whisperPipeline = await pipeline('automatic-speech-recognition', modelId, {
+                    dtype: 'q4', device: navigator.gpu ? 'webgpu' : 'wasm',
+                    progress_callback: (info) => { if (info.status === 'progress' && info.total) onProgress?.(`Loading Whisper... ${Math.round((info.loaded / info.total) * 100)}%`, Math.round((info.loaded / info.total) * 100)); },
+                });
+                this._log('Whisper model loaded');
+                return this._whisperPipeline;
+            },
+
+            // ═══ BROWSER AI: Local LLM via Transformers.js + WebGPU ═══
+            async _loadBrowserLLMPipeline(onStatus) {
+                const modelKey = appState.settings.cfBrowserAiModel || 'SmolLM2-360M-Instruct';
+                const modelInfo = this._CF_BROWSER_AI_MODELS[modelKey];
+                if (!modelInfo) throw new Error('Unknown Browser AI model: ' + modelKey);
+
+                // Reuse pipeline if same model already loaded
+                if (this._browserLLMPipeline && this._browserLLMModelId === modelInfo.id) {
+                    return this._browserLLMPipeline;
+                }
+
+                // If a different model was loaded, discard it
+                if (this._browserLLMPipeline && this._browserLLMModelId !== modelInfo.id) {
+                    this._log('Browser AI: model changed, discarding old pipeline');
+                    try { await this._browserLLMPipeline.dispose?.(); } catch(e) {}
+                    this._browserLLMPipeline = null;
+                    this._browserLLMModelId = null;
+                }
+
+                this._log('Browser AI: loading model:', modelInfo.id, '(' + modelInfo.size + ')');
+                onStatus?.('Loading Transformers.js...', 'loading', 10);
+
+                if (!navigator.gpu) {
+                    this._warn('Browser AI: WebGPU not available. Try Chrome or Edge.');
+                    throw new Error('WebGPU not available. Browser AI requires Chrome or Edge with WebGPU support.');
+                }
+
+                const transformers = await this._loadTransformersLib();
+                const { pipeline } = transformers;
+
+                onStatus?.(`Loading ${modelKey} (${modelInfo.size})...`, 'loading', 20);
+
+                this._browserLLMPipeline = await pipeline('text-generation', modelInfo.id, {
+                    dtype: 'q4f16',
+                    device: 'webgpu',
+                    progress_callback: (info) => {
+                        if (info.status === 'progress' && info.total) {
+                            const pct = Math.round((info.loaded / info.total) * 100);
+                            onStatus?.(`Downloading ${modelKey}... ${pct}%`, 'loading', 20 + Math.round(pct * 0.4));
+                        }
+                        if (info.status === 'ready') {
+                            onStatus?.(`${modelKey} loaded`, 'loading', 65);
+                        }
+                    },
+                });
+                this._browserLLMModelId = modelInfo.id;
+                this._log('Browser AI: model loaded:', modelInfo.id);
+                return this._browserLLMPipeline;
+            },
+
+            async _callBrowserAI(systemPrompt, userPrompt, onStatus) {
+                const generator = await this._loadBrowserLLMPipeline(onStatus);
+                onStatus?.('Generating with Browser AI...', 'loading', 70);
+
+                const messages = [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ];
+
+                this._log('Browser AI: generating, prompt length:', systemPrompt.length + userPrompt.length);
+                const startTime = performance.now();
+
+                const result = await generator(messages, {
+                    max_new_tokens: 1024,
+                    temperature: 0.1,
+                    do_sample: true,
+                    return_full_text: false,
+                });
+
+                const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+                const output = result?.[0]?.generated_text;
+
+                // Extract assistant response — handle both string and array-of-messages formats
+                let text;
+                if (typeof output === 'string') {
+                    text = output.trim();
+                } else if (Array.isArray(output)) {
+                    // Some models return [{role:'assistant', content:'...'}]
+                    const assistantMsg = output.find(m => m.role === 'assistant');
+                    text = assistantMsg?.content?.trim() || '';
+                } else if (output?.content) {
+                    text = output.content.trim();
+                } else {
+                    text = String(output || '').trim();
+                }
+
+                this._log('Browser AI: generated', text.length, 'chars in', elapsed + 's');
+                onStatus?.(`Generated in ${elapsed}s`, 'loading', 90);
+                return text;
+            },
+
+            async _getAudioViaCobalt(videoId, onProgress) {
+                this._log('Trying Cobalt API for audio...');
+                onProgress?.('Trying Cobalt API...', 10);
+                const resp = await this._gmPostJson('https://cobalt-api.meowing.de/', { url: `https://www.youtube.com/watch?v=${videoId}`, downloadMode: 'audio', audioFormat: 'opus', filenameStyle: 'basic' }, { Accept: 'application/json' });
+                const dlUrl = resp?.url;
+                if (!dlUrl) throw new Error(`Cobalt API error: ${resp?.error?.code || resp?.status || JSON.stringify(resp).slice(0, 200)}`);
+                this._log('Cobalt URL obtained:', dlUrl.slice(0, 100));
+                return new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({ method: 'GET', url: dlUrl, responseType: 'arraybuffer', anonymous: true,
+                        onprogress: (evt) => { if (evt.total > 0) onProgress?.(`Downloading audio via Cobalt... ${Math.round((evt.loaded / evt.total) * 100)}%`, Math.round((evt.loaded / evt.total) * 100)); },
+                        onload: (r) => { const bytes = r.response?.byteLength || 0; if (r.status >= 400 || bytes < 1000) { reject(new Error(`Cobalt download failed: HTTP ${r.status}, ${bytes} bytes`)); return; } resolve(r.response); },
+                        onerror: (e) => reject(new Error('Cobalt download error')), ontimeout: () => reject(new Error('Cobalt download timeout')), timeout: 120000 });
+                });
+            },
+
+            async _capturePlayerAudio(onStatus) {
+                const video = document.querySelector('video.html5-main-video');
+                if (!video || !video.duration || video.duration > 1800) throw new Error('Player capture: video not available or >30min');
+                onStatus?.('Capturing audio from player...', 10);
+                const videoSrc = video.src || video.currentSrc;
+                if (videoSrc && !videoSrc.startsWith('blob:')) {
+                    try { const resp = await fetch(videoSrc); return await resp.arrayBuffer(); } catch(e) { throw new Error('Cannot fetch video source: ' + e.message); }
+                }
+                const stream = video.captureStream ? video.captureStream() : video.mozCaptureStream?.();
+                if (!stream) throw new Error('captureStream not available');
+                const audioCtx = new AudioContext({ sampleRate: 16000 });
+                audioCtx.createMediaStreamSource(stream);
+                const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+                const chunks = [];
+                recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+                return new Promise((resolve, reject) => {
+                    recorder.onstop = async () => { audioCtx.close(); const blob = new Blob(chunks, { type: 'audio/webm' }); resolve(await blob.arrayBuffer()); };
+                    recorder.onerror = () => { audioCtx.close(); reject(new Error('Recording failed')); };
+                    onStatus?.('Real-time audio capture (takes video duration)...', 15);
+                    recorder.start(1000);
+                    setTimeout(() => { try { recorder.stop(); } catch(e) {} }, Math.min(video.duration * 1000, 300000));
+                });
+            },
+
+            async _whisperTranscribe(videoId, onStatus) {
+                const s = appState.settings;
+                const methods = [];
+                if (s.cfUseInnertube !== false) methods.push('innertube');
+                if (s.cfUseCobalt !== false) methods.push('cobalt');
+                if (s.cfUseCapture !== false) methods.push('capture');
+                if (!methods.length) methods.push('innertube', 'cobalt');
+
+                this._log('Whisper audio methods:', methods.join(', '));
+                let audioData = null;
+
+                for (const method of methods) {
+                    if (audioData) break;
+                    try {
+                        if (method === 'innertube') {
+                            onStatus?.('Finding audio stream (Innertube)...', 5);
+                            const audioInfo = await this._getAudioStreamUrl(videoId);
+                            if (audioInfo) audioData = await this._downloadAudioData(audioInfo.url, (msg, pct) => onStatus?.(msg, Math.round(5 + pct * 0.3)), audioInfo.ua);
+                        } else if (method === 'cobalt') {
+                            onStatus?.('Finding audio stream (Cobalt)...', 5);
+                            audioData = await this._getAudioViaCobalt(videoId, (msg, pct) => onStatus?.(msg, Math.round(5 + pct * 0.3)));
+                        } else if (method === 'capture') {
+                            onStatus?.('Capturing audio from player...', 5);
+                            audioData = await this._capturePlayerAudio(onStatus);
+                        }
+                    } catch(e) {
+                        this._warn('Audio method "' + method + '" failed:', e.message);
+                    }
+                }
+
+                if (!audioData) throw new Error('All audio download methods failed (' + methods.join(', ') + ')');
+
+                onStatus?.('Decoding audio...', 38);
+                const samples = await this._decodeAndResample(audioData);
+                this._log('Audio ready:', (samples.length / 16000).toFixed(1) + 's');
+
+                const transcriber = await this._loadWhisperPipeline((msg, pct) => onStatus?.(msg, Math.round(40 + (pct || 0) * 0.2)));
+                onStatus?.('Transcribing with Whisper AI...', 62);
+                const startTime = performance.now();
+                const result = await transcriber(samples, { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true, language: 'en' });
+                const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+
+                const segments = [];
+                if (result.chunks?.length) { for (const chunk of result.chunks) { const text = chunk.text?.trim(); if (!text) continue; segments.push({ start: chunk.timestamp?.[0] || 0, dur: (chunk.timestamp?.[1] || (chunk.timestamp?.[0] || 0) + 5) - (chunk.timestamp?.[0] || 0), text }); } }
+                else if (result.text) { segments.push({ start: 0, dur: samples.length / 16000, text: result.text.trim() }); }
+
+                onStatus?.(`Transcribed ${segments.length} segments in ${elapsed}s`, 100);
+                return segments;
+            },
+
+            // ═══ OLLAMA MODEL MANAGER ═══
+            _CF_RECOMMENDED_MODELS: {
+                'qwen3:32b':      { size: '~20 GB', speed: 'Medium', quality: 'Excellent', desc: '128K context, hybrid reasoning, best local model for detailed chapters & summaries' },
+            },
+
+            async _ollamaCheck() {
+                return new Promise(resolve => {
+                    GM_xmlhttpRequest({
+                        method: 'GET', url: 'http://localhost:11434/api/tags',
+                        timeout: 3000,
+                        onload: (r) => {
+                            try {
+                                const data = JSON.parse(r.responseText);
+                                resolve({ running: true, models: (data.models || []).map(m => m.name) });
+                            } catch { resolve({ running: true, models: [] }); }
+                        },
+                        onerror: () => resolve({ running: false, models: [] }),
+                        ontimeout: () => resolve({ running: false, models: [] })
+                    });
+                });
+            },
+
+            async _ollamaPull(modelName, onProgress) {
+                return new Promise((resolve, reject) => {
+                    onProgress?.(`Pulling ${modelName}...`, 0);
+                    GM_xmlhttpRequest({
+                        method: 'POST',
+                        url: 'http://localhost:11434/api/pull',
+                        headers: { 'Content-Type': 'application/json' },
+                        data: JSON.stringify({ name: modelName, stream: false }),
+                        timeout: 600000, // 10 minute timeout for large downloads
+                        onload: (r) => {
+                            try {
+                                const data = JSON.parse(r.responseText);
+                                if (data.error) {
+                                    onProgress?.(`Error: ${data.error}`, -1);
+                                    reject(new Error(data.error));
+                                } else {
+                                    onProgress?.(`${modelName} ready`, 100);
+                                    resolve(true);
+                                }
+                            } catch(e) {
+                                // Streaming response — check last line
+                                const lines = r.responseText.trim().split('\n');
+                                const last = lines[lines.length - 1];
+                                try {
+                                    const lastData = JSON.parse(last);
+                                    if (lastData.status === 'success') {
+                                        onProgress?.(`${modelName} ready`, 100);
+                                        resolve(true);
+                                    } else {
+                                        onProgress?.(`${modelName} pull complete`, 100);
+                                        resolve(true);
+                                    }
+                                } catch {
+                                    onProgress?.(`${modelName} pull complete`, 100);
+                                    resolve(true);
+                                }
+                            }
+                        },
+                        onerror: (e) => { onProgress?.('Pull failed — is Ollama running?', -1); reject(new Error('Pull failed')); },
+                        ontimeout: () => { onProgress?.('Pull timed out', -1); reject(new Error('Timeout')); }
+                    });
+                });
+            },
+
+            // ═══ LLM PROMPT BUILDERS (shared across all generation paths) ═══
+            _buildChapterSystemPrompt(durationMin) {
+                const seoMode = appState.settings.cfChapterMode === 'seo';
+                const seoRules = seoMode ? `\n- IMPORTANT: Optimize chapter titles for YouTube SEO — include searchable keywords viewers would actually type
+- Titles should be 4-9 words with specific, keyword-rich language
+- Include topic-specific terms, product names, and action words (e.g. "How to Configure Nginx Reverse Proxy" not "Server Setup")
+- Front-load the most important keyword in each title` : '';
+                return `You are an expert video chapter generator. Analyze the transcript and identify where the speaker changes topics, introduces new concepts, or shifts focus. Output ONLY a valid JSON object (no markdown fences, no commentary).
+
+Format:
+{"chapters":[{"start":0,"title":"..."}],"pois":[{"time":120,"label":"..."}]}
+
+Chapter rules:
+- "start" values are integers (seconds). First chapter MUST start at 0
+- Create 4-10 chapters proportional to the video length (${durationMin} min). ~1 chapter per 3-5 minutes
+- Titles should be ${seoMode ? '4-9' : '3-7'} words, descriptive and specific — name the actual topic discussed
+- Place boundaries where the speaker transitions to a NEW topic, not mid-discussion
+- Avoid generic titles like "Introduction" or "Conclusion" unless that's genuinely what the section is${seoRules}
+
+POI (Points of Interest) rules:
+- 2-6 POIs marking the most valuable, surprising, or actionable moments
+- Labels should be 4-10 words describing what happens at that moment
+- Good POIs: key reveals, important tips, surprising facts, critical warnings, best quotes
+- Don't place POIs at chapter boundaries
+
+Example output for a 15-minute coding tutorial:
+{"chapters":[{"start":0,"title":"${seoMode ? 'Project Setup Installing Required Dependencies' : 'Project Setup and Dependencies'}"},{"start":95,"title":"${seoMode ? 'Building Express API Route Handler From Scratch' : 'Building the API Route Handler'}"},{"start":280,"title":"${seoMode ? 'PostgreSQL Database Schema Design Best Practices' : 'Database Schema Design'}"},{"start":450,"title":"${seoMode ? 'JWT Authentication Middleware Implementation' : 'Authentication Middleware'}"},{"start":680,"title":"${seoMode ? 'Unit Testing and Error Handling Strategies' : 'Testing and Error Handling'}"},{"start":820,"title":"${seoMode ? 'Deploy Node.js App to Production Server' : 'Deployment to Production'}"}],"pois":[{"time":145,"label":"Common gotcha with async middleware"},{"time":340,"label":"Why indexes matter for this query pattern"},{"time":720,"label":"The one test that catches 90% of bugs"}]}
+
+Output ONLY the JSON object.`;
+            },
+
+            _buildLiveChapterSystemPrompt(durationMin) {
+                return `You are a video chapter generator for a LIVE stream (~${durationMin} min so far). Analyze the transcript and output ONLY a valid JSON object:
+{"chapters":[{"start":0,"title":"Stream Opening"}],"pois":[{"time":45,"label":"Key moment"}]}
+
+Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3-7 words, specific to content discussed. Output ONLY JSON.`;
+            },
+
+            // ═══ LLM API (OpenAI-compatible, via GM_xmlhttpRequest — bypasses CSP) ═══
+            _getLlmEndpoint() {
+                const s = appState.settings;
+                const provider = s.cfLlmProvider || 'builtin';
+                if (provider === 'custom') return s.cfLlmEndpoint || '';
+                return this._CF_PROVIDERS[provider]?.endpoint || null;
+            },
+            _getLlmModel() {
+                const s = appState.settings;
+                const provider = s.cfLlmProvider || 'builtin';
+                // Ollama uses its own model setting to prevent cross-contamination with web AI models
+                if (provider === 'ollama') {
+                    // Auto-select when enabled and we have cached installed models
+                    if (s.cfAutoModel && this._lastOllamaModels?.length) {
+                        const durationMin = Math.ceil((this._getVideoDuration() || 300) / 60);
+                        const auto = this._getOptimalModel(durationMin, this._lastOllamaModels);
+                        if (auto) {
+                            this._log('Auto-selected model:', auto, 'for', durationMin, 'min video');
+                            return auto;
+                        }
+                    }
+                    return s.cfOllamaModel || this._CF_PROVIDERS.ollama.defaultModel;
+                }
+                return s.cfLlmModel || this._CF_PROVIDERS[provider]?.defaultModel || 'gpt-4o';
+            },
+            _isLocalProvider() {
+                const p = appState.settings.cfLlmProvider || 'builtin';
+                if (p === 'ollama') return true;
+                if (p === 'custom') {
+                    const ep = appState.settings.cfLlmEndpoint || '';
+                    return ep.includes('localhost') || ep.includes('127.0.0.1');
+                }
+                return false;
+            },
+            async _ensureOllama(onStatus) {
+                // 1. Check if Ollama is running
+                let check = await this._ollamaCheck();
+                if (check.running) {
+                    this._lastOllamaModels = check.models;
+                    // Auto-detect model if none set
+                    if (check.models.length && !appState.settings.cfOllamaModel) {
+                        const rec = Object.keys(this._CF_RECOMMENDED_MODELS);
+                        const match = check.models.find(m => rec.some(r => m.startsWith(r.split(':')[0]))) || check.models[0];
+                        appState.settings.cfOllamaModel = match.replace(':latest', '');
+                        settingsManager.save(appState.settings);
+                        this._log('Auto-detected Ollama model:', appState.settings.cfOllamaModel);
+                    }
+                    return check;
+                }
+                // 2. Try to wake Ollama (some Windows installs sleep until first request)
+                onStatus?.('Ollama not responding, attempting to wake...', 'loading', 40);
+                this._log('Ollama not responding, sending wake requests...');
+                try {
+                    await new Promise((resolve) => {
+                        GM_xmlhttpRequest({ method: 'GET', url: 'http://localhost:11434/', timeout: 5000, onload: () => resolve(), onerror: () => resolve(), ontimeout: () => resolve() });
+                    });
+                    for (let attempt = 1; attempt <= 6; attempt++) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        onStatus?.(`Waiting for Ollama... (attempt ${attempt}/6)`, 'loading', 40 + attempt * 5);
+                        check = await this._ollamaCheck();
+                        if (check.running) {
+                            this._lastOllamaModels = check.models;
+                            this._log('Ollama started on attempt', attempt);
+                            if (check.models.length && !appState.settings.cfOllamaModel) {
+                                const rec = Object.keys(this._CF_RECOMMENDED_MODELS);
+                                const match = check.models.find(m => rec.some(r => m.startsWith(r.split(':')[0]))) || check.models[0];
+                                appState.settings.cfOllamaModel = match.replace(':latest', '');
+                                settingsManager.save(appState.settings);
+                            }
+                            return check;
+                        }
+                    }
+                } catch(e) { this._log('Ollama wake error:', e.message); }
+                return { running: false, models: [] };
+            },
+            async _callLlmApi(systemPrompt, userPrompt, onStatus, opts = {}) {
+                const provider = appState.settings.cfLlmProvider || 'builtin';
+                const isLocal = this._isLocalProvider();
+
+                // For Ollama: ensure server is running and model is detected
+                if (provider === 'ollama') {
+                    const ollamaStatus = await this._ensureOllama(onStatus);
+                    if (!ollamaStatus.running) {
+                        throw new Error('Ollama is not running. Start it from your system tray, or run: ollama serve');
+                    }
+                    if (!ollamaStatus.models.length) {
+                        throw new Error('No models installed in Ollama. Run: ollama pull qwen3:32b');
+                    }
+                }
+
+                const endpoint = this._getLlmEndpoint();
+                const model = this._getLlmModel();
+                const apiKey = appState.settings.cfLlmApiKey || '';
+                if (!endpoint) throw new Error('No LLM endpoint configured');
+
+                const maxTokens = opts.maxTokens || (isLocal ? 4096 : 2048);
+                const timeout = opts.timeout || (isLocal ? 180000 : 60000);
+
+                this._log('LLM API call:', endpoint, 'model:', model, 'local:', isLocal, 'timeout:', timeout);
+                const autoSelected = (appState.settings.cfAutoModel && appState.settings.cfLlmProvider === 'ollama' && this._lastOllamaModels?.length);
+                onStatus?.(isLocal ? `Processing via Ollama (${model}${autoSelected ? ' - auto' : ''})...` : 'Calling LLM API...', 'loading', 80);
+
+                const headers = { 'Content-Type': 'application/json' };
+                if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+                if (provider === 'openrouter') {
+                    headers['HTTP-Referer'] = 'https://github.com/SysAdminDoc/YTKit';
+                    headers['X-Title'] = 'YTKit ChapterForge';
+                }
+
+                const body = {
+                    model,
+                    messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+                    temperature: 0.1,
+                    max_tokens: maxTokens,
+                    stream: false,
+                };
+
+                // Ollama needs explicit context window size — default is only 2048 tokens
+                // which truncates anything over ~5 minutes of transcript
+                if (provider === 'ollama') {
+                    // Estimate tokens needed: ~4 chars per token for English
+                    const estimatedTokens = Math.ceil((systemPrompt.length + userPrompt.length) / 3.5);
+                    // Set context window to fit the full prompt + room for response
+                    const numCtx = Math.min(Math.max(estimatedTokens + maxTokens + 512, 8192), 131072);
+                    body.options = { num_ctx: numCtx };
+                    this._log('Ollama num_ctx:', numCtx, '(estimated', estimatedTokens, 'input tokens)');
+                }
+
+                const data = await this._gmPostJson(endpoint, body, headers, timeout);
+                if (data?.error) throw new Error(`LLM API error: ${data.error.message || JSON.stringify(data.error).slice(0, 200)}`);
+                const content = data?.choices?.[0]?.message?.content;
+                if (!content) throw new Error('LLM returned empty response');
+                this._log('LLM response length:', content.length);
+                return content;
+            },
+
+            // ═══ NLP ENGINE (zero dependencies) ═══
+
+            // Stopwords for English — filter these from keyword extraction
+            _NLP_STOPS: new Set(['the','and','that','this','with','for','are','was','were','been','have','has','had','not','but','what','all','can','her','his','from','they','will','one','its','also','just','more','about','would','there','their','which','could','other','than','then','these','some','them','into','only','your','when','very','most','over','such','after','know','like','going','right','think','really','want','well','here','look','make','come','how','did','get','got','say','said','because','way','still','being','those','where','back','does','take','much','many','through','before','should','each','between','must','same','thing','things','even','every','doing','something','anything','nothing','everything','need','let','see','yeah','yes','okay','actually','gonna','kind','sort','mean','basically','literally','stuff','pretty','little','whole','sure','probably','maybe','guess','though','enough','around','might','quite','able','always','never','already','again','another','talking','talk','people','called','start','started','going','really','actually','point','work','working','time','way','lot','part']),
+
+            // Tokenize text into clean lowercase word array
+            _nlpTokenize(text) {
+                return text.toLowerCase().replace(/[^\w\s'-]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !/^\d+$/.test(w));
+            },
+
+            // Extract meaningful bigrams (two-word phrases)
+            _nlpBigrams(tokens) {
+                const bigrams = [];
+                for (let i = 0; i < tokens.length - 1; i++) {
+                    const a = tokens[i], b = tokens[i + 1];
+                    if (!this._NLP_STOPS.has(a) && !this._NLP_STOPS.has(b) && a.length > 2 && b.length > 2) {
+                        bigrams.push(a + ' ' + b);
+                    }
+                }
+                return bigrams;
+            },
+
+            // Compute TF-IDF vectors for an array of documents (each doc is a string)
+            _nlpTFIDF(docs) {
+                const N = docs.length;
+                const docTokens = docs.map(d => this._nlpTokenize(d));
+                const docBigrams = docTokens.map(t => this._nlpBigrams(t));
+
+                // Document frequency for each term
+                const df = {};
+                for (let i = 0; i < N; i++) {
+                    const seen = new Set();
+                    for (const t of docTokens[i]) { if (!this._NLP_STOPS.has(t)) seen.add(t); }
+                    for (const b of docBigrams[i]) seen.add(b);
+                    for (const term of seen) df[term] = (df[term] || 0) + 1;
+                }
+
+                // Compute TF-IDF vectors
+                const vectors = [];
+                for (let i = 0; i < N; i++) {
+                    const tf = {};
+                    const allTerms = [...docTokens[i].filter(t => !this._NLP_STOPS.has(t)), ...docBigrams[i]];
+                    const total = allTerms.length || 1;
+                    for (const t of allTerms) tf[t] = (tf[t] || 0) + 1;
+                    const vec = {};
+                    for (const [term, count] of Object.entries(tf)) {
+                        const idf = Math.log(N / (df[term] || 1));
+                        if (idf > 0.1) vec[term] = (count / total) * idf;
+                    }
+                    vectors.push(vec);
+                }
+                return vectors;
+            },
+
+            // Cosine similarity between two sparse TF-IDF vectors
+            _nlpCosine(a, b) {
+                let dot = 0, normA = 0, normB = 0;
+                for (const [k, v] of Object.entries(a)) {
+                    normA += v * v;
+                    if (b[k]) dot += v * b[k];
+                }
+                for (const v of Object.values(b)) normB += v * v;
+                const denom = Math.sqrt(normA) * Math.sqrt(normB);
+                return denom > 0 ? dot / denom : 0;
+            },
+
+            // Extract top-N key phrases from a TF-IDF vector, preferring bigrams
+            _nlpKeyPhrases(vec, n = 5) {
+                return Object.entries(vec)
+                    .map(([term, score]) => ({ term, score: score * (term.includes(' ') ? 1.5 : 1) }))
+                    .sort((a, b) => b.score - a.score)
+                    .slice(0, n)
+                    .map(e => e.term);
+            },
+
+            // Title-case a phrase
+            _nlpTitleCase(phrase) {
+                const minor = new Set(['a','an','the','and','or','but','in','on','at','to','for','of','by','with','vs']);
+                return phrase.split(' ').map((w, i) => {
+                    if (i > 0 && minor.has(w)) return w;
+                    return w.charAt(0).toUpperCase() + w.slice(1);
+                }).join(' ');
+            },
+
+            // TextRank-lite: score sentences by importance using graph-based ranking
+            _nlpTextRank(sentences, topN = 5) {
+                if (sentences.length <= topN) return sentences.map((s, i) => ({ text: s, idx: i, score: 1 }));
+
+                const tokenized = sentences.map(s => new Set(this._nlpTokenize(s).filter(t => !this._NLP_STOPS.has(t))));
+
+                // Build similarity matrix and compute scores (simplified PageRank)
+                const scores = new Float64Array(sentences.length).fill(1);
+                const dampening = 0.85;
+
+                for (let iter = 0; iter < 15; iter++) {
+                    const newScores = new Float64Array(sentences.length).fill(1 - dampening);
+                    for (let i = 0; i < sentences.length; i++) {
+                        let totalSim = 0;
+                        const sims = new Float64Array(sentences.length);
+                        for (let j = 0; j < sentences.length; j++) {
+                            if (i === j) continue;
+                            const intersection = [...tokenized[i]].filter(t => tokenized[j].has(t)).length;
+                            const union = new Set([...tokenized[i], ...tokenized[j]]).size;
+                            sims[j] = union > 0 ? intersection / union : 0;
+                            totalSim += sims[j];
+                        }
+                        if (totalSim > 0) {
+                            for (let j = 0; j < sentences.length; j++) {
+                                newScores[j] += dampening * (sims[j] / totalSim) * scores[i];
+                            }
+                        }
+                    }
+                    for (let i = 0; i < sentences.length; i++) scores[i] = newScores[i];
+                }
+
+                // Position bias: first and last sentences get a boost
+                const posBoost = (idx) => {
+                    if (idx <= 1) return 1.3;
+                    if (idx >= sentences.length - 2) return 1.15;
+                    return 1.0;
+                };
+
+                return Array.from(scores)
+                    .map((score, idx) => ({ text: sentences[idx], idx, score: score * posBoost(idx) }))
+                    .sort((a, b) => b.score - a.score)
+                    .slice(0, topN)
+                    .sort((a, b) => a.idx - b.idx); // restore document order
+            },
+
+            // ═══ BUILT-IN HEURISTIC CHAPTER GENERATOR (TF-IDF + Cosine Similarity) ═══
+            _generateChaptersHeuristic(segments, duration) {
+                this._log('NLP heuristic generator:', segments.length, 'segments');
+                const totalSecs = duration || segments[segments.length - 1]?.start + 30 || 300;
+
+                // ── Step 1: Build time-windowed documents (30-second windows) ──
+                const windowSize = 30;
+                const windows = [];
+                for (const seg of segments) {
+                    const idx = Math.floor(seg.start / windowSize);
+                    while (windows.length <= idx) windows.push({ start: windows.length * windowSize, texts: [] });
+                    windows[idx].texts.push(seg.text);
+                }
+
+                // ── Step 2: Merge into fixed ~60-second analysis groups ──
+                // Keep groups small regardless of video length so TF-IDF vectors stay distinctive.
+                // Previous approach scaled groups with video length, making them 3-4 min for long videos,
+                // which caused vectors to converge and chapters to stop being detected past ~10 min.
+                const groupWindowCount = 2; // 2 × 30s = 60s per group — consistent resolution
+                const groups = [];
+                for (let i = 0; i < windows.length; i += groupWindowCount) {
+                    const slice = windows.slice(i, i + groupWindowCount);
+                    const text = slice.map(w => w.texts.join(' ')).join(' ');
+                    if (text.trim()) groups.push({ start: slice[0]?.start || 0, text });
+                }
+                if (groups.length < 2) {
+                    return { chapters: [{ start: 0, title: 'Full Video', end: totalSecs }], pois: [] };
+                }
+
+                // ── Step 3: Compute TF-IDF vectors for each group ──
+                const groupDocs = groups.map(g => g.text);
+                const vectors = this._nlpTFIDF(groupDocs);
+
+                // ── Step 4: Find topic boundaries via cosine similarity drops ──
+                const similarities = [];
+                for (let i = 1; i < groups.length; i++) {
+                    similarities.push({ idx: i, sim: this._nlpCosine(vectors[i - 1], vectors[i]) });
+                }
+
+                // Adaptive threshold: use percentile-based approach for long videos
+                const sims = similarities.map(s => s.sim);
+                const sortedSims = [...sims].sort((a, b) => a - b);
+                const meanSim = sims.reduce((a, b) => a + b, 0) / sims.length;
+                const stdSim = Math.sqrt(sims.reduce((a, b) => a + (b - meanSim) ** 2, 0) / sims.length);
+                // Use lower of: mean - 0.5*std OR 25th percentile — whichever finds more boundaries
+                const statThreshold = meanSim - 0.5 * stdSim;
+                const pctThreshold = sortedSims[Math.floor(sortedSims.length * 0.25)] || 0;
+                const threshold = Math.max(0.05, Math.min(statThreshold, pctThreshold + 0.05));
+                this._log('Cosine threshold:', threshold.toFixed(3), 'mean:', meanSim.toFixed(3), 'std:', stdSim.toFixed(3), 'p25:', pctThreshold.toFixed(3));
+
+                // Minimum gap between boundaries is time-based (90 seconds), not group-count-based
+                const minGapSeconds = 90;
+                const boundaries = [0];
+                for (const { idx, sim } of similarities) {
+                    if (sim < threshold) {
+                        const lastBoundaryTime = groups[boundaries[boundaries.length - 1]].start;
+                        const thisTime = groups[idx].start;
+                        if (thisTime - lastBoundaryTime >= minGapSeconds) {
+                            boundaries.push(idx);
+                        }
+                    }
+                }
+
+                // Target chapter count based on video length: ~1 per 3-5 minutes
+                const targetMin = Math.max(3, Math.floor(totalSecs / 300)); // 1 per 5 min, min 3
+                const targetMax = Math.max(6, Math.ceil(totalSecs / 180));  // 1 per 3 min
+                const targetCap = Math.min(targetMax, 15); // hard cap
+
+                // Trim excess: remove boundaries with smallest similarity drops
+                while (boundaries.length > targetCap) {
+                    let bestMerge = 1, bestSim = -1;
+                    for (let i = 1; i < boundaries.length; i++) {
+                        // Find the boundary with highest similarity (weakest topic change)
+                        const s = similarities.find(s => s.idx === boundaries[i])?.sim ?? 1;
+                        if (s > bestSim) { bestSim = s; bestMerge = i; }
+                    }
+                    boundaries.splice(bestMerge, 1);
+                }
+
+                // Add boundaries if too few: split largest chapters at biggest similarity drops
+                if (boundaries.length < targetMin && groups.length >= 4) {
+                    // Find low-similarity points not yet used as boundaries
+                    const unusedDrops = similarities
+                        .filter(s => !boundaries.includes(s.idx) && s.sim < meanSim)
+                        .sort((a, b) => a.sim - b.sim);
+                    for (const drop of unusedDrops) {
+                        if (boundaries.length >= targetMin) break;
+                        // Check time gap from nearest existing boundary
+                        const dropTime = groups[drop.idx].start;
+                        const tooClose = boundaries.some(bIdx => Math.abs(groups[bIdx].start - dropTime) < 60);
+                        if (!tooClose) {
+                            boundaries.push(drop.idx);
+                            boundaries.sort((a, b) => a - b);
+                        }
+                    }
+                }
+
+                // ── Step 5: Generate descriptive titles using key phrases ──
+                const chapters = boundaries.map((bIdx, i) => {
+                    const endIdx = i < boundaries.length - 1 ? boundaries[i + 1] : groups.length;
+                    const mergedVec = {};
+                    for (let g = bIdx; g < endIdx; g++) {
+                        for (const [term, score] of Object.entries(vectors[g])) {
+                            mergedVec[term] = (mergedVec[term] || 0) + score;
+                        }
+                    }
+                    const keyPhrases = this._nlpKeyPhrases(mergedVec, 4);
+
+                    let title;
+                    if (keyPhrases.length >= 2) {
+                        if (keyPhrases[0].includes(' ')) {
+                            title = this._nlpTitleCase(keyPhrases[0]);
+                        } else if (keyPhrases[1].includes(' ')) {
+                            title = this._nlpTitleCase(keyPhrases[1]);
+                        } else {
+                            title = this._nlpTitleCase(keyPhrases[0] + ' ' + keyPhrases[1]);
+                        }
+                        if (title.length < 10 && keyPhrases.length >= 3) {
+                            const extra = keyPhrases[2].includes(' ') ? keyPhrases[2].split(' ')[0] : keyPhrases[2];
+                            title += ' ' + this._nlpTitleCase(extra);
+                        }
+                    } else if (keyPhrases.length === 1) {
+                        title = this._nlpTitleCase(keyPhrases[0]);
+                    } else {
+                        title = `Section ${i + 1}`;
+                    }
+
+                    return { start: Math.round(groups[bIdx].start), title: title.slice(0, 50) };
+                });
+
+                if (chapters.length && chapters[0].start > 5) chapters[0].start = 0;
+                for (let i = 0; i < chapters.length; i++) {
+                    chapters[i].end = i < chapters.length - 1 ? chapters[i + 1].start : totalSecs;
+                }
+
+                // ── Step 6: POI detection (multi-signal scoring) ──
+                const pois = this._detectPOIs(segments, chapters, totalSecs);
+
+                this._log('NLP result:', chapters.length, 'chapters,', pois.length, 'POIs from', groups.length, 'groups');
+                return { chapters, pois };
+            },
+
+            // ═══ POI DETECTION (multi-signal scoring) ═══
+            _detectPOIs(segments, chapters, totalSecs) {
+                const candidates = [];
+                const emphasisRe = /\b(important|key point|remember|crucial|breaking|announce|reveal|surprise|incredible|amazing|game.?changer|mind.?blow|breakthrough|discover|secret|tip|trick|hack|milestone|highlight|takeaway|essential|critical|warning|danger|careful|watch out|pay attention)\b/i;
+                const enumerationRe = /\b(first(ly)?|second(ly)?|third(ly)?|step one|step two|number one|number two|finally|in conclusion|to summarize|the main|the biggest|the most|in summary|bottom line|key takeaway|most importantly)\b/i;
+
+                for (let i = 0; i < segments.length; i++) {
+                    const seg = segments[i];
+                    let score = 0;
+
+                    if (emphasisRe.test(seg.text)) score += 4;
+                    if (enumerationRe.test(seg.text)) score += 3;
+
+                    // Question cluster
+                    const nearbyQ = segments.filter(s => Math.abs(s.start - seg.start) < 60 && s.text.includes('?')).length;
+                    if (nearbyQ >= 3) score += 2;
+
+                    // Time gap (pause = emphasis)
+                    if (i > 0 && seg.start - segments[i - 1].start > 8) score += 2;
+
+                    // Substantive length
+                    if (seg.text.length > 100) score += 1;
+                    if (seg.text.includes('!')) score += 1;
+
+                    // Named entities (capitalized words mid-sentence)
+                    const caps = seg.text.match(/\b[A-Z][a-z]{2,}/g);
+                    if (caps && caps.length >= 2) score += 1;
+
+                    if (score >= 3) {
+                        let label = seg.text.trim();
+                        const sents = label.split(/[.!?]+/).filter(s => s.trim().length > 10);
+                        if (sents.length > 1) {
+                            label = (sents.find(s => emphasisRe.test(s) || enumerationRe.test(s)) || sents[0]).trim();
+                        }
+                        if (label.length > 70) label = label.slice(0, 67) + '...';
+                        candidates.push({ time: Math.round(seg.start), label, score });
+                    }
+                }
+
+                candidates.sort((a, b) => b.score - a.score);
+                const pois = [];
+                for (const p of candidates) {
+                    if (pois.length >= 6) break;
+                    if (pois.some(e => Math.abs(e.time - p.time) < 90)) continue;
+                    if (chapters.some(c => Math.abs(c.start - p.time) < 10)) continue;
+                    pois.push(p);
+                }
+                pois.sort((a, b) => a.time - b.time);
+                return pois;
+            },
+
+
+            // ═══ CHAPTER GENERATION (routes between builtin/API) ═══
+            async _generateChapters(videoId, onStatus) {
+                if (this._isGenerating) return null;
+                this._isGenerating = true;
+                try {
+                    const transcriptMethod = appState.settings.cfTranscriptMethod || 'auto';
+                    let segments = null;
+
+                    if (transcriptMethod !== 'whisper-only') {
+                        segments = await this._fetchTranscript(videoId, onStatus);
+                    }
+
+                    if (!segments?.length && transcriptMethod !== 'captions-only') {
+                        onStatus?.('Captions unavailable — trying Whisper AI...', 'loading', 0);
+                        try { segments = await this._whisperTranscribe(videoId, (msg, pct) => onStatus?.(msg, 'loading', Math.round(pct * 0.4))); }
+                        catch(e) { this._warn('Whisper failed:', e.message); onStatus?.(`Whisper failed: ${e.message}`, 'error', 0); this._isGenerating = false; return null; }
+                    }
+
+                    if (!segments?.length) {
+                        const reason = transcriptMethod === 'captions-only' ? 'No captions found (Whisper disabled)' : 'No transcript available';
+                        onStatus?.(reason, 'error', 0);
+                        this._isGenerating = false; return null;
+                    }
+
+                    this._log('Got', segments.length, 'transcript segments');
+                    this._lastTranscriptSegments = segments;
+                    const vidTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || videoId;
+                    this._cacheTranscript(videoId, segments, vidTitle);
+                    const duration = this._getVideoDuration();
+                    const provider = appState.settings.cfLlmProvider || 'builtin';
+
+                    let data;
+                    if (provider === 'builtin') {
+                        onStatus?.('Analyzing transcript (built-in)...', 'loading', 60);
+                        data = this._generateChaptersHeuristic(segments, duration);
+                    } else {
+                        try {
+                            const endpoint = this._getLlmEndpoint();
+                            if (!endpoint) throw new Error('No LLM endpoint configured');
+                            const needsKey = this._CF_PROVIDERS[provider]?.needsKey;
+                            if (needsKey && !appState.settings.cfLlmApiKey) throw new Error(`API key required for ${this._CF_PROVIDERS[provider]?.name || provider}`);
+
+                            onStatus?.('Preparing transcript for AI...', 'loading', 55);
+                            const isLocal = this._isLocalProvider();
+                            const txLimit = isLocal ? 200000 : 30000;
+                            const transcriptText = this._buildTranscriptText(segments, txLimit);
+                            const durationMin = Math.ceil(duration / 60);
+
+                            const systemPrompt = appState.settings.cfCustomChapterPrompt || this._buildChapterSystemPrompt(durationMin);
+                            const userPrompt = `Generate chapters and points of interest for this ${durationMin}-minute video titled "${vidTitle}".\n\nFull transcript (${segments.length} segments, ${transcriptText.length} chars):\n\n${transcriptText}`;
+
+                            onStatus?.(isLocal ? `Processing full transcript locally (${Math.round(transcriptText.length/1000)}K chars)...` : 'Calling LLM API...', 'loading', 70);
+                            const rawText = await this._callLlmApi(systemPrompt, userPrompt, onStatus);
+                            onStatus?.('Parsing AI results...', 'loading', 95);
+                            data = this._parseChapterJSON(rawText, duration);
+                            if (!data?.chapters?.length) {
+                                this._log('Raw AI output:', rawText);
+                                throw new Error('AI returned unparseable response');
+                            }
+                        } catch(aiErr) {
+                            this._warn('AI chapter gen failed, falling back to built-in:', aiErr.message);
+                            if (aiErr.message?.includes('unparseable')) {
+                                this._log('Hint: If using Ollama, ensure version >= 0.1.14 for OpenAI-compatible endpoint');
+                            }
+                            onStatus?.('AI failed — using built-in analysis...', 'loading', 80);
+                            data = this._generateChaptersHeuristic(segments, duration);
+                        }
+                    }
+
+                    if (data?.chapters?.length) {
+                        this._setCachedData(videoId, data);
+                        onStatus?.(`Generated ${data.chapters.length} chapters, ${data.pois.length} POIs`, 'ready', 100);
+                        this._isGenerating = false; return data;
+                    } else { onStatus?.('Generation produced no chapters', 'error', 0); this._isGenerating = false; return null; }
+                } catch(e) { this._warn('Generation error:', e); onStatus?.(e.message || 'Generation failed', 'error', 0); this._isGenerating = false; return null; }
+            },
+
+            _parseChapterJSON(raw, duration) {
+                let json = null;
+                try { json = JSON.parse(raw); } catch(e) {}
+                if (!json) { const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/); if (match) try { json = JSON.parse(match[1].trim()); } catch(e) {} }
+                if (!json) { const match = raw.match(/\{[\s\S]*\}/); if (match) try { json = JSON.parse(match[0]); } catch(e) {} }
+                if (!json) return null;
+                const chapters = (json.chapters || []).filter(c => typeof c.start === 'number' && typeof c.title === 'string').map(c => ({ start: Math.max(0, Math.min(c.start, duration || Infinity)), title: c.title.slice(0, 60) })).sort((a, b) => a.start - b.start);
+                const pois = (json.pois || json.poi || []).filter(p => typeof p.time === 'number' && typeof p.label === 'string').map(p => ({ time: Math.max(0, Math.min(p.time, duration || Infinity)), label: p.label.slice(0, 80) })).sort((a, b) => a.time - b.time);
+                if (chapters.length && chapters[0].start > 0) chapters.unshift({ start: 0, title: 'Introduction' });
+                for (let i = 0; i < chapters.length; i++) chapters[i].end = (i < chapters.length - 1) ? chapters[i + 1].start : (duration || chapters[i].start + 300);
+                return { chapters, pois };
+            },
+
+            // ═══════════════════════════════════════════════════════
+            //  OpenCut-inspired Analysis Engine (browser-native)
+            // ═══════════════════════════════════════════════════════
+
+            // Filler word detection — user-editable via cfFillerWords setting
+            _getFillerSets() {
+                const raw = appState.settings.cfFillerWords || '';
+                const words = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+                const simple = new Set();
+                const multi = [];
+                for (const w of words) {
+                    if (w.includes(' ')) {
+                        const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        multi.push({ pattern: new RegExp(`\\b(${escaped})\\b`, 'gi'), word: w });
+                    } else {
+                        simple.add(w);
+                    }
+                }
+                // "like" with comma is a special case (filler "like," vs normal "like")
+                if (simple.has('like')) {
+                    simple.delete('like');
+                    multi.push({ pattern: /\b(like)\s*[,]/gi, word: 'like' });
+                }
+                return { simple, multi };
+            },
+
+            _detectFillers(segments) {
+                if (!segments?.length) return [];
+                const { simple, multi } = this._getFillerSets();
+                if (simple.size === 0 && multi.length === 0) return [];
+                const fillers = [];
+                for (const seg of segments) {
+                    const text = seg.text || '';
+                    const words = text.split(/\s+/);
+                    const segDur = seg.dur || seg.duration || 3;
+                    const segEnd = seg.start + segDur;
+                    for (let wi = 0; wi < words.length; wi++) {
+                        const clean = words[wi].replace(/[^a-zA-Z\s]/g, '').toLowerCase().trim();
+                        if (simple.has(clean)) {
+                            const offset = (wi / Math.max(words.length, 1)) * segDur;
+                            fillers.push({ time: seg.start + offset, duration: 0.8, word: clean, segStart: seg.start, segEnd });
+                        }
+                    }
+                    for (const { pattern, word } of multi) {
+                        pattern.lastIndex = 0;
+                        let m;
+                        while ((m = pattern.exec(text)) !== null) {
+                            const matched = m[0].toLowerCase().trim();
+                            if (simple.has(matched)) continue;
+                            const charPos = m.index / Math.max(text.length, 1);
+                            fillers.push({ time: seg.start + charPos * segDur, duration: 1.0, word: matched, segStart: seg.start, segEnd });
+                        }
+                    }
+                }
+                fillers.sort((a, b) => a.time - b.time);
+                const deduped = []; let lastT = -2;
+                for (const f of fillers) { if (f.time - lastT > 1.0) { deduped.push(f); lastT = f.time; } }
+                this._log('Filler detection:', deduped.length, 'fillers in', segments.length, 'segments');
+                return deduped;
+            },
+
+            // ═══════════════════════════════════════════════════════
+            //  AutoSkip Engine (unified pause + filler skip)
+            //  Inspired by AutoCut aggression presets
+            // ═══════════════════════════════════════════════════════
+
+            // AutoSkip mode presets — controls pause threshold, filler skip, and silence speedup
+            _AUTOSKIP_PRESETS: {
+                gentle:     { pauseThreshold: 3.0, skipFillers: false, silenceSpeed: null, label: 'Gentle',     desc: 'Skip long pauses (>3s)' },
+                normal:     { pauseThreshold: 1.5, skipFillers: true,  silenceSpeed: null, label: 'Normal',     desc: 'Skip pauses >1.5s + fillers' },
+                aggressive: { pauseThreshold: 0.5, skipFillers: true,  silenceSpeed: 2.0,  label: 'Aggressive', desc: 'Skip all gaps, speed silence' },
+            },
+
+            _getAutoSkipPreset() {
+                const mode = appState.settings.cfAutoSkipMode || 'off';
+                return this._AUTOSKIP_PRESETS[mode] || null;
+            },
+
+            // Pause detection — recomputed per aggression level
+            _detectPauses(segments, threshold) {
+                if (!segments?.length || segments.length < 2) return [];
+                const pauses = [];
+                for (let i = 0; i < segments.length - 1; i++) {
+                    const segEnd = segments[i].start + (segments[i].dur || segments[i].duration || 3);
+                    const nextStart = segments[i + 1].start;
+                    const gap = nextStart - segEnd;
+                    if (gap >= threshold) {
+                        pauses.push({ start: segEnd, end: nextStart, duration: Math.round(gap * 10) / 10 });
+                    }
+                }
+                this._log('Pause detection:', pauses.length, 'pauses >', threshold + 's in', segments.length, 'segments');
+                return pauses;
+            },
+
+            // Recompute pauses for current preset and store
+            _recomputePauses() {
+                if (!this._lastTranscriptSegments?.length) return;
+                const preset = this._getAutoSkipPreset();
+                const threshold = preset ? preset.pauseThreshold : 1.5;
+                this._pauseData = this._detectPauses(this._lastTranscriptSegments, threshold);
+            },
+
+            // Unified skip loop — one RAF handles both pause and filler skipping
+            _startAutoSkip() {
+                if (this._autoSkipRAF) return;
+                const preset = this._getAutoSkipPreset();
+                if (!preset) return;
+                this._autoSkipActive = true;
+
+                // Recompute pauses for this aggression level
+                this._recomputePauses();
+
+                // Build a sorted skip list: [{start, end, type}]
+                // This lets us binary-search instead of scanning every filler/pause per frame
+                const skipZones = [];
+                if (this._pauseData?.length) {
+                    for (const p of this._pauseData) {
+                        skipZones.push({ start: p.start, end: p.end, type: 'pause' });
+                    }
+                }
+                if (preset.skipFillers && this._fillerData?.length) {
+                    for (const f of this._fillerData) {
+                        // Use wider window: ±1s around estimated time to account for
+                        // inaccurate word-level timing within transcript segments
+                        const windowStart = Math.max(f.time - 1.0, f.segStart);
+                        const windowEnd = Math.min(f.time + f.duration + 0.5, f.segEnd);
+                        skipZones.push({ start: windowStart, end: windowEnd, type: 'filler' });
+                    }
+                }
+                skipZones.sort((a, b) => a.start - b.start);
+
+                // Merge overlapping zones
+                const merged = [];
+                for (const z of skipZones) {
+                    const last = merged[merged.length - 1];
+                    if (last && z.start <= last.end + 0.2) {
+                        last.end = Math.max(last.end, z.end);
+                        if (z.type === 'pause') last.type = 'pause'; // pause takes priority for speedup
+                    } else {
+                        merged.push({ ...z });
+                    }
+                }
+
+                this._log('AutoSkip started:', merged.length, 'skip zones (mode:', appState.settings.cfAutoSkipMode + ')');
+                this._autoSkipZones = merged;
+
+                let zoneIdx = 0; // cursor for binary-search optimization
+                const silenceSpeed = preset.silenceSpeed;
+                const self = this;
+
+                const tick = () => {
+                    if (!self._autoSkipActive) return;
+                    const video = document.querySelector('video.html5-main-video');
+                    if (!video || video.paused) {
+                        self._autoSkipRAF = requestAnimationFrame(tick);
+                        return;
+                    }
+
+                    const ct = video.currentTime;
+
+                    // Reset cursor if we seeked backwards
+                    if (zoneIdx > 0 && merged[zoneIdx - 1]?.end > ct + 1) zoneIdx = 0;
+
+                    // Advance cursor to current position
+                    while (zoneIdx < merged.length && merged[zoneIdx].end <= ct) zoneIdx++;
+
+                    // Check if we're inside a skip zone
+                    if (zoneIdx < merged.length) {
+                        const zone = merged[zoneIdx];
+                        if (ct >= zone.start && ct < zone.end) {
+                            if (zone.type === 'pause' && silenceSpeed) {
+                                // Aggressive mode: speed through silence instead of hard skip
+                                if (self._autoSkipSavedRate === null) {
+                                    self._autoSkipSavedRate = video.playbackRate;
+                                    video.playbackRate = silenceSpeed;
+                                }
+                            } else {
+                                // Hard skip past the zone
+                                video.currentTime = zone.end + 0.05;
+                                zoneIdx++;
+                            }
+                            self._autoSkipRAF = requestAnimationFrame(tick);
+                            return;
+                        }
+                    }
+
+                    // Not in a skip zone — restore normal speed if we were speeding through silence
+                    if (self._autoSkipSavedRate !== null) {
+                        video.playbackRate = self._autoSkipSavedRate;
+                        self._autoSkipSavedRate = null;
+                    }
+
+                    self._autoSkipRAF = requestAnimationFrame(tick);
+                };
+
+                this._autoSkipRAF = requestAnimationFrame(tick);
+            },
+
+            _stopAutoSkip() {
+                this._autoSkipActive = false;
+                if (this._autoSkipRAF) { cancelAnimationFrame(this._autoSkipRAF); this._autoSkipRAF = null; }
+                // Restore playback rate if we were speeding through silence
+                if (this._autoSkipSavedRate !== null) {
+                    const video = document.querySelector('video.html5-main-video');
+                    if (video) video.playbackRate = this._autoSkipSavedRate;
+                    this._autoSkipSavedRate = null;
+                }
+                this._autoSkipZones = null;
+            },
+
+            // Auto model selection — pick best Ollama model for video length
+            _MODEL_CONTEXT: {
+                'qwen3:32b':   { ctx: 131072, priority: 1 },
+                'qwen3:14b':   { ctx: 131072, priority: 2 },
+                'qwen3:8b':    { ctx: 131072, priority: 3 },
+                'llama3.3:70b': { ctx: 131072, priority: 1 },
+                'llama3.1:70b': { ctx: 131072, priority: 1 },
+            },
+            _getOptimalModel(durationMin, installedModels) {
+                if (!installedModels?.length) return null;
+                // Estimate required context: ~100 tokens/min of transcript + prompt overhead
+                const estTokens = Math.max(durationMin * 100, 4000) + 2000;
+                // Filter to models that can handle the transcript
+                const viable = installedModels
+                    .map(name => {
+                        const baseName = name.replace(/:latest$/, '');
+                        const info = this._MODEL_CONTEXT[baseName];
+                        if (!info) return { name, ctx: 131072, priority: 10 }; // unknown model, assume large ctx
+                        return { name, ctx: info.ctx, priority: info.priority };
+                    })
+                    .filter(m => m.ctx >= estTokens);
+                if (!viable.length) {
+                    // None can handle it — pick the largest context available
+                    const all = installedModels.map(name => {
+                        const baseName = name.replace(/:latest$/, '');
+                        const info = this._MODEL_CONTEXT[baseName];
+                        return { name, ctx: info?.ctx || 131072, priority: info?.priority || 10 };
+                    });
+                    all.sort((a, b) => b.ctx - a.ctx || a.priority - b.priority);
+                    return all[0]?.name || installedModels[0];
+                }
+                // Sort by quality (priority ascending = better model first)
+                viable.sort((a, b) => a.priority - b.priority);
+                return viable[0].name;
+            },
+
+            // Speech pace analysis — from OpenCut audio analysis
+            _analyzePace(segments) {
+                if (!segments?.length) return [];
+                const pace = [];
+                for (const seg of segments) {
+                    const words = (seg.text || '').split(/\s+/).filter(w => w.length > 0).length;
+                    const dur = seg.duration || 3;
+                    pace.push({ start: seg.start, end: seg.start + dur, wpm: Math.round((words / dur) * 60), words });
+                }
+                return pace;
+            },
+            _getPaceStats(paceData) {
+                if (!paceData?.length) return null;
+                const wpms = paceData.map(p => p.wpm).filter(w => w > 0);
+                if (!wpms.length) return null;
+                const avg = Math.round(wpms.reduce((a, b) => a + b, 0) / wpms.length);
+                return { avg, max: Math.max(...wpms), min: Math.min(...wpms), fast: paceData.filter(p => p.wpm > avg * 1.4).length, slow: paceData.filter(p => p.wpm > 0 && p.wpm < avg * 0.6).length, total: wpms.length };
+            },
+
+            // Keyword extraction per chapter — from OpenCut NLP + scene detection
+            _extractKeywords(segments, chapters) {
+                if (!segments?.length || !chapters?.length) return [];
+                const result = [];
+                for (const ch of chapters) {
+                    const chSegs = segments.filter(s => s.start >= ch.start && s.start < (ch.end || Infinity));
+                    const text = chSegs.map(s => s.text).join(' ').toLowerCase();
+                    const words = text.split(/[^a-z0-9']+/).filter(w => w.length > 3 && !this._NLP_STOPS.has(w));
+                    const freq = {};
+                    for (const w of words) freq[w] = (freq[w] || 0) + 1;
+                    result.push(Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 5).map(e => e[0]));
+                }
+                return result;
+            },
+
+            // AI Translation — from OpenCut deep-translator module
+            async _translateContent(text, targetLang, onStatus) {
+                const provider = appState.settings.cfLlmProvider;
+                if (!provider || provider === 'builtin') throw new Error('Translation requires an AI provider (Ollama, OpenAI, etc.)');
+                const systemPrompt = `You are a professional translator. Translate the following text to ${targetLang}. Preserve all timestamps, formatting, and structure exactly. Only translate the spoken content. Output ONLY the translated text, nothing else.`;
+                return await this._callLlmApi(systemPrompt, text, onStatus);
+            },
+
+            async _translateChaptersAndSummary(targetLang) {
+                if (!targetLang) return;
+                const provider = appState.settings.cfLlmProvider;
+                if (!provider || provider === 'builtin') { this._log('Translation requires AI provider'); return; }
+                if (this._chapterData?.chapters?.length) {
+                    const titles = this._chapterData.chapters.map((c, i) => `${i + 1}. ${c.title}`).join('\n');
+                    try {
+                        const translated = await this._translateContent(titles, targetLang);
+                        if (translated) {
+                            this._translatedChapters = translated.trim().split('\n').map(line => {
+                                const m = line.match(/^\d+\.\s*(.+)/);
+                                return m ? m[1].trim() : line.trim();
+                            });
+                        }
+                    } catch (e) { this._log('Chapter translation error:', e.message); }
+                }
+                if (this._lastSummary) {
+                    try { this._translatedSummary = await this._translateContent(this._lastSummary, targetLang); } catch (e) { this._log('Summary translation error:', e.message); }
+                }
+            },
+
+            // Export: SRT format — from OpenCut transcript export module
+            _exportSRT() {
+                const segs = this._lastTranscriptSegments;
+                if (!segs?.length) return;
+                let srt = '';
+                segs.forEach((seg, i) => {
+                    const start = this._fmtSRT(seg.start);
+                    const end = this._fmtSRT(seg.start + (seg.duration || 3));
+                    srt += `${i + 1}\n${start} --> ${end}\n${seg.text}\n\n`;
+                });
+                this._dlFile(srt, `transcript_${this._getVideoId()}.srt`, 'text/srt');
+            },
+            _exportVTT() {
+                const segs = this._lastTranscriptSegments;
+                if (!segs?.length) return;
+                let vtt = 'WEBVTT\n\n';
+                segs.forEach((seg) => {
+                    const start = this._fmtSRT(seg.start).replace(',', '.');
+                    const end = this._fmtSRT(seg.start + (seg.duration || 3)).replace(',', '.');
+                    vtt += `${start} --> ${end}\n${seg.text}\n\n`;
+                });
+                this._dlFile(vtt, `transcript_${this._getVideoId()}.vtt`, 'text/vtt');
+            },
+            _exportChaptersSRT() {
+                if (!this._chapterData?.chapters?.length) return;
+                let srt = '';
+                this._chapterData.chapters.forEach((ch, i) => {
+                    const start = this._fmtSRT(ch.start);
+                    const end = this._fmtSRT(ch.end || ch.start + 60);
+                    const title = this._translatedChapters?.[i] || ch.title;
+                    srt += `${i + 1}\n${start} --> ${end}\n${title}\n\n`;
+                });
+                this._dlFile(srt, `chapters_${this._getVideoId()}.srt`, 'text/srt');
+            },
+            _fmtSRT(sec) {
+                const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60), ms = Math.round((sec % 1) * 1000);
+                return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
+            },
+            _dlFile(content, filename, type) {
+                const blob = new Blob([content], { type });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = filename;
+                document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+            },
+
+            // Run all analysis after transcript is available
+            _runAnalysis(segments) {
+                if (!segments?.length) return;
+                if (appState.settings.cfFillerDetect) this._fillerData = this._detectFillers(segments);
+                // Detect pauses at finest granularity (0.5s) — AutoSkip filters by mode at runtime
+                this._pauseData = this._detectPauses(segments, 0.5);
+                this._paceData = this._analyzePace(segments);
+                if (this._chapterData?.chapters?.length) this._keywordsPerChapter = this._extractKeywords(segments, this._chapterData.chapters);
+            },
+
+
+            // ═══════════════════════════════════════════════════════════
+            //  UI: Progress Bar Overlay (FIXED — no z-index conflicts)
+            // ═══════════════════════════════════════════════════════════
+            _renderProgressBarOverlay() {
+                // Clean up all previous overlays
+                document.querySelectorAll('.cf-bar-overlay,.cf-chapter-markers,.cf-chapter-label-row,.cf-filler-markers').forEach(el => el.remove());
+                document.getElementById('cf-transcript-tip')?.remove();
+                if (!this._chapterData) return;
+                const progressBar = document.querySelector('.ytp-progress-bar');
+                if (!progressBar) return;
+                const duration = this._getVideoDuration();
+                if (!duration) return;
+                if (getComputedStyle(progressBar).position === 'static') progressBar.style.position = 'relative';
+                const s = appState.settings;
+                const poiColor = s.cfPoiColor || '#ff6b6b';
+
+                // ── Chapter segments on the progress bar ──
+                if (s.cfShowChapters && this._chapterData.chapters.length > 1) {
+                    const markerContainer = document.createElement('div');
+                    markerContainer.className = 'cf-chapter-markers';
+
+                    // Label row above the progress bar — shows chapter names
+                    const labelRow = document.createElement('div');
+                    labelRow.className = 'cf-chapter-label-row';
+
+                    this._chapterData.chapters.forEach((ch, i) => {
+                        const left = (ch.start / duration) * 100;
+                        const width = ((ch.end - ch.start) / duration) * 100;
+                        const color = this._CF_COLORS[i % this._CF_COLORS.length];
+                        const fg = this._CF_COLORS_FG[i % this._CF_COLORS_FG.length];
+
+                        // Chapter segment (colored bar)
+                        const seg = document.createElement('div');
+                        seg.className = 'cf-chapter-seg';
+                        seg.style.cssText = `left:${left}%;width:${width}%;--cf-seg-color:${color};--cf-seg-opacity:${s.cfChapterOpacity || 0.35}`;
+                        seg.dataset.cfChapterIdx = i;
+                        seg.addEventListener('click', (e) => { e.stopPropagation(); this._seekTo(ch.start); });
+
+                        // Tooltip on hover (positioned well above bar)
+                        const tip = document.createElement('div');
+                        tip.className = 'cf-bar-tooltip cf-chapter-tip';
+                        TrustedHTML.setHTML(tip, `<span class="cf-tip-time">${this._formatTime(ch.start)}</span><span class="cf-tip-title">${ch.title}</span>`);
+                        seg.appendChild(tip);
+                        seg.addEventListener('mouseenter', () => tip.style.opacity = '1');
+                        seg.addEventListener('mouseleave', () => tip.style.opacity = '0');
+
+                        // Gap divider between chapters
+                        if (i > 0) {
+                            const gap = document.createElement('div');
+                            gap.className = 'cf-chapter-gap';
+                            gap.style.left = `${left}%`;
+                            markerContainer.appendChild(gap);
+                        }
+
+                        markerContainer.appendChild(seg);
+
+                        // Chapter label (name inside the colored segment area, above bar)
+                        const label = document.createElement('div');
+                        label.className = 'cf-chapter-label';
+                        label.style.cssText = `left:${left}%;width:${width}%;--cf-label-color:${color};--cf-label-fg:${fg}`;
+                        label.textContent = ch.title;
+                        label.addEventListener('click', (e) => { e.stopPropagation(); this._seekTo(ch.start); });
+                        labelRow.appendChild(label);
+                    });
+
+                    progressBar.appendChild(markerContainer);
+                    // Append label row to progress bar itself — purely absolute, no layout impact
+                    progressBar.appendChild(labelRow);
+                }
+
+                // ── POI markers ──
+                const overlay = document.createElement('div'); overlay.className = 'cf-bar-overlay';
+
+                if (s.cfShowPOIs && this._chapterData.pois.length) {
+                    this._chapterData.pois.forEach(p => {
+                        const left = (p.time / duration) * 100;
+                        const hitbox = document.createElement('div');
+                        hitbox.className = 'cf-poi-hitbox';
+                        hitbox.style.left = `${left}%`;
+                        hitbox.addEventListener('click', (e) => { e.stopPropagation(); this._seekTo(p.time); });
+
+                        const diamond = document.createElement('div');
+                        diamond.className = 'cf-poi-diamond';
+                        diamond.style.background = poiColor;
+                        hitbox.appendChild(diamond);
+
+                        const tip = document.createElement('div');
+                        tip.className = 'cf-bar-tooltip cf-poi-tip';
+                        TrustedHTML.setHTML(tip, `<span class="cf-tip-poi-icon">&#9733;</span><span class="cf-tip-time">${this._formatTime(p.time)}</span><span class="cf-tip-label">${p.label}</span>`);
+                        hitbox.appendChild(tip);
+                        hitbox.addEventListener('mouseenter', () => { tip.style.opacity = '1'; diamond.classList.add('cf-poi-hover'); });
+                        hitbox.addEventListener('mouseleave', () => { tip.style.opacity = '0'; diamond.classList.remove('cf-poi-hover'); });
+                        overlay.appendChild(hitbox);
+                    });
+                }
+
+                // ── Enhanced transcript hover ──
+                if (this._lastTranscriptSegments?.length) {
+                    const transcriptTip = document.createElement('div');
+                    transcriptTip.id = 'cf-transcript-tip';
+                    transcriptTip.className = 'cf-transcript-tip';
+                    const chapters = this._chapterData?.chapters || [];
+
+                    overlay.addEventListener('mousemove', (e) => {
+                        const rect = progressBar.getBoundingClientRect();
+                        const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                        const hoverTime = percent * duration;
+
+                        let bestIdx = -1;
+                        for (let si = 0; si < this._lastTranscriptSegments.length; si++) {
+                            const seg = this._lastTranscriptSegments[si];
+                            if (seg.start <= hoverTime && hoverTime <= seg.start + (seg.dur || 5)) { bestIdx = si; break; }
+                            if (seg.start > hoverTime) break;
+                            bestIdx = si;
+                        }
+
+                        if (bestIdx >= 0) {
+                            const segs = this._lastTranscriptSegments;
+                            const lines = [];
+                            if (bestIdx > 0) lines.push({ time: segs[bestIdx - 1].start, text: segs[bestIdx - 1].text, dim: true });
+                            lines.push({ time: segs[bestIdx].start, text: segs[bestIdx].text, dim: false });
+                            if (bestIdx < segs.length - 1) lines.push({ time: segs[bestIdx + 1].start, text: segs[bestIdx + 1].text, dim: true });
+
+                            let chapterName = '';
+                            for (let ci = chapters.length - 1; ci >= 0; ci--) {
+                                if (hoverTime >= chapters[ci].start) { chapterName = chapters[ci].title; break; }
+                            }
+
+                            let html = '';
+                            if (chapterName) html += `<div class="cf-tx-chapter">${chapterName}</div>`;
+                            for (const ln of lines) {
+                                const txt = ln.text.length > 80 ? ln.text.slice(0, 77) + '...' : ln.text;
+                                html += `<div class="cf-tx-line${ln.dim ? ' cf-tx-dim' : ''}"><span class="cf-tx-ts">${this._formatTime(ln.time)}</span> ${txt}</div>`;
+                            }
+
+                            TrustedHTML.setHTML(transcriptTip, html);
+                            transcriptTip.style.opacity = '1';
+                            const tipWidth = 300;
+                            const xPos = Math.max(5, Math.min(rect.width - tipWidth - 5, e.clientX - rect.left - tipWidth / 2));
+                            transcriptTip.style.left = xPos + 'px';
+                        } else {
+                            transcriptTip.style.opacity = '0';
+                        }
+                    });
+                    overlay.addEventListener('mouseleave', () => { transcriptTip.style.opacity = '0'; });
+                    overlay.appendChild(transcriptTip);
+                }
+
+                progressBar.appendChild(overlay);
+
+                // ── Filler word markers (OpenCut: filler detection) ──
+                if (s.cfShowFillerMarkers && this._fillerData?.length) {
+                    const fillerContainer = document.createElement('div');
+                    fillerContainer.className = 'cf-filler-markers';
+                    this._fillerData.forEach(f => {
+                        const left = (f.time / duration) * 100;
+                        const marker = document.createElement('div');
+                        marker.className = 'cf-filler-marker';
+                        marker.style.left = `${left}%`;
+                        marker.title = f.word;
+                        const tip = document.createElement('div');
+                        tip.className = 'cf-bar-tooltip cf-filler-tip';
+                        tip.textContent = `"${f.word}" @ ${this._formatTime(f.time)}`;
+                        marker.appendChild(tip);
+                        marker.addEventListener('mouseenter', () => tip.style.opacity = '1');
+                        marker.addEventListener('mouseleave', () => tip.style.opacity = '0');
+                        marker.addEventListener('click', (e) => { e.stopPropagation(); this._seekTo(f.time); });
+                        fillerContainer.appendChild(marker);
+                    });
+                    progressBar.appendChild(fillerContainer);
+                }
+
+                // Start chapter HUD tracking
+                this._startChapterTracking();
+            },
+
+            // ═══ CHAPTER HUD — Floating current chapter indicator on video ═══
+            _startChapterTracking() {
+                this._stopChapterTracking();
+                if (!appState.settings.cfShowChapterHUD || !this._chapterData?.chapters?.length) return;
+
+                const track = () => {
+                    const video = document.querySelector('video.html5-main-video');
+                    if (!video || !this._chapterData?.chapters?.length) {
+                        this._chapterTrackingRAF = requestAnimationFrame(track);
+                        return;
+                    }
+                    const ct = video.currentTime;
+                    const chapters = this._chapterData.chapters;
+                    let idx = -1;
+                    for (let i = chapters.length - 1; i >= 0; i--) {
+                        if (ct >= chapters[i].start) { idx = i; break; }
+                    }
+                    if (idx !== this._lastActiveChapterIdx) {
+                        this._lastActiveChapterIdx = idx;
+                        this._updateChapterHUD(idx);
+                        // Highlight active segment on progress bar
+                        document.querySelectorAll('.cf-chapter-seg').forEach((seg, si) => {
+                            seg.classList.toggle('cf-seg-active', si === idx);
+                        });
+                        document.querySelectorAll('.cf-chapter-label').forEach((lbl, li) => {
+                            lbl.classList.toggle('cf-label-active', li === idx);
+                        });
+                    }
+                    this._chapterTrackingRAF = requestAnimationFrame(track);
+                };
+                this._chapterTrackingRAF = requestAnimationFrame(track);
+            },
+
+            _stopChapterTracking() {
+                if (this._chapterTrackingRAF) {
+                    cancelAnimationFrame(this._chapterTrackingRAF);
+                    this._chapterTrackingRAF = null;
+                }
+                this._lastActiveChapterIdx = -1;
+            },
+
+            _updateChapterHUD(chapterIdx) {
+                if (!appState.settings.cfShowChapterHUD) {
+                    this._chapterHUDEl?.remove();
+                    this._chapterHUDEl = null;
+                    return;
+                }
+                const player = document.getElementById('movie_player');
+                if (!player) return;
+
+                if (!this._chapterHUDEl) {
+                    this._chapterHUDEl = document.createElement('div');
+                    this._chapterHUDEl.className = 'cf-chapter-hud';
+                    player.appendChild(this._chapterHUDEl);
+                }
+
+                // Apply position
+                const pos = appState.settings.cfHudPosition || 'top-left';
+                this._chapterHUDEl.setAttribute('data-cf-pos', pos);
+
+                if (chapterIdx < 0 || !this._chapterData?.chapters?.[chapterIdx]) {
+                    this._chapterHUDEl.style.opacity = '0';
+                    return;
+                }
+
+                const chapters = this._chapterData.chapters;
+                const ch = chapters[chapterIdx];
+                const color = this._CF_COLORS[chapterIdx % this._CF_COLORS.length];
+                const hasPrev = chapterIdx > 0;
+                const hasNext = chapterIdx < chapters.length - 1;
+                const counter = `${chapterIdx + 1}/${chapters.length}`;
+
+                let html = `<button class="cf-hud-nav ${hasPrev ? '' : 'cf-hud-disabled'}" data-cf-nav="prev" title="Previous chapter"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>`;
+                html += `<span class="cf-hud-dot" style="background:${color}"></span>`;
+                html += `<span class="cf-hud-title">${this._esc(ch.title)}</span>`;
+                html += `<span class="cf-hud-counter">${counter}</span>`;
+                html += `<button class="cf-hud-nav ${hasNext ? '' : 'cf-hud-disabled'}" data-cf-nav="next" title="Next chapter"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>`;
+
+                TrustedHTML.setHTML(this._chapterHUDEl, html);
+                this._chapterHUDEl.style.opacity = '1';
+                this._chapterHUDEl.style.setProperty('--cf-hud-accent', color);
+
+                // Wire nav buttons
+                this._chapterHUDEl.querySelectorAll('.cf-hud-nav').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const dir = btn.dataset.cfNav;
+                        const video = document.querySelector('video.html5-main-video');
+                        if (!video) return;
+                        const targetIdx = dir === 'prev' ? chapterIdx - 1 : chapterIdx + 1;
+                        if (targetIdx >= 0 && targetIdx < chapters.length) {
+                            video.currentTime = chapters[targetIdx].start + 0.5;
+                        }
+                    });
+                });
+            },
+
+            // ═══ UI: Panel ═══
+            _createPanel() {
+                if (this._panelEl) return this._panelEl;
+                this._panelEl = document.createElement('div'); this._panelEl.id = 'cf-panel'; this._panelEl.className = 'cf-panel';
+                // Prevent ALL panel clicks from reaching the outside-click handler
+                this._panelEl.addEventListener('click', (e) => e.stopPropagation());
+                document.body.appendChild(this._panelEl); this._renderPanel(); return this._panelEl;
+            },
+            _togglePanel() { const p = this._createPanel(); if (p.classList.contains('cf-visible')) { p.classList.remove('cf-visible'); } else { p.classList.add('cf-visible'); this._renderPanel(); } },
+            _renderPanel() {
+                if (!this._panelEl) return;
+                this._lastRenderTime = Date.now();
+                const hasData = !!this._chapterData?.chapters?.length; const s = appState.settings;
+                const videoId = this._getVideoId();
+                let tabHTML = '';
+
+                if (this._activeTab === 'chapters') {
+                    if (hasData) {
+                        tabHTML = `<div class="cf-section-label">Chapters (${this._chapterData.chapters.length})</div><ul class="cf-chapter-list">`;
+                        this._chapterData.chapters.forEach((c, i) => { const color = this._CF_COLORS[i % this._CF_COLORS.length]; tabHTML += `<li class="cf-chapter-item" data-cf-seek="${c.start}"><span class="cf-chapter-dot" style="background:${color}"></span><span class="cf-chapter-time">${this._formatTime(c.start)}</span><span class="cf-chapter-title">${this._esc(c.title)}</span><span class="cf-clip-btn" data-cf-clip="${c.start}" data-cf-clip-end="${c.end || ''}" title="Copy timestamped link">&#128279;</span></li>`; });
+                        tabHTML += `</ul>`;
+                        if (this._chapterData.pois?.length) {
+                            const poiColor = s.cfPoiColor || '#ff6b6b';
+                            tabHTML += `<div class="cf-section-label">Points of Interest</div><ul class="cf-chapter-list">`;
+                            this._chapterData.pois.forEach(p => { tabHTML += `<li class="cf-chapter-item" data-cf-seek="${p.time}"><span class="cf-chapter-dot" style="background:${poiColor}"></span><span class="cf-chapter-time">${this._formatTime(p.time)}</span><span class="cf-chapter-title">${this._esc(p.label)}<span class="cf-poi-badge">POI</span></span><span class="cf-clip-btn" data-cf-clip="${p.time}" title="Copy timestamped link">&#128279;</span></li>`; });
+                            tabHTML += `</ul>`;
+                        }
+                    } else {
+                        const provider = s.cfLlmProvider || 'builtin';
+                        const isFirstTime = !this._countCache();
+                        tabHTML = `<div class="cf-empty"><svg viewBox="0 0 24 24" style="width:40px;height:40px;fill:rgba(255,255,255,0.08);margin-bottom:12px"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg><div>No chapters generated yet</div><div style="margin-top:4px;font-size:11px;color:rgba(255,255,255,0.15)">Click Generate to analyze this video</div>`;
+                        if (isFirstTime) {
+                            tabHTML += `<div class="cf-onboard"><div class="cf-onboard-title">Quick Start</div>`;
+                            tabHTML += `<div class="cf-onboard-step"><span class="cf-onboard-num">1</span>${provider === 'builtin' ? 'Works out of the box with built-in NLP' : `Using ${this._CF_PROVIDERS[provider]?.name || provider}`}</div>`;
+                            tabHTML += `<div class="cf-onboard-step"><span class="cf-onboard-num">2</span>For better results, install <a href="https://ollama.com" target="_blank" style="color:#a78bfa">Ollama</a> and set provider in Settings</div>`;
+                            tabHTML += `<div class="cf-onboard-step"><span class="cf-onboard-num">3</span>Pull the model: <span style="font-family:monospace;color:#a78bfa">ollama pull qwen3:32b</span> (~20 GB)</div>`;
+                            tabHTML += `</div>`;
+                        }
+                        tabHTML += `</div>`;
+                    }
+                    // SponsorBlock import — always visible on chapters tab
+                    tabHTML += `<div class="cf-section-label">Community Chapters</div>`;
+                    tabHTML += `<div style="display:flex;gap:6px;align-items:center">`;
+                    tabHTML += `<button class="cf-action-btn" id="cf-sb-import" style="flex:0 0 auto">Import from SponsorBlock</button>`;
+                    if (this._sbChapters?.length) tabHTML += `<button class="cf-action-btn" id="cf-sb-apply" style="flex:0 0 auto;border-color:rgba(16,185,129,0.3);color:rgba(16,185,129,0.7)">Apply (${this._sbChapters.length})</button>`;
+                    else if (this._sbChapters !== null && !this._sbChapters.length) tabHTML += `<span style="font-size:10px;color:rgba(255,255,255,0.2)">None found</span>`;
+                    tabHTML += `</div>`;
+                } else if (this._activeTab === 'tools') {
+                    tabHTML = `<div class="cf-section-label">Search Transcript</div>`;
+                    tabHTML += `<div class="cf-search-row"><input class="cf-input cf-search-input" id="cf-search-input" type="text" placeholder="Search this video..." value="${this._searchQuery}" spellcheck="false" /><span class="cf-search-count" id="cf-search-count">${this._searchResults?.length ? this._searchResults.length + ' hits' : ''}</span></div>`;
+                    if (this._searchResults?.length) {
+                        tabHTML += `<ul class="cf-chapter-list cf-search-results">`;
+                        this._searchResults.slice(0, 25).forEach(r => {
+                            const snip = r.text.length > 80 ? r.text.slice(0, 77) + '...' : r.text;
+                            tabHTML += `<li class="cf-chapter-item cf-search-hit" data-cf-seek="${r.time}"><span class="cf-chapter-time">${this._formatTime(r.time)}</span><span class="cf-chapter-title cf-search-text">${this._esc(snip)}</span></li>`;
+                        });
+                        tabHTML += `</ul>`;
+                    }
+                    tabHTML += `<div class="cf-section-label">Search All Videos (${this._countTranscriptCache()} cached)</div>`;
+                    tabHTML += `<div class="cf-search-row"><input class="cf-input cf-search-input" id="cf-global-search" type="text" placeholder="Search across all videos..." value="${this._globalSearchQuery}" spellcheck="false" /></div>`;
+                    if (this._globalSearchResults?.length) {
+                        this._globalSearchResults.slice(0, 10).forEach(r => {
+                            tabHTML += `<div class="cf-global-result"><div class="cf-global-title"><a href="https://www.youtube.com/watch?v=${r.videoId}" target="_blank" class="cf-video-link">${this._esc(r.title)}</a> <span class="cf-match-count">${r.matches.length} hits</span></div><ul class="cf-chapter-list">`;
+                            r.matches.slice(0, 3).forEach(m => {
+                                const snip = m.text.length > 70 ? m.text.slice(0, 67) + '...' : m.text;
+                                tabHTML += `<li class="cf-chapter-item cf-search-hit"><a href="https://www.youtube.com/watch?v=${r.videoId}&t=${Math.round(m.time)}" target="_blank" class="cf-global-link"><span class="cf-chapter-time">${this._formatTime(m.time)}</span><span class="cf-chapter-title cf-search-text">${this._esc(snip)}</span></a></li>`;
+                            });
+                            tabHTML += `</ul></div>`;
+                        });
+                    }
+                    tabHTML += `<div class="cf-section-label">Summary</div>`;
+                    const curStyle = s.cfSummaryMode || 'paragraph';
+                    const curLength = s.cfSummaryLength || 'standard';
+                    const styleOptions = Object.entries(this._CF_SUMMARY_STYLES).map(([k, v]) => `<option value="${k}" ${curStyle === k ? 'selected' : ''}>${v.name}</option>`).join('');
+                    const lengthOptions = ['brief', 'standard', 'detailed'].map(k => `<option value="${k}" ${curLength === k ? 'selected' : ''}>${k[0].toUpperCase() + k.slice(1)}</option>`).join('');
+                    tabHTML += `<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center"><select class="cf-select" id="cf-summary-style" style="flex:1;max-width:none">${styleOptions}</select><select class="cf-select" id="cf-summary-length" style="flex:0 0 90px">${lengthOptions}</select><button class="cf-action-btn" id="cf-summary-btn" style="flex:0 0 auto;padding:7px 14px">Summarize</button></div>`;
+                    if (this._lastSummary) {
+                        tabHTML += `<div class="cf-summary-box">${this._formatSummaryHTML(this._lastSummary)}</div><div style="display:flex;gap:6px;margin-top:4px"><button class="cf-action-btn" id="cf-copy-summary">Copy Summary</button>${(s.cfSummaryMode === 'blog') ? '<button class="cf-action-btn" id="cf-export-blog" style="border-color:rgba(16,185,129,0.3);color:rgba(16,185,129,0.7)">Export .md</button>' : ''}</div>`;
+                    }
+                    tabHTML += `<div class="cf-section-label">Export</div>`;
+                    tabHTML += `<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="cf-action-btn" id="cf-export-yt" ${!hasData ? 'disabled' : ''}>Chapters: YouTube</button><button class="cf-action-btn" id="cf-export-json" ${!hasData ? 'disabled' : ''}>Chapters: JSON</button><button class="cf-action-btn" id="cf-export-ch-srt" ${!hasData ? 'disabled' : ''}>Chapters: SRT</button></div>`;
+                    tabHTML += `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"><button class="cf-action-btn" id="cf-export-srt" ${!this._lastTranscriptSegments?.length ? 'disabled' : ''}>Transcript: SRT</button><button class="cf-action-btn" id="cf-export-vtt" ${!this._lastTranscriptSegments?.length ? 'disabled' : ''}>Transcript: VTT</button><button class="cf-action-btn" id="cf-dl-transcript" ${!this._lastTranscriptSegments?.length ? 'disabled' : ''}>Transcript: TXT</button></div>`;
+                    tabHTML += `<div class="cf-section-label">Playback Control</div>`;
+                    tabHTML += `<div class="cf-settings-row"><span class="cf-settings-label">Auto-speed Intro/Outro</span><div class="cf-toggle-track ${this._speedControlActive ? 'active' : ''}" id="cf-toggle-speed"><div class="cf-toggle-knob"></div></div></div>`;
+                    if (this._speedControlActive && hasData) {
+                        tabHTML += `<div class="cf-settings-row"><span class="cf-settings-label">Intro Speed</span><select class="cf-select" id="cf-intro-speed"><option value="1.5" ${this._speedSettings.introSpeed==1.5?'selected':''}>1.5x</option><option value="2" ${this._speedSettings.introSpeed==2?'selected':''}>2x</option><option value="3" ${this._speedSettings.introSpeed==3?'selected':''}>3x</option></select></div>`;
+                        tabHTML += `<div class="cf-settings-row"><span class="cf-settings-label">Outro Speed</span><select class="cf-select" id="cf-outro-speed"><option value="1.5" ${this._speedSettings.outroSpeed==1.5?'selected':''}>1.5x</option><option value="2" ${this._speedSettings.outroSpeed==2?'selected':''}>2x</option><option value="3" ${this._speedSettings.outroSpeed==3?'selected':''}>3x</option></select></div>`;
+                        tabHTML += `<div class="cf-section-label">Skip Chapters</div>`;
+                        this._chapterData.chapters.forEach((ch, i) => {
+                            tabHTML += `<div class="cf-settings-row"><span class="cf-settings-label" style="font-size:11px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${this._esc(ch.title)}">${this._esc(ch.title)}</span><div class="cf-toggle-track cf-skip-toggle ${this._speedSettings.skipChapters[i]?'active':''}" data-cf-skip="${i}"><div class="cf-toggle-knob"></div></div></div>`;
+                        });
+                    }
+                } else if (this._activeTab === 'analysis') {
+                    const preset = this._getAutoSkipPreset();
+                    const mode = appState.settings.cfAutoSkipMode || 'off';
+
+                    // ── AutoSkip (AutoCut-style) ──
+                    tabHTML = `<div class="cf-section-label">AutoSkip</div>`;
+                    tabHTML += `<div class="cf-settings-row"><span class="cf-settings-label">Mode</span><select class="cf-select" id="cf-autoskip-mode">`;
+                    tabHTML += `<option value="off" ${mode==='off'?'selected':''}>Off</option>`;
+                    tabHTML += `<option value="gentle" ${mode==='gentle'?'selected':''}>Gentle — skip long pauses</option>`;
+                    tabHTML += `<option value="normal" ${mode==='normal'?'selected':''}>Normal — pauses + fillers</option>`;
+                    tabHTML += `<option value="aggressive" ${mode==='aggressive'?'selected':''}>Aggressive — skip all gaps</option>`;
+                    tabHTML += `</select></div>`;
+                    if (preset && !this._lastTranscriptSegments?.length) {
+                        tabHTML += `<div class="cf-muted" style="margin:4px 0 8px">Generate chapters first to enable AutoSkip.</div>`;
+                    } else if (preset) {
+                        tabHTML += `<div style="font-size:10px;color:rgba(255,255,255,0.25);margin:2px 0 6px;padding-left:2px">${this._esc(preset.desc)}${preset.silenceSpeed ? '. Speeds silence to ' + preset.silenceSpeed + 'x' : ''}</div>`;
+                        tabHTML += `<button class="cf-action-btn" id="cf-autoskip-toggle" style="margin-bottom:8px">${this._autoSkipActive ? 'Stop AutoSkip' : 'Start AutoSkip'}</button>`;
+                        if (this._autoSkipActive && this._autoSkipZones?.length) {
+                            tabHTML += `<div class="cf-muted" style="font-size:10px">${this._autoSkipZones.length} skip zones active</div>`;
+                        }
+                    }
+
+                    // ── Silence / Pauses stats ──
+                    tabHTML += `<div class="cf-section-label">Silence / Pauses</div>`;
+                    if (this._pauseData?.length) {
+                        // Show stats for current preset threshold (or 1.5s default)
+                        const threshold = preset ? preset.pauseThreshold : 1.5;
+                        const relevant = this._pauseData.filter(p => p.duration >= threshold);
+                        const totalPause = relevant.reduce((sum, p) => sum + p.duration, 0);
+                        const duration = this._getVideoDuration() || 1;
+                        const pctPause = Math.round((totalPause / duration) * 100);
+                        tabHTML += `<div class="cf-analysis-box"><div class="cf-pace-grid">`;
+                        tabHTML += `<div class="cf-analysis-stat"><span class="cf-stat-value">${relevant.length}</span><span class="cf-stat-label">pauses >${threshold}s</span></div>`;
+                        tabHTML += `<div class="cf-analysis-stat"><span class="cf-stat-value">${Math.round(totalPause)}s</span><span class="cf-stat-label">total silence (${pctPause}%)</span></div>`;
+                        tabHTML += `</div></div>`;
+                    } else if (this._lastTranscriptSegments?.length) {
+                        tabHTML += `<div class="cf-muted">No significant pauses detected.</div>`;
+                    } else {
+                        tabHTML += `<div class="cf-muted">Generate chapters first to analyze.</div>`;
+                    }
+
+                    // ── Filler Word Analysis ──
+                    tabHTML += `<div class="cf-section-label">Filler Words</div>`;
+                    if (this._fillerData?.length) {
+                        const fillerCounts = {};
+                        this._fillerData.forEach(f => { fillerCounts[f.word] = (fillerCounts[f.word] || 0) + 1; });
+                        const sorted = Object.entries(fillerCounts).sort((a, b) => b[1] - a[1]);
+                        tabHTML += `<div class="cf-analysis-box"><div class="cf-analysis-stat"><span class="cf-stat-value">${this._fillerData.length}</span><span class="cf-stat-label">total fillers</span></div>`;
+                        tabHTML += `<div class="cf-filler-breakdown">`;
+                        sorted.forEach(([word, count]) => {
+                            const pct = Math.round((count / this._fillerData.length) * 100);
+                            tabHTML += `<div class="cf-filler-row"><span class="cf-filler-word">"${this._esc(word)}"</span><div class="cf-filler-bar-bg"><div class="cf-filler-bar-fill" style="width:${pct}%"></div></div><span class="cf-filler-count">${count}</span></div>`;
+                        });
+                        tabHTML += `</div></div>`;
+                    } else if (this._lastTranscriptSegments?.length) {
+                        tabHTML += `<div class="cf-muted">No fillers detected.</div>`;
+                    } else {
+                        tabHTML += `<div class="cf-muted">Generate chapters first to analyze.</div>`;
+                    }
+
+                    // ── Speech Pace ──
+                    tabHTML += `<div class="cf-section-label">Speech Pace</div>`;
+                    const paceStats = this._getPaceStats(this._paceData);
+                    if (paceStats) {
+                        let paceClass = 'cf-pace-normal';
+                        let paceLabel = 'Normal';
+                        if (paceStats.avg > 180) { paceClass = 'cf-pace-fast'; paceLabel = 'Fast'; }
+                        else if (paceStats.avg < 120) { paceClass = 'cf-pace-slow'; paceLabel = 'Slow'; }
+                        tabHTML += `<div class="cf-analysis-box cf-pace-box"><div class="cf-pace-grid">`;
+                        tabHTML += `<div class="cf-analysis-stat ${paceClass}"><span class="cf-stat-value">${paceStats.avg}</span><span class="cf-stat-label">avg WPM (${paceLabel})</span></div>`;
+                        tabHTML += `<div class="cf-analysis-stat"><span class="cf-stat-value">${paceStats.min}-${paceStats.max}</span><span class="cf-stat-label">range WPM</span></div>`;
+                        tabHTML += `</div>`;
+                        if (paceStats.fast > 0 || paceStats.slow > 0) {
+                            tabHTML += `<div class="cf-pace-detail">${paceStats.fast} fast segments, ${paceStats.slow} slow segments</div>`;
+                        }
+                        tabHTML += `</div>`;
+                    } else {
+                        tabHTML += `<div class="cf-muted">Generate chapters first to analyze.</div>`;
+                    }
+
+                    // ── Keywords per Chapter ──
+                    if (this._keywordsPerChapter?.length && this._chapterData?.chapters?.length) {
+                        tabHTML += `<div class="cf-section-label">Keywords by Chapter</div>`;
+                        tabHTML += `<div class="cf-keywords-box">`;
+                        this._chapterData.chapters.forEach((ch, i) => {
+                            const kws = this._keywordsPerChapter[i];
+                            if (kws?.length) {
+                                tabHTML += `<div class="cf-kw-row"><span class="cf-kw-chapter">${this._esc(ch.title)}</span><span class="cf-kw-tags">${kws.map(k => `<span class="cf-kw-tag">${this._esc(k)}</span>`).join('')}</span></div>`;
+                            }
+                        });
+                        tabHTML += `</div>`;
+                    }
+
+                    // ── AI Translation ──
+                    tabHTML += `<div class="cf-section-label">AI Translation</div>`;
+                    const curLang = s.cfTranslateLang || '';
+                    const providerReady = s.cfLlmProvider && s.cfLlmProvider !== 'builtin';
+                    if (!providerReady) {
+                        tabHTML += `<div class="cf-muted">Translation requires an AI provider. Set one in Settings tab.</div>`;
+                    } else {
+                        tabHTML += `<div style="display:flex;gap:6px;align-items:center"><select class="cf-select" id="cf-translate-lang" style="flex:1">`;
+                        tabHTML += `<option value="">Select language...</option>`;
+                        const langs = ['Spanish','French','German','Portuguese','Italian','Dutch','Russian','Japanese','Korean','Chinese (Simplified)','Chinese (Traditional)','Arabic','Hindi','Turkish','Polish','Vietnamese','Thai','Indonesian','Swedish','Czech','Greek','Hebrew','Romanian','Hungarian','Danish','Finnish','Norwegian','Ukrainian','Malay','Filipino'];
+                        langs.forEach(l => { tabHTML += `<option value="${l}" ${curLang===l?'selected':''}>${l}</option>`; });
+                        tabHTML += `</select><button class="cf-action-btn" id="cf-translate-btn" ${!curLang ? 'disabled' : ''}>Translate</button></div>`;
+                    }
+                    if (this._translatedSummary) {
+                        tabHTML += `<div class="cf-section-label">Translated Summary</div><div class="cf-summary-box">${this._formatSummaryHTML(this._translatedSummary)}</div>`;
+                    }
+                    if (this._translatedChapters?.length) {
+                        tabHTML += `<div class="cf-section-label">Translated Chapters</div><ul class="cf-chapter-list">`;
+                        this._translatedChapters.forEach((t, i) => {
+                            const ch = this._chapterData?.chapters?.[i];
+                            tabHTML += `<li class="cf-chapter-item" data-cf-seek="${ch?.start || 0}"><span class="cf-chapter-time">${this._formatTime(ch?.start || 0)}</span><span class="cf-chapter-title">${this._esc(t)}</span></li>`;
+                        });
+                        tabHTML += `</ul>`;
+                    }
+                } else if (this._activeTab === 'ai') {
+                    const providerReady = s.cfLlmProvider && s.cfLlmProvider !== 'builtin';
+                    // ── Q&A Chat ──
+                    tabHTML = `<div class="cf-section-label">Ask About This Video</div>`;
+                    if (!providerReady) {
+                        tabHTML += `<div style="font-size:10px;color:rgba(255,255,255,0.25);margin-bottom:8px;padding:8px;background:rgba(255,255,255,0.02);border-radius:6px">AI features require a provider (Ollama, OpenAI, etc.). Set one in Settings tab.</div>`;
+                    }
+                    tabHTML += `<div class="cf-chat-messages" id="cf-chat-messages">`;
+                    if (!this._chatHistory.length) {
+                        tabHTML += `<div class="cf-chat-empty">Ask any question about this video. ChapterForge will answer using the transcript.</div>`;
+                    } else {
+                        this._chatHistory.forEach(m => {
+                            const isUser = m.role === 'user';
+                            const escapedContent = this._formatSummaryHTML(m.content);
+                            tabHTML += `<div class="cf-chat-msg ${isUser ? 'cf-chat-user' : 'cf-chat-ai'}">${escapedContent}</div>`;
+                        });
+                    }
+                    if (this._chatLoading) tabHTML += `<div class="cf-chat-msg cf-chat-ai cf-chat-thinking">Thinking...</div>`;
+                    tabHTML += `</div>`;
+                    tabHTML += `<div class="cf-chat-input-row"><input class="cf-input cf-chat-input" id="cf-chat-input" type="text" placeholder="${providerReady ? 'Ask a question...' : 'Set an AI provider first'}" spellcheck="false" ${providerReady ? '' : 'disabled'} /><button class="cf-action-btn" id="cf-chat-send" style="flex:0 0 auto;padding:7px 12px" ${providerReady ? '' : 'disabled'}>Ask</button></div>`;
+                    if (this._chatHistory.length) tabHTML += `<button class="cf-action-btn" id="cf-chat-clear" style="margin-top:6px;font-size:10px;padding:4px 8px;align-self:flex-start">Clear Chat</button>`;
+
+                    // ── Flashcards ──
+                    tabHTML += `<div class="cf-section-label">Flashcards</div>`;
+                    tabHTML += `<button class="cf-action-btn" id="cf-flashcard-gen" style="margin-bottom:8px" ${this._flashcardLoading ? 'disabled' : ''} ${providerReady ? '' : 'disabled'}>${this._flashcardLoading ? 'Generating...' : (this._flashcards?.length ? `Regenerate (${this._flashcards.length} cards)` : 'Generate Flashcards')}</button>`;
+                    if (this._flashcards?.length) {
+                        const card = this._flashcards[this._flashcardIdx];
+                        const total = this._flashcards.length;
+                        tabHTML += `<div class="cf-flashcard-container">`;
+                        tabHTML += `<div class="cf-flashcard ${this._flashcardFlipped ? 'cf-flipped' : ''}" id="cf-flashcard">`;
+                        tabHTML += `<div class="cf-flashcard-face cf-flashcard-front"><div class="cf-flashcard-label">Q</div><div class="cf-flashcard-text">${this._esc(card.q)}</div></div>`;
+                        tabHTML += `<div class="cf-flashcard-face cf-flashcard-back"><div class="cf-flashcard-label">A</div><div class="cf-flashcard-text">${this._esc(card.a)}</div></div>`;
+                        tabHTML += `</div>`;
+                        tabHTML += `<div class="cf-flashcard-nav">`;
+                        tabHTML += `<button class="cf-action-btn cf-fc-prev" id="cf-fc-prev" ${this._flashcardIdx === 0 ? 'disabled' : ''} style="padding:5px 10px">&larr;</button>`;
+                        tabHTML += `<span class="cf-fc-counter">${this._flashcardIdx + 1} / ${total}</span>`;
+                        tabHTML += `<button class="cf-action-btn cf-fc-next" id="cf-fc-next" ${this._flashcardIdx >= total - 1 ? 'disabled' : ''} style="padding:5px 10px">&rarr;</button>`;
+                        tabHTML += `</div>`;
+                        tabHTML += `<div style="display:flex;gap:6px;margin-top:6px"><button class="cf-action-btn" id="cf-fc-export" style="font-size:10px;padding:4px 8px">Export TSV (Anki)</button><button class="cf-action-btn" id="cf-fc-copy" style="font-size:10px;padding:4px 8px">Copy All</button></div>`;
+                        tabHTML += `</div>`;
+                    }
+
+                    // ── Mind Map ──
+                    tabHTML += `<div class="cf-section-label">Mind Map</div>`;
+                    tabHTML += `<button class="cf-action-btn" id="cf-mindmap-gen" style="margin-bottom:8px" ${this._mindMapLoading ? 'disabled' : ''} ${providerReady ? '' : 'disabled'}>${this._mindMapLoading ? 'Generating...' : (this._mindMapData ? 'Regenerate Mind Map' : 'Generate Mind Map')}</button>`;
+                    if (this._mindMapData) {
+                        // Render as collapsible outline
+                        let outlineHTML = '<div class="cf-mindmap-outline">';
+                        const mmLines = this._mindMapData.split('\n');
+                        mmLines.forEach(line => {
+                            const t = line.trim();
+                            if (!t) return;
+                            if (t.startsWith('# ')) outlineHTML += `<div class="cf-mm-root">${this._esc(t.replace(/^#\s*/, ''))}</div>`;
+                            else if (t.startsWith('## ')) outlineHTML += `<div class="cf-mm-section">${this._esc(t.replace(/^##\s*/, ''))}</div>`;
+                            else if (t.match(/^\s{4,}-/)) outlineHTML += `<div class="cf-mm-sub">${this._esc(t.replace(/^\s*-\s*/, ''))}</div>`;
+                            else if (t.startsWith('-') || t.startsWith('  -')) outlineHTML += `<div class="cf-mm-point">${this._esc(t.replace(/^\s*-\s*/, ''))}</div>`;
+                            else outlineHTML += `<div class="cf-mm-point">${this._esc(t)}</div>`;
+                        });
+                        outlineHTML += '</div>';
+                        tabHTML += outlineHTML;
+                        tabHTML += `<div style="display:flex;gap:6px;margin-top:6px"><button class="cf-action-btn" id="cf-mm-copy" style="font-size:10px;padding:4px 8px">Copy Outline</button><button class="cf-action-btn" id="cf-mm-mermaid" style="font-size:10px;padding:4px 8px">Copy Mermaid</button></div>`;
+                    }
+                } else if (this._activeTab === 'notes') {
+                    const notes = videoId ? this._getNotes(videoId) : [];
+                    tabHTML = `<div class="cf-section-label">Add Note at Current Time</div>`;
+                    tabHTML += `<div class="cf-note-row"><input class="cf-input cf-note-input" id="cf-note-input" type="text" placeholder="Type a note..." spellcheck="false" /><button class="cf-note-add-btn" id="cf-note-add">+</button></div>`;
+                    if (notes.length) {
+                        tabHTML += `<div class="cf-section-label">Notes (${notes.length})</div><ul class="cf-chapter-list">`;
+                        notes.forEach((n, i) => {
+                            tabHTML += `<li class="cf-chapter-item cf-note-item" data-cf-seek="${n.time}"><span class="cf-chapter-time">${this._formatTime(n.time)}</span><span class="cf-chapter-title">${this._esc(n.text)}</span><span class="cf-note-del" data-cf-note-del="${i}" title="Delete">&times;</span></li>`;
+                        });
+                        tabHTML += `</ul>`;
+                        tabHTML += `<div style="display:flex;gap:6px;margin-top:8px"><button class="cf-action-btn" id="cf-notes-copy">Copy All</button><button class="cf-action-btn" id="cf-notes-export">Export TXT</button></div>`;
+                    } else {
+                        tabHTML += `<div class="cf-empty" style="padding:16px"><div style="color:rgba(255,255,255,0.2);font-size:11px">No notes yet. Pause and add a note while watching.</div></div>`;
+                    }
+                } else if (this._activeTab === 'settings') {
+                    const providerOptions = Object.entries(this._CF_PROVIDERS).map(([k, v]) => `<option value="${k}" ${s.cfLlmProvider === k ? 'selected' : ''}>${v.name}</option>`).join('');
+                    const currentProvider = this._CF_PROVIDERS[s.cfLlmProvider || 'builtin'] || this._CF_PROVIDERS.builtin;
+                    const showApiFields = s.cfLlmProvider && s.cfLlmProvider !== 'builtin' && s.cfLlmProvider !== 'ollama';
+                    const showKeyField = currentProvider.needsKey || s.cfLlmProvider === 'custom';
+                    const showEndpointField = s.cfLlmProvider === 'custom';
+                    const showOllamaManager = s.cfLlmProvider === 'ollama';
+
+                    // Build Ollama model manager HTML
+                    let ollamaHTML = '';
+                    if (showOllamaManager) {
+                        const recModels = Object.entries(this._CF_RECOMMENDED_MODELS).map(([name, info]) =>
+                            `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
+                                <div style="flex:1;min-width:0">
+                                    <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.7)">${name} <span style="font-size:9px;color:rgba(255,255,255,0.25)">${info.size}</span></div>
+                                    <div style="font-size:9px;color:rgba(255,255,255,0.3)">${info.desc}</div>
+                                </div>
+                                <button class="cf-action-btn cf-ollama-pull" data-cf-model="${name}" style="flex-shrink:0;padding:4px 10px;font-size:10px;margin-left:8px">Pull</button>
+                            </div>`
+                        ).join('');
+                        ollamaHTML = `
+                            <div class="cf-section-label">Ollama Model Manager</div>
+                            <div class="cf-settings-row"><span class="cf-settings-label">Status</span><button class="cf-action-btn" id="cf-ollama-check" style="padding:4px 12px;font-size:10px">Check Ollama</button></div>
+                            <div id="cf-ollama-status" style="font-size:10px;color:rgba(255,255,255,0.3);margin:-2px 0 4px;padding-left:2px"></div>
+                            <div class="cf-settings-row"><span class="cf-settings-label">Active Model</span><select class="cf-select" id="cf-ollama-model-select"><option value="${s.cfOllamaModel || 'qwen3:32b'}">${s.cfOllamaModel || 'qwen3:32b'} (current)</option></select></div>
+                            <div style="font-size:9px;color:rgba(255,255,255,0.12);margin:-2px 0 8px;padding-left:2px">Click "Check Ollama" to refresh installed models</div>
+                            <div id="cf-ollama-installed" style="margin-bottom:8px"></div>
+                            <div style="font-size:9px;color:rgba(124,58,237,0.5);margin-bottom:6px;font-weight:600;letter-spacing:0.5px">RECOMMENDED MODEL</div>
+                            ${recModels}
+                            <div style="font-size:9px;color:rgba(255,255,255,0.15);margin-top:8px;line-height:1.4">Install Ollama from <span style="color:rgba(124,58,237,0.6)">ollama.com</span> then pull the model above or run: <span style="font-family:monospace;color:rgba(124,58,237,0.5)">ollama pull qwen3:32b</span></div>
+                        `;
+                    }
+
+                    tabHTML = `
+                        <div class="cf-section-label">AI Provider</div>
+                        <div class="cf-settings-row"><span class="cf-settings-label">Provider</span><select class="cf-select" id="cf-provider-select">${providerOptions}</select></div>
+                        ${showApiFields ? `
+                            <div class="cf-settings-row"><span class="cf-settings-label">Model</span><input class="cf-input" id="cf-model-input" type="text" value="${s.cfLlmModel || currentProvider.defaultModel || ''}" placeholder="${currentProvider.defaultModel || 'model-name'}" spellcheck="false" /></div>
+                            ${showKeyField ? `<div class="cf-settings-row"><span class="cf-settings-label">API Key</span><input class="cf-input" id="cf-apikey-input" type="password" value="${s.cfLlmApiKey || ''}" placeholder="${currentProvider.needsKey ? 'Required' : 'Optional'}" spellcheck="false" /></div>` : ''}
+                            ${showEndpointField ? `<div class="cf-settings-row"><span class="cf-settings-label">Endpoint</span><input class="cf-input" id="cf-endpoint-input" type="text" value="${s.cfLlmEndpoint || ''}" placeholder="https://api.example.com/v1/chat/completions" spellcheck="false" /></div>` : ''}
+                        ` : (!showOllamaManager ? '<div style="font-size:10px;color:rgba(255,255,255,0.15);margin:-2px 0 8px;padding-left:2px">Analyzes transcript patterns locally — NLP engine with TF-IDF topic segmentation.</div>' : '')}
+                        ${ollamaHTML}
+                        <div class="cf-section-label">Cache</div>
+                        <div class="cf-settings-row"><span class="cf-settings-label">Cached</span><span style="font-size:12px;color:rgba(255,255,255,0.4)">${this._countCache()} chapters / ${this._countTranscriptCache()} transcripts</span></div>
+                        <button class="cf-clear-btn" id="cf-clear-cache">Clear All Cache</button>
+                        <div class="cf-section-label">Prompt Library</div>
+                        <div style="font-size:10px;color:rgba(255,255,255,0.2);margin-bottom:6px">Save custom system prompts for summary generation. Loaded prompt overrides the style preset.</div>
+                        <div style="display:flex;gap:6px;margin-bottom:6px"><input class="cf-input" id="cf-prompt-name" type="text" placeholder="Prompt name..." spellcheck="false" style="flex:1;max-width:none" /><button class="cf-action-btn" id="cf-prompt-save" style="flex:0 0 auto;padding:5px 10px;font-size:10px">Save Current</button></div>
+                        ${(() => { const prompts = this._getSavedPrompts(); if (!prompts.length) return '<div style="font-size:10px;color:rgba(255,255,255,0.12);padding:4px">No saved prompts yet.</div>'; return '<div class="cf-prompt-list">' + prompts.map((p, i) => `<div class="cf-prompt-item"><span class="cf-prompt-name" data-cf-load-prompt="${i}" title="Click to load">${this._esc(p.name)}</span><span class="cf-prompt-del" data-cf-del-prompt="${i}" title="Delete">&times;</span></div>`).join('') + '</div>'; })()}
+                        ${s.cfCustomSummaryPrompt ? '<div style="margin-top:4px"><button class="cf-action-btn" id="cf-prompt-clear" style="font-size:10px;padding:4px 8px;border-color:rgba(239,68,68,0.2);color:rgba(239,68,68,0.6)">Clear Active Prompt</button></div>' : ''}
+                        <div style="font-size:9px;color:rgba(255,255,255,0.15);margin-top:12px;line-height:1.4;text-align:center">All other ChapterForge settings are in the main YTKit settings panel under the ChapterForge group.</div>
+                    `;
+                }
+
+                TrustedHTML.setHTML(this._panelEl, `
+                    <div class="cf-panel-header"><div><span class="cf-panel-title">ChapterForge</span><span class="cf-panel-version">v25.0</span></div><button class="cf-panel-close" id="cf-close">&times;</button></div>
+                    <div class="cf-tab-bar"><div class="cf-tab ${this._activeTab === 'chapters' ? 'active' : ''}" data-cf-tab="chapters">Chapters</div><div class="cf-tab ${this._activeTab === 'tools' ? 'active' : ''}" data-cf-tab="tools">Tools</div><div class="cf-tab ${this._activeTab === 'ai' ? 'active' : ''}" data-cf-tab="ai">AI</div><div class="cf-tab ${this._activeTab === 'analysis' ? 'active' : ''}" data-cf-tab="analysis">Analysis</div><div class="cf-tab ${this._activeTab === 'notes' ? 'active' : ''}" data-cf-tab="notes">Notes</div><div class="cf-tab ${this._activeTab === 'settings' ? 'active' : ''}" data-cf-tab="settings">Settings</div></div>
+                    <div class="cf-panel-body">
+                        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><button class="cf-generate-btn" id="cf-generate" style="margin-bottom:0;flex:1" ${this._isGenerating ? 'disabled' : ''}>${this._isGenerating ? 'Generating...' : (hasData ? 'Regenerate Chapters' : 'Generate Chapters')}</button><button class="cf-action-btn" id="cf-seo-toggle" style="flex:0 0 auto;padding:7px 10px;font-size:10px;letter-spacing:0.3px;${(s.cfChapterMode === 'seo') ? 'background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.3);color:rgba(16,185,129,0.8)' : ''}" title="SEO-optimized chapter titles with keyword-rich language">SEO</button></div>
+                        <div class="cf-status-bar" id="cf-status-bar" style="display:${this._isGenerating ? 'block' : 'none'}"><div class="cf-status-fill" id="cf-status-fill"></div><span class="cf-status-text" id="cf-status-text"></span></div>
+                        ${this._isLiveVideo() ? `<div style="display:flex;gap:6px;margin:-6px 0 12px"><button class="cf-action-btn cf-live-btn" id="cf-live-track" title="Track chapters for live stream">${this._liveIntervalId ? 'Stop Live Tracking' : 'Track Live Chapters'}</button></div>` : ''}
+                        ${tabHTML}
+                    </div>
+                `);
+
+                // ── Core bindings ──
+                const self = this;
+                this._panelEl.querySelector('#cf-close')?.addEventListener('click', () => self._togglePanel());
+                this._panelEl.querySelector('#cf-generate')?.addEventListener('click', () => self._handleGenerate());
+                this._panelEl.querySelector('#cf-seo-toggle')?.addEventListener('click', () => { appState.settings.cfChapterMode = (appState.settings.cfChapterMode === 'seo') ? 'standard' : 'seo'; settingsManager.save(appState.settings); self._renderPanel(); });
+                this._panelEl.querySelector('#cf-dl-transcript')?.addEventListener('click', () => self._downloadTranscript());
+                this._panelEl.querySelector('#cf-live-track')?.addEventListener('click', () => { if (self._liveIntervalId) { self._stopLiveTracking(); } else { self._startLiveTracking(); } self._renderPanel(); });
+                this._panelEl.querySelectorAll('.cf-tab').forEach(tab => { tab.addEventListener('click', (e) => { e.stopPropagation(); self._activeTab = tab.dataset.cfTab; self._renderPanel(); }); });
+                this._panelEl.querySelectorAll('[data-cf-seek]').forEach(el => { el.addEventListener('click', () => self._seekTo(parseFloat(el.dataset.cfSeek))); });
+
+                this._panelEl.querySelectorAll('[data-cf-clip]').forEach(el => {
+                    el.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const start = parseFloat(el.dataset.cfClip);
+                        const end = el.dataset.cfClipEnd ? parseFloat(el.dataset.cfClipEnd) : null;
+                        self._copyClipLink(start, end);
+                        el.textContent = '\u2713'; setTimeout(() => el.textContent = '\uD83D\uDD17', 1200);
+                    });
+                });
+
+                const searchInput = this._panelEl.querySelector('#cf-search-input');
+                if (searchInput) {
+                    searchInput.addEventListener('input', () => { self._searchQuery = searchInput.value; self._searchResults = self._searchTranscript(searchInput.value); const countEl = self._panelEl.querySelector('#cf-search-count'); if (countEl) countEl.textContent = self._searchResults?.length ? self._searchResults.length + ' hits' : ''; });
+                    searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { self._renderPanel(); setTimeout(() => { const el = self._panelEl.querySelector('#cf-search-input'); if (el) { el.focus(); el.selectionStart = el.selectionEnd = el.value.length; } }, 50); } });
+                }
+                const globalSearch = this._panelEl.querySelector('#cf-global-search');
+                if (globalSearch) {
+                    globalSearch.addEventListener('keydown', (e) => { if (e.key === 'Enter') { self._globalSearchQuery = globalSearch.value; self._globalSearchResults = self._searchAllTranscripts(globalSearch.value); self._renderPanel(); setTimeout(() => { const el = self._panelEl.querySelector('#cf-global-search'); if (el) { el.focus(); el.selectionStart = el.selectionEnd = el.value.length; } }, 50); } });
+                }
+                this._panelEl.querySelector('#cf-summary-btn')?.addEventListener('click', async () => { try { await self._generateSummary(); } catch(e) { self._warn('Panel summary error:', e); showToast('Summary failed', '#ef4444'); } });
+                this._panelEl.querySelector('#cf-summary-style')?.addEventListener('change', (e) => { appState.settings.cfSummaryMode = e.target.value; settingsManager.save(appState.settings); });
+                this._panelEl.querySelector('#cf-summary-length')?.addEventListener('change', (e) => { appState.settings.cfSummaryLength = e.target.value; settingsManager.save(appState.settings); });
+                this._panelEl.querySelector('#cf-copy-summary')?.addEventListener('click', () => { navigator.clipboard.writeText(self._lastSummary || ''); showToast('Summary copied', '#10b981'); });
+                this._panelEl.querySelector('#cf-export-blog')?.addEventListener('click', () => self._exportBlogMarkdown());
+                this._panelEl.querySelectorAll('.cf-summary-box .cf-bubble-ts').forEach(ts => {
+                    ts.addEventListener('click', (e) => { e.preventDefault(); const s = parseInt(ts.dataset.cfSeek, 10); if (!isNaN(s)) { const v = document.querySelector('video.html5-main-video'); if (v) v.currentTime = s; } });
+                });
+                this._panelEl.querySelector('#cf-export-yt')?.addEventListener('click', () => { self._exportChaptersYouTube(); });
+                this._panelEl.querySelector('#cf-export-json')?.addEventListener('click', () => self._exportChaptersJSON());
+                // OpenCut-inspired export bindings
+                this._panelEl.querySelector('#cf-export-srt')?.addEventListener('click', () => self._exportSRT());
+                this._panelEl.querySelector('#cf-export-vtt')?.addEventListener('click', () => self._exportVTT());
+                this._panelEl.querySelector('#cf-export-ch-srt')?.addEventListener('click', () => self._exportChaptersSRT());
+                // SponsorBlock import
+                this._panelEl.querySelector('#cf-sb-import')?.addEventListener('click', () => self._importSBChapters());
+                this._panelEl.querySelector('#cf-sb-apply')?.addEventListener('click', () => self._applySBChapters());
+                // AI Chat
+                const chatInput = this._panelEl.querySelector('#cf-chat-input');
+                const sendChat = () => { if (chatInput?.value.trim()) { self._sendChatMessage(chatInput.value); } };
+                this._panelEl.querySelector('#cf-chat-send')?.addEventListener('click', sendChat);
+                if (chatInput) chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+                this._panelEl.querySelector('#cf-chat-clear')?.addEventListener('click', () => { self._chatHistory = []; self._renderPanel(); });
+                // Flashcards
+                this._panelEl.querySelector('#cf-flashcard-gen')?.addEventListener('click', () => self._generateFlashcards());
+                this._panelEl.querySelector('#cf-flashcard')?.addEventListener('click', () => { self._flashcardFlipped = !self._flashcardFlipped; self._renderPanel(); });
+                this._panelEl.querySelector('#cf-fc-prev')?.addEventListener('click', () => { if (self._flashcardIdx > 0) { self._flashcardIdx--; self._flashcardFlipped = false; self._renderPanel(); } });
+                this._panelEl.querySelector('#cf-fc-next')?.addEventListener('click', () => { if (self._flashcardIdx < (self._flashcards?.length || 0) - 1) { self._flashcardIdx++; self._flashcardFlipped = false; self._renderPanel(); } });
+                this._panelEl.querySelector('#cf-fc-export')?.addEventListener('click', () => self._exportFlashcardsAnki());
+                this._panelEl.querySelector('#cf-fc-copy')?.addEventListener('click', () => {
+                    if (!self._flashcards?.length) return;
+                    const text = self._flashcards.map((c, i) => `Q${i+1}: ${c.q}\nA${i+1}: ${c.a}`).join('\n\n');
+                    navigator.clipboard.writeText(text);
+                    showToast('Flashcards copied', '#10b981');
+                });
+                // Mind Map
+                this._panelEl.querySelector('#cf-mindmap-gen')?.addEventListener('click', () => self._generateMindMap());
+                this._panelEl.querySelector('#cf-mm-copy')?.addEventListener('click', () => { navigator.clipboard.writeText(self._mindMapData || ''); showToast('Outline copied', '#10b981'); });
+                this._panelEl.querySelector('#cf-mm-mermaid')?.addEventListener('click', () => self._exportMindMapMermaid());
+                // AutoSkip mode selector
+                this._panelEl.querySelector('#cf-autoskip-mode')?.addEventListener('change', (e) => {
+                    const wasActive = self._autoSkipActive;
+                    if (wasActive) self._stopAutoSkip();
+                    appState.settings.cfAutoSkipMode = e.target.value;
+                    settingsManager.save(appState.settings);
+                    self._renderPanel();
+                });
+                // AutoSkip start/stop button
+                this._panelEl.querySelector('#cf-autoskip-toggle')?.addEventListener('click', () => {
+                    if (self._autoSkipActive) { self._stopAutoSkip(); } else { self._startAutoSkip(); }
+                    self._renderPanel();
+                });
+                // Translation
+                this._panelEl.querySelector('#cf-translate-lang')?.addEventListener('change', (e) => {
+                    appState.settings.cfTranslateLang = e.target.value;
+                    settingsManager.save(appState.settings);
+                    const btn = self._panelEl.querySelector('#cf-translate-btn');
+                    if (btn) btn.disabled = !e.target.value;
+                });
+                this._panelEl.querySelector('#cf-translate-btn')?.addEventListener('click', async () => {
+                    const lang = appState.settings.cfTranslateLang;
+                    if (!lang) return;
+                    const btn = self._panelEl.querySelector('#cf-translate-btn');
+                    if (btn) { btn.disabled = true; btn.textContent = 'Translating...'; }
+                    await self._translateChaptersAndSummary(lang);
+                    self._renderPanel();
+                });
+                this._panelEl.querySelector('#cf-toggle-speed')?.addEventListener('click', () => { self._toggleSpeedControl(); self._renderPanel(); });
+                this._panelEl.querySelector('#cf-intro-speed')?.addEventListener('change', (e) => { self._speedSettings.introSpeed = parseFloat(e.target.value); });
+                this._panelEl.querySelector('#cf-outro-speed')?.addEventListener('change', (e) => { self._speedSettings.outroSpeed = parseFloat(e.target.value); });
+                this._panelEl.querySelectorAll('.cf-skip-toggle').forEach(el => { el.addEventListener('click', () => { const idx = parseInt(el.dataset.cfSkip); self._speedSettings.skipChapters[idx] = !self._speedSettings.skipChapters[idx]; self._renderPanel(); }); });
+
+                const noteInput = this._panelEl.querySelector('#cf-note-input');
+                const addNote = () => {
+                    if (!noteInput?.value.trim() || !videoId) return;
+                    const video = document.querySelector('video.html5-main-video, video');
+                    const time = video ? video.currentTime : 0;
+                    self._addNote(videoId, time, noteInput.value.trim());
+                    self._renderPanel();
+                };
+                this._panelEl.querySelector('#cf-note-add')?.addEventListener('click', addNote);
+                if (noteInput) noteInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addNote(); });
+                this._panelEl.querySelectorAll('[data-cf-note-del]').forEach(el => {
+                    el.addEventListener('click', (e) => { e.stopPropagation(); self._removeNote(videoId, parseInt(el.dataset.cfNoteDel)); self._renderPanel(); });
+                });
+                this._panelEl.querySelector('#cf-notes-copy')?.addEventListener('click', () => {
+                    const notes = self._getNotes(videoId);
+                    const lines = notes.map(n => `[${self._formatTime(n.time)}] ${n.text}`);
+                    navigator.clipboard.writeText(lines.join('\n'));
+                });
+                this._panelEl.querySelector('#cf-notes-export')?.addEventListener('click', () => {
+                    const notes = self._getNotes(videoId);
+                    const title = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || videoId;
+                    const lines = [`Notes for: ${title}\n`].concat(notes.map(n => `[${self._formatTime(n.time)}] ${n.text}`));
+                    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url; a.download = `notes_${videoId}.txt`;
+                    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                });
+
+                // ── Settings bindings ──
+                const bindSelect = (id, key, transform) => { this._panelEl.querySelector(id)?.addEventListener('change', (e) => { appState.settings[key] = transform ? transform(e.target.value) : e.target.value; settingsManager.save(appState.settings); self._renderPanel(); }); };
+                const bindToggle = (id, key, afterFn) => { this._panelEl.querySelector(id)?.addEventListener('click', () => { appState.settings[key] = !appState.settings[key]; settingsManager.save(appState.settings); self._renderPanel(); afterFn?.(); }); };
+                const bindInput = (id, key) => { const el = this._panelEl.querySelector(id); if (el) { el.addEventListener('input', () => { appState.settings[key] = el.value; settingsManager.save(appState.settings); }); el.addEventListener('blur', () => self._renderPanel()); } };
+
+                this._panelEl.querySelector('#cf-provider-select')?.addEventListener('change', (e) => {
+                    const prov = e.target.value;
+                    appState.settings.cfLlmProvider = prov;
+                    const info = self._CF_PROVIDERS[prov];
+                    if (prov === 'ollama') {
+                        if (!appState.settings.cfOllamaModel) appState.settings.cfOllamaModel = info.defaultModel;
+                    } else if (prov !== 'custom' && info?.defaultModel) {
+                        appState.settings.cfLlmModel = info.defaultModel;
+                    }
+                    settingsManager.save(appState.settings); self._renderPanel();
+                });
+                bindInput('#cf-model-input', 'cfLlmModel');
+                bindInput('#cf-apikey-input', 'cfLlmApiKey');
+                bindInput('#cf-endpoint-input', 'cfLlmEndpoint');
+
+                this._panelEl.querySelector('#cf-clear-cache')?.addEventListener('click', () => { self._clearCache(); const keys = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(self._CF_TRANSCRIPT_PREFIX) || k.startsWith(self._CF_NOTES_PREFIX)) keys.push(k); } keys.forEach(k => localStorage.removeItem(k)); self._chapterData = null; self._renderPanel(); self._renderProgressBarOverlay(); });
+
+                // Prompt Library
+                this._panelEl.querySelector('#cf-prompt-save')?.addEventListener('click', () => {
+                    const nameEl = self._panelEl?.querySelector('#cf-prompt-name');
+                    const name = nameEl?.value?.trim();
+                    if (!name) { showToast('Enter a prompt name', '#f59e0b'); return; }
+                    const currentPrompt = appState.settings.cfCustomSummaryPrompt;
+                    if (!currentPrompt) { showToast('No custom prompt is active. Set one in the main YTKit settings first.', '#f59e0b'); return; }
+                    self._savePrompt(name, currentPrompt);
+                    self._renderPanel();
+                });
+                this._panelEl.querySelector('#cf-prompt-clear')?.addEventListener('click', () => { appState.settings.cfCustomSummaryPrompt = ''; settingsManager.save(appState.settings); self._renderPanel(); showToast('Custom prompt cleared', '#10b981'); });
+                this._panelEl.querySelectorAll('[data-cf-load-prompt]').forEach(el => {
+                    el.addEventListener('click', () => { const prompts = self._getSavedPrompts(); const idx = parseInt(el.dataset.cfLoadPrompt); if (prompts[idx]) { self._loadPrompt(prompts[idx].name); self._renderPanel(); } });
+                });
+                this._panelEl.querySelectorAll('[data-cf-del-prompt]').forEach(el => {
+                    el.addEventListener('click', (e) => { e.stopPropagation(); const prompts = self._getSavedPrompts(); const idx = parseInt(el.dataset.cfDelPrompt); if (prompts[idx]) { self._deletePrompt(prompts[idx].name); self._renderPanel(); } });
+                });
+
+                // ── Ollama manager bindings ──
+                // Auto-check Ollama status when panel opens
+                if (self._panelEl?.querySelector('#cf-ollama-check')) {
+                    setTimeout(() => { self._panelEl?.querySelector('#cf-ollama-check')?.click(); }, 100);
+                }
+                this._panelEl.querySelector('#cf-ollama-check')?.addEventListener('click', async () => {
+                    const statusEl = self._panelEl?.querySelector('#cf-ollama-status');
+                    const installedEl = self._panelEl?.querySelector('#cf-ollama-installed');
+                    if (statusEl) TrustedHTML.setHTML(statusEl, '<span style="color:#a78bfa">Checking...</span>');
+                    const result = await self._ollamaCheck();
+                    if (!statusEl) return;
+                    if (result.running) {
+                        TrustedHTML.setHTML(statusEl, `<span style="color:#10b981">Connected</span> — ${result.models.length} model(s) installed`);
+                        // Populate active model dropdown
+                        const modelSelect = self._panelEl?.querySelector('#cf-ollama-model-select');
+                        if (modelSelect && result.models.length) {
+                            const currentModel = appState.settings.cfOllamaModel || 'qwen3:32b';
+                            const optionsHTML = result.models.map(m => {
+                                const clean = m.replace(':latest', '');
+                                return `<option value="${clean}" ${clean === currentModel ? 'selected' : ''}>${clean}</option>`;
+                            }).join('');
+                            TrustedHTML.setHTML(modelSelect, optionsHTML);
+                            modelSelect.addEventListener('change', () => {
+                                appState.settings.cfOllamaModel = modelSelect.value;
+                                settingsManager.save(appState.settings);
+                            });
+                        }
+                        if (installedEl && result.models.length) {
+                            const modelHTML = result.models.map(m => {
+                                const isCurrent = (appState.settings.cfOllamaModel || '').includes(m.replace(':latest',''));
+                                return `<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0">
+                                    <span style="font-size:11px;color:rgba(255,255,255,${isCurrent ? '0.9' : '0.5'});font-family:monospace">${m}${isCurrent ? ' <span style="color:#10b981;font-size:9px">active</span>' : ''}</span>
+                                    <button class="cf-action-btn cf-ollama-use" data-cf-model="${m.replace(':latest','')}" style="padding:2px 8px;font-size:9px">Use</button>
+                                </div>`;
+                            }).join('');
+                            TrustedHTML.setHTML(installedEl, `<div style="font-size:9px;color:rgba(124,58,237,0.5);margin:6px 0 4px;font-weight:600;letter-spacing:0.5px">INSTALLED MODELS</div>${modelHTML}`);
+                            installedEl.querySelectorAll('.cf-ollama-use').forEach(btn => {
+                                btn.addEventListener('click', () => {
+                                    appState.settings.cfOllamaModel = btn.dataset.cfModel;
+                                    settingsManager.save(appState.settings);
+                                    self._renderPanel();
+                                });
+                            });
+                            // Update pull buttons to show "Installed" for models already present
+                            const installedNames = result.models.map(m => m.replace(':latest',''));
+                            self._panelEl?.querySelectorAll('.cf-ollama-pull').forEach(btn => {
+                                if (installedNames.some(n => n === btn.dataset.cfModel || btn.dataset.cfModel.startsWith(n))) {
+                                    btn.textContent = 'Installed';
+                                    btn.style.opacity = '0.4';
+                                }
+                            });
+                        }
+                    } else {
+                        TrustedHTML.setHTML(statusEl, '<span style="color:#ef4444">Not running</span> — Start Ollama or install from ollama.com');
+                    }
+                });
+                this._panelEl?.querySelectorAll('.cf-ollama-pull').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const model = btn.dataset.cfModel;
+                        btn.disabled = true;
+                        btn.textContent = 'Pulling...';
+                        btn.classList.add('cf-loading');
+                        try {
+                            await self._ollamaPull(model, (msg, pct) => {
+                                if (pct >= 0) btn.textContent = pct < 100 ? `${pct}%` : 'Done';
+                                else btn.textContent = 'Failed';
+                            });
+                            btn.textContent = 'Installed';
+                            btn.style.opacity = '0.4';
+                            // Auto-set as active model
+                            appState.settings.cfOllamaModel = model;
+                            settingsManager.save(appState.settings);
+                        } catch(e) {
+                            btn.textContent = 'Failed';
+                            btn.disabled = false;
+                            btn.classList.remove('cf-loading');
+                        }
+                    });
+                });
+            },
+
+            _updateStatus(text, state, pct) {
+                // Update player button mini-progress
+                let indicator = document.getElementById('cf-mini-progress');
+                const btn = document.getElementById('cf-player-btn');
+                if (!indicator && btn) {
+                    indicator = document.createElement('div');
+                    indicator.id = 'cf-mini-progress';
+                    indicator.style.cssText = 'position:absolute;bottom:-4px;left:0;width:100%;height:3px;border-radius:2px;overflow:hidden;pointer-events:none;';
+                    btn.style.position = 'relative';
+                    btn.appendChild(indicator);
+                }
+                if (indicator) {
+                    if (state === 'loading') {
+                        indicator.style.display = 'block';
+                        const fill = typeof pct === 'number' ? pct : 30;
+                        TrustedHTML.setHTML(indicator, `<div style="width:${fill}%;height:100%;background:#a78bfa;border-radius:2px;transition:width 0.4s"></div>`);
+                        btn?.classList.add('cf-btn-active');
+                    } else {
+                        indicator.style.display = 'none';
+                        btn?.classList.remove('cf-btn-active');
+                    }
+                }
+                // Update panel status bar
+                const statusBar = document.getElementById('cf-status-bar');
+                const statusFill = document.getElementById('cf-status-fill');
+                const statusText = document.getElementById('cf-status-text');
+                if (statusBar) {
+                    statusBar.style.display = state === 'loading' ? 'block' : 'none';
+                }
+                if (statusFill && typeof pct === 'number') {
+                    statusFill.style.width = `${pct}%`;
+                }
+                if (statusText) statusText.textContent = text || '';
+                // Update generate button with progress %
+                const genBtn = document.getElementById('cf-generate');
+                if (genBtn && state === 'loading' && typeof pct === 'number') {
+                    genBtn.textContent = `Generating... ${pct}%`;
+                }
+            },
+
+            async _handleGenerate() {
+                const videoId = this._getVideoId();
+                if (!videoId) return;
+                const btn = document.getElementById('cf-generate');
+                if (btn) { btn.disabled = true; btn.textContent = 'Generating... 0%'; btn.classList.add('cf-loading'); }
+                const statusBar = document.getElementById('cf-status-bar');
+                if (statusBar) statusBar.style.display = 'block';
+                const data = await this._generateChapters(videoId, (t, s, p) => this._updateStatus(t, s, p));
+                if (data) {
+                    this._chapterData = data;
+                    this._currentDuration = this._getVideoDuration();
+                    this._runAnalysis(this._lastTranscriptSegments);
+                    // Auto-start AutoSkip if a mode is configured
+                    if (appState.settings.cfAutoSkipMode && appState.settings.cfAutoSkipMode !== 'off') {
+                        this._startAutoSkip();
+                    }
+                    this._activeTab = 'chapters'; // auto-switch to show results
+                    this._renderPanel();
+                    this._renderProgressBarOverlay();
+                }
+                this._updateStatus(data ? 'Done' : 'Failed', data ? 'ready' : 'error', data ? 100 : 0);
+                if (btn) { btn.disabled = false; btn.textContent = data ? 'Regenerate Chapters' : 'Generate Chapters'; btn.classList.remove('cf-loading'); }
+            },
+
+            // ═══ UI: Player Button ═══
+            _injectPlayerButton() {
+                if (document.getElementById('cf-player-btn')) return;
+                const controls = document.querySelector('.ytp-right-controls');
+                if (!controls) return;
+                const btn = document.createElement('button');
+                btn.id = 'cf-player-btn'; btn.className = 'ytp-button cf-btn'; btn.title = 'ChapterForge';
+                TrustedHTML.setHTML(btn, `<svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:currentColor"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>`);
+                btn.addEventListener('click', () => this._togglePanel());
+                controls.insertBefore(btn, controls.firstChild);
+            },
+
+            // ═══ LIFECYCLE ═══
+            _onVideoChange() {
+                const videoId = this._getVideoId();
+                if (!videoId || videoId === this._currentVideoId) return;
+                if (!window.location.pathname.startsWith('/watch')) return;
+                this._currentVideoId = videoId;
+                this._chapterData = null;
+                this._lastTranscriptSegments = null;
+                this._lastActiveChapterIdx = -1;
+                this._fillerData = null;
+                this._pauseData = null;
+                this._paceData = null;
+                this._keywordsPerChapter = null;
+                this._translatedSummary = null;
+                this._translatedChapters = null;
+                this._lastSummary = null;
+                this._chatHistory = [];
+                this._flashcards = null;
+                this._flashcardIdx = 0;
+                this._flashcardFlipped = false;
+                this._mindMapData = null;
+                this._sbChapters = null;
+                this._stopAutoSkip();
+                const cached = this._getCachedData(videoId);
+                if (cached) this._chapterData = cached;
+
+                // Clean HUD on video change
+                this._stopChapterTracking();
+                this._chapterHUDEl?.remove();
+                this._chapterHUDEl = null;
+
+                this._waitForPlayer().then(() => {
+                    this._currentDuration = this._getVideoDuration();
+                    const s = appState.settings;
+
+                    if (s.cfMode === 'manual' || s.cfShowPlayerButton) {
+                        this._injectPlayerButton();
+                    }
+                    this._renderProgressBarOverlay();
+                    if (this._panelEl?.classList.contains('cf-visible')) this._renderPanel();
+
+                    const btn = document.getElementById('cf-player-btn');
+                    if (btn) { const badge = btn.querySelector('.cf-badge'); if (this._chapterData && !badge) { const b = document.createElement('span'); b.className = 'cf-badge'; btn.appendChild(b); } else if (!this._chapterData && badge) badge.remove(); }
+
+                    if (s.cfMode === 'auto' && !this._chapterData) {
+                        const maxDur = (s.cfMaxAutoDuration || 60) * 60;
+                        if (this._currentDuration <= maxDur || maxDur >= 599940) {
+                            this._handleGenerate();
+                        } else {
+                            this._log('Auto-skip: video duration', Math.round(this._currentDuration/60), 'min exceeds limit', s.cfMaxAutoDuration, 'min');
+                        }
+                    }
+
+                    if (s.cfMode === 'auto' && this._isLiveVideo() && !this._liveIntervalId) {
+                        this._startLiveTracking();
+                    }
+                });
+            },
+
+            _waitForPlayer(timeout = 10000) {
+                return new Promise((resolve) => {
+                    const check = () => { const player = document.getElementById('movie_player'); const video = document.querySelector('video.html5-main-video'); if (player && video && video.duration) return resolve(); if (timeout <= 0) return resolve(); timeout -= 200; setTimeout(check, 200); };
+                    check();
+                });
+            },
+
+            // ═══ INIT / DESTROY ═══
+
+            init() {
+                const css = `
+                    .cf-btn { position:relative;display:flex;align-items:center;justify-content:center;width:36px;height:36px;border:none;background:transparent;cursor:pointer;border-radius:6px;transition:background 0.2s;color:#fff; }
+                    .cf-btn:hover { background:rgba(255,255,255,0.1); }
+                    .cf-btn .cf-badge { position:absolute;top:2px;right:2px;width:8px;height:8px;border-radius:50%;background:#7c3aed; }
+                    .cf-panel { position:fixed;top:80px;right:20px;width:380px;max-height:calc(100vh - 120px);background:#0f0f14;border:1px solid rgba(124,58,237,0.3);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,0.7),0 0 40px rgba(124,58,237,0.08);z-index:99999;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e0e0e8;overflow:hidden;display:none;animation:cfSlideIn 0.25s cubic-bezier(0.16,1,0.3,1); }
+                    @keyframes cfSlideIn { from{opacity:0;transform:translateY(-10px) scale(0.97)} to{opacity:1;transform:translateY(0) scale(1)} }
+                    .cf-panel.cf-visible { display:flex;flex-direction:column; }
+                    .cf-panel-header { display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid rgba(255,255,255,0.06);background:linear-gradient(180deg,rgba(124,58,237,0.08) 0%,transparent 100%); }
+                    .cf-panel-title { font-size:14px;font-weight:700;background:linear-gradient(135deg,#a78bfa,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:0.5px; }
+                    .cf-panel-version { font-size:10px;color:rgba(255,255,255,0.25);margin-left:8px; }
+                    .cf-panel-close { width:28px;height:28px;border:none;background:transparent;color:rgba(255,255,255,0.4);cursor:pointer;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:16px;transition:all 0.15s; }
+                    .cf-panel-close:hover { background:rgba(255,255,255,0.08);color:#fff; }
+                    .cf-panel-body { flex:1;overflow-y:auto;padding:12px 16px 16px;scrollbar-width:thin;scrollbar-color:rgba(124,58,237,0.3) transparent; }
+                    .cf-panel-body::-webkit-scrollbar { width:5px; } .cf-panel-body::-webkit-scrollbar-thumb { background:rgba(124,58,237,0.3);border-radius:10px; }
+                    @keyframes cfPulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+                    .cf-generate-btn { width:100%;padding:10px;border:none;border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;transition:all 0.2s;margin-bottom:12px; }
+                    .cf-generate-btn:hover:not(:disabled) { background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 4px 16px rgba(124,58,237,0.3); } .cf-generate-btn:disabled { opacity:0.4;cursor:not-allowed; }
+                    .cf-generate-btn.cf-loading { position:relative;overflow:hidden; } .cf-generate-btn.cf-loading::after { content:'';position:absolute;bottom:0;left:0;height:2px;background:linear-gradient(90deg,transparent,#e0e0e8,transparent);animation:cfSlide 1.2s infinite; }
+                    .cf-action-btn { flex:1;padding:7px 8px;border:1px solid rgba(124,58,237,0.25);border-radius:8px;cursor:pointer;font-size:11px;font-weight:500;background:rgba(124,58,237,0.08);color:rgba(255,255,255,0.6);transition:all 0.15s;font-family:inherit;position:relative;overflow:hidden; } .cf-action-btn:hover { background:rgba(124,58,237,0.15);color:#e0e0e8;border-color:rgba(124,58,237,0.4); } .cf-action-btn:disabled { opacity:0.5;cursor:not-allowed; }
+                    .cf-action-btn.cf-loading::after { content:'';position:absolute;bottom:0;left:0;height:2px;background:linear-gradient(90deg,transparent,#a78bfa,transparent);animation:cfSlide 1.2s infinite; }
+                    @keyframes cfSlide { 0% { width:0;left:0; } 50% { width:60%;left:20%; } 100% { width:0;left:100%; } }
+                    .cf-live-btn { border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);color:rgba(239,68,68,0.7); } .cf-live-btn:hover { background:rgba(239,68,68,0.15);color:#ef4444; }
+                    .cf-chapter-list { list-style:none;padding:0;margin:0; }
+                    .cf-chapter-item { display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;transition:background 0.15s;margin-bottom:2px; } .cf-chapter-item:hover { background:rgba(255,255,255,0.05); }
+                    .cf-chapter-time { font-size:11px;font-weight:600;font-family:'SF Mono','Cascadia Code',monospace;color:#a78bfa;min-width:48px;padding-top:1px;flex-shrink:0; }
+                    .cf-chapter-title { font-size:12.5px;color:rgba(255,255,255,0.8);line-height:1.4; }
+                    .cf-chapter-dot { width:6px;height:6px;border-radius:50%;margin-top:5px;flex-shrink:0; }
+                    .cf-poi-badge { display:inline-block;font-size:9px;font-weight:700;color:#ff6b6b;background:rgba(255,107,107,0.1);padding:1px 5px;border-radius:4px;margin-left:6px;vertical-align:middle;letter-spacing:0.5px; }
+                    .cf-section-label { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:rgba(255,255,255,0.2);margin:14px 0 8px;padding-left:2px; } .cf-section-label:first-child { margin-top:0; }
+                    .cf-settings-row { display:flex;align-items:center;justify-content:space-between;padding:8px 0;font-size:12px; }
+                    .cf-settings-label { color:rgba(255,255,255,0.6); }
+                    .cf-select { background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);color:#e0e0e8;border-radius:6px;padding:5px 8px;font-size:11px;outline:none;cursor:pointer;max-width:180px; } .cf-select:focus { border-color:rgba(124,58,237,0.5); }
+                    .cf-input { background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);color:#e0e0e8;border-radius:6px;padding:5px 8px;font-size:11px;outline:none;max-width:180px;width:180px;font-family:inherit; } .cf-input:focus { border-color:rgba(124,58,237,0.5); } .cf-input::placeholder { color:rgba(255,255,255,0.2); }
+                    .cf-toggle-track { width:36px;height:20px;border-radius:10px;background:rgba(255,255,255,0.1);cursor:pointer;position:relative;transition:background 0.2s;flex-shrink:0; } .cf-toggle-track.active { background:#7c3aed; }
+                    .cf-toggle-knob { width:16px;height:16px;border-radius:50%;background:#fff;position:absolute;top:2px;left:2px;transition:transform 0.2s; } .cf-toggle-track.active .cf-toggle-knob { transform:translateX(16px); }
+                    .cf-tab-bar { display:flex;gap:0;padding:0 16px;border-bottom:1px solid rgba(255,255,255,0.06); }
+                    .cf-tab { padding:8px 10px;font-size:10px;font-weight:600;color:rgba(255,255,255,0.35);cursor:pointer;border-bottom:2px solid transparent;transition:all 0.15s;text-transform:uppercase;letter-spacing:0.5px;flex:1;text-align:center; } .cf-tab:hover { color:rgba(255,255,255,0.6); } .cf-tab.active { color:#a78bfa;border-bottom-color:#7c3aed; }
+                    .cf-empty { text-align:center;padding:30px 20px;color:rgba(255,255,255,0.25);font-size:12px; }
+                    .cf-clear-btn { background:transparent;border:1px solid rgba(239,68,68,0.3);color:rgba(239,68,68,0.7);border-radius:8px;padding:6px 12px;font-size:11px;cursor:pointer;transition:all 0.15s;margin-top:8px; } .cf-clear-btn:hover { background:rgba(239,68,68,0.1);color:#ef4444;border-color:rgba(239,68,68,0.5); }
+
+                    /* ═══ PROGRESS BAR: Chapter segments (FIXED z-index layering) ═══ */
+                    .cf-bar-overlay { position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:25; }
+                    .cf-chapter-markers { position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:24; }
+                    .cf-chapter-seg { position:absolute;top:0;height:100%;pointer-events:auto;cursor:pointer;transition:opacity 0.15s; }
+                    .cf-chapter-seg::before { content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:var(--cf-seg-color);opacity:var(--cf-seg-opacity,0.35);transition:opacity 0.15s;border-radius:1px; }
+                    .cf-chapter-seg:hover::before { opacity:0.55; }
+                    .cf-chapter-seg.cf-seg-active::before { opacity:0.5; }
+                    .cf-chapter-gap { position:absolute;top:-1px;bottom:-1px;width:3px;transform:translateX(-50%);background:#0f0f14;z-index:1;pointer-events:none;border-radius:1px; }
+
+                    /* Chapter name labels — absolutely positioned above progress bar, zero layout impact */
+                    .cf-chapter-label-row { position:absolute;bottom:100%;left:0;width:100%;height:0;pointer-events:none;z-index:25;opacity:0;transition:opacity 0.2s; }
+                    .ytp-progress-bar:hover .cf-chapter-label-row,
+                    .ytp-progress-bar-container:hover .cf-chapter-label-row { opacity:1; }
+                    .cf-chapter-label { position:absolute;bottom:4px;height:14px;display:flex;align-items:center;padding:0 3px;font-size:9px;font-weight:600;color:var(--cf-label-fg, #e0e0e8);background:color-mix(in srgb, var(--cf-label-color, #7c3aed) 25%, #0f0f14 75%);border-radius:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;pointer-events:auto;transition:all 0.15s;letter-spacing:0.2px;border:1px solid color-mix(in srgb, var(--cf-label-color, #7c3aed) 20%, transparent);box-sizing:border-box;line-height:1; }
+                    .cf-chapter-label:hover { background:color-mix(in srgb, var(--cf-label-color, #7c3aed) 40%, #0f0f14 60%);z-index:2; }
+                    .cf-chapter-label.cf-label-active { background:color-mix(in srgb, var(--cf-label-color, #7c3aed) 45%, #0f0f14 55%);border-color:color-mix(in srgb, var(--cf-label-color, #7c3aed) 50%, transparent); }
+
+                    /* POI markers */
+                    .cf-poi-hitbox { position:absolute;top:50%;width:34px;height:34px;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer;z-index:26; }
+                    .cf-poi-diamond { position:absolute;top:50%;left:50%;width:10px;height:10px;transform:translate(-50%,-50%) rotate(45deg);border-radius:2px;transition:all 0.2s;box-shadow:0 0 6px rgba(255,107,107,0.4);pointer-events:none; }
+                    .cf-poi-hover { transform:translate(-50%,-50%) rotate(45deg) scale(1.6);box-shadow:0 0 12px rgba(255,107,107,0.7),0 0 24px rgba(255,107,107,0.3); }
+
+                    /* Tooltips — positioned well above the bar to avoid YouTube overlap */
+                    .cf-bar-tooltip { position:absolute;bottom:28px;left:50%;transform:translateX(-50%);padding:6px 12px;border-radius:8px;font-size:11px;white-space:nowrap;pointer-events:none;z-index:50;opacity:0;transition:opacity 0.15s; }
+                    .cf-chapter-tip { background:rgba(15,15,20,0.95);color:#e0e0e8;border:1px solid rgba(124,58,237,0.25);box-shadow:0 4px 16px rgba(0,0,0,0.5);display:flex;gap:8px;align-items:center;backdrop-filter:blur(8px); }
+                    .cf-tip-time { font-weight:700;color:#a78bfa;font-size:10px;font-variant-numeric:tabular-nums; }
+                    .cf-tip-title { color:#e0e0e8;font-weight:500; }
+
+                    .cf-poi-tip { background:linear-gradient(135deg,rgba(30,10,10,0.95),rgba(15,15,20,0.95));color:#fca5a5;border:1px solid rgba(255,107,107,0.35);box-shadow:0 4px 20px rgba(255,107,107,0.15),0 0 40px rgba(255,107,107,0.05);display:flex;gap:6px;align-items:center;animation:cfGlow 2s ease-in-out infinite;backdrop-filter:blur(8px); }
+                    .cf-tip-poi-icon { font-size:12px;color:#ff6b6b;filter:drop-shadow(0 0 3px rgba(255,107,107,0.6)); }
+                    .cf-tip-label { color:#fca5a5;font-weight:500; }
+                    @keyframes cfGlow { 0%,100%{box-shadow:0 4px 20px rgba(255,107,107,0.15)} 50%{box-shadow:0 4px 24px rgba(255,107,107,0.3),0 0 8px rgba(255,107,107,0.1)} }
+                    .cf-poi-hitbox .cf-bar-tooltip { bottom:30px; }
+
+                    /* Transcript hover preview */
+                    .cf-transcript-tip { position:absolute;bottom:38px;background:rgba(10,10,15,0.95);color:rgba(255,255,255,0.8);padding:8px 12px;border-radius:8px;font-size:11px;width:300px;white-space:normal;word-wrap:break-word;pointer-events:none;z-index:30;opacity:0;transition:opacity 0.12s;border:1px solid rgba(124,58,237,0.15);box-shadow:0 4px 16px rgba(0,0,0,0.5);line-height:1.5;backdrop-filter:blur(8px); }
+                    .cf-tx-chapter { font-size:10px;font-weight:700;color:#a78bfa;margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid rgba(124,58,237,0.15);text-transform:uppercase;letter-spacing:0.5px; }
+                    .cf-tx-line { font-size:11px;color:rgba(255,255,255,0.85);line-height:1.5;margin:2px 0; }
+                    .cf-tx-dim { color:rgba(255,255,255,0.3);font-size:10px; }
+                    .cf-tx-ts { font-family:'SF Mono','Cascadia Code',monospace;font-size:9px;color:#a78bfa;opacity:0.6;margin-right:4px; }
+
+                    /* ═══ CHAPTER HUD — Floating overlay on video player ═══ */
+                    .cf-chapter-hud { position:absolute;display:flex;align-items:center;gap:6px;padding:5px 8px 5px 6px;background:rgba(10,10,15,0.82);border-radius:10px;border:1px solid color-mix(in srgb, var(--cf-hud-accent, #7c3aed) 25%, transparent);backdrop-filter:blur(16px);z-index:60;pointer-events:auto;opacity:0;transition:opacity 0.3s, transform 0.2s;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.5);max-width:70%; }
+                    .cf-chapter-hud[data-cf-pos="top-left"] { top:12px;left:12px; }
+                    .cf-chapter-hud[data-cf-pos="top-right"] { top:12px;right:12px; }
+                    .cf-chapter-hud[data-cf-pos="bottom-left"] { bottom:60px;left:12px; }
+                    .cf-chapter-hud[data-cf-pos="bottom-right"] { bottom:60px;right:12px; }
+                    .cf-chapter-hud[style*="opacity: 1"] { opacity:1; }
+                    .cf-hud-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px color-mix(in srgb, var(--cf-hud-accent, #7c3aed) 50%, transparent); }
+                    .cf-hud-title { font-size:12px;font-weight:600;color:#e0e0e8;letter-spacing:0.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+                    .cf-hud-counter { font-size:9px;color:rgba(255,255,255,0.25);font-weight:600;flex-shrink:0;letter-spacing:0.5px; }
+                    .cf-hud-nav { width:24px;height:24px;border:none;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);cursor:pointer;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;padding:0;flex-shrink:0; }
+                    .cf-hud-nav:hover { background:rgba(255,255,255,0.14);color:#fff; }
+                    .cf-hud-nav.cf-hud-disabled { opacity:0.2;pointer-events:none; }
+                    /* Hide HUD when controls are hidden (fullscreen idle) */
+                    .ytp-autohide .cf-chapter-hud { opacity:0 !important; }
+
+                    .cf-btn-active { animation:cfBtnPulse 1.5s infinite; }
+                    @keyframes cfBtnPulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+                    .cf-search-row { display:flex;align-items:center;gap:6px;margin-bottom:8px; }
+                    .cf-search-input { flex:1; }
+                    .cf-search-count { font-size:10px;color:#a78bfa;white-space:nowrap;min-width:40px;text-align:right; }
+                    .cf-search-hit { cursor:pointer; } .cf-search-hit:hover { background:rgba(124,58,237,0.12); }
+                    .cf-search-text { font-size:11px;color:rgba(255,255,255,0.6); }
+                    .cf-global-result { margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.04); }
+                    .cf-global-title { font-size:11px;margin-bottom:4px;display:flex;align-items:center;gap:6px; }
+                    .cf-video-link { color:#a78bfa;text-decoration:none;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px;display:inline-block; } .cf-video-link:hover { text-decoration:underline; }
+                    .cf-global-link { display:flex;align-items:flex-start;gap:8px;text-decoration:none;color:inherit;width:100%; } .cf-global-link:hover { color:#e0e0e8; }
+                    .cf-match-count { font-size:10px;color:rgba(255,255,255,0.25);flex-shrink:0; }
+                    .cf-summary-box { font-size:12px;line-height:1.5;color:rgba(255,255,255,0.65);padding:10px 12px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.05);margin-bottom:6px; }
+                    .cf-clip-btn { cursor:pointer;font-size:12px;opacity:0;transition:opacity 0.15s;margin-left:auto;flex-shrink:0;padding:0 2px; } .cf-chapter-item:hover .cf-clip-btn { opacity:0.5; } .cf-clip-btn:hover { opacity:1 !important; }
+                    .cf-note-row { display:flex;gap:6px;margin-bottom:10px; }
+                    .cf-note-input { flex:1; }
+                    .cf-note-add-btn { width:32px;height:32px;border:none;background:rgba(124,58,237,0.3);color:#a78bfa;border-radius:8px;cursor:pointer;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;transition:background 0.2s; } .cf-note-add-btn:hover { background:rgba(124,58,237,0.5); }
+                    .cf-note-item { position:relative; }
+                    .cf-note-del { position:absolute;right:4px;top:50%;transform:translateY(-50%);cursor:pointer;color:rgba(255,255,255,0.15);font-size:14px;padding:2px 4px;border-radius:4px;opacity:0;transition:opacity 0.15s; } .cf-note-item:hover .cf-note-del { opacity:1; } .cf-note-del:hover { color:#ef4444;background:rgba(239,68,68,0.1); }
+                    #cf-summary-bubble { position:absolute;top:12px;right:12px;bottom:60px;width:380px;max-width:40%;z-index:60;background:linear-gradient(165deg, rgba(8,8,14,0.94) 0%, rgba(12,12,22,0.96) 50%, rgba(8,10,18,0.94) 100%);backdrop-filter:blur(24px) saturate(1.6);border:1px solid rgba(59,130,246,0.15);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.7), 0 0 40px rgba(59,130,246,0.06), inset 0 1px 0 rgba(255,255,255,0.06), inset 0 0 30px rgba(59,130,246,0.02);opacity:0;transform:translateX(20px) scale(0.96);transition:opacity 0.3s cubic-bezier(0.16,1,0.3,1), transform 0.3s cubic-bezier(0.16,1,0.3,1);display:flex;flex-direction:column;overflow:hidden; }
+                    #cf-summary-bubble.cf-bubble-visible { opacity:1;transform:translateX(0) scale(1); }
+                    #cf-summary-bubble.cf-bubble-hiding { opacity:0;transform:translateX(20px) scale(0.96); }
+                    #cf-summary-bubble::before { content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg, transparent, rgba(59,130,246,0.3), rgba(139,92,246,0.2), transparent);z-index:1; }
+                    .cf-bubble-header { display:flex;align-items:center;justify-content:space-between;padding:12px 14px 10px;border-bottom:1px solid rgba(255,255,255,0.05);flex-shrink:0;background:rgba(255,255,255,0.01); }
+                    .cf-bubble-title-row { display:flex;align-items:center;gap:8px; }
+                    .cf-bubble-icon { width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg, rgba(59,130,246,0.2), rgba(139,92,246,0.15));border-radius:8px;color:#60a5fa;flex-shrink:0; }
+                    .cf-bubble-title { font-size:13px;font-weight:700;color:rgba(255,255,255,0.85);letter-spacing:0.5px; }
+                    .cf-bubble-actions { display:flex;align-items:center;gap:2px; }
+                    .cf-bubble-provider { font-size:8px;color:rgba(59,130,246,0.55);background:rgba(59,130,246,0.08);padding:3px 8px;border-radius:6px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;margin-right:4px; }
+                    .cf-bubble-btn { width:28px;height:28px;border:none;background:transparent;color:rgba(255,255,255,0.3);cursor:pointer;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;padding:0; }
+                    .cf-bubble-btn:hover { background:rgba(255,255,255,0.08);color:#fff; }
+                    .cf-bubble-close-btn:hover { background:rgba(239,68,68,0.15);color:#f87171; }
+                    .cf-bubble-body { padding:14px 16px;font-size:13px;line-height:1.75;color:rgba(255,255,255,0.78);flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(59,130,246,0.15) transparent; }
+                    .cf-bubble-body strong { color:#93c5fd;font-weight:600; }
+                    .cf-bubble-body em { color:rgba(255,255,255,0.55);font-style:italic; }
+                    .cf-bubble-body::-webkit-scrollbar { width:4px; } .cf-bubble-body::-webkit-scrollbar-track { background:transparent; } .cf-bubble-body::-webkit-scrollbar-thumb { background:rgba(59,130,246,0.15);border-radius:4px; }
+                    .cf-bubble-ts { color:#60a5fa;cursor:pointer;font-family:"Cascadia Code","Consolas",monospace;font-size:11.5px;font-weight:600;padding:2px 6px;border-radius:5px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.1);transition:all 0.15s;text-decoration:none;display:inline-block;line-height:1; }
+                    .cf-bubble-ts:hover { background:rgba(59,130,246,0.22);border-color:rgba(59,130,246,0.25);color:#93c5fd;box-shadow:0 0 8px rgba(59,130,246,0.15); }
+                    .cf-bubble-bullet { display:inline-block;width:4px;height:4px;background:linear-gradient(135deg, #3b82f6, #8b5cf6);border-radius:50%;margin-right:8px;vertical-align:middle;flex-shrink:0; }
+                    .cf-bubble-label { display:inline-block;font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:rgba(59,130,246,0.6);background:rgba(59,130,246,0.08);padding:2px 7px;border-radius:4px;margin-right:4px;vertical-align:middle; }
+
+                    /* OpenCut-inspired: Filler markers */
+                    .cf-filler-markers { position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:52; }
+                    .cf-filler-marker { position:absolute;top:-2px;width:3px;height:calc(100% + 4px);background:#f97316;border-radius:1px;opacity:0.7;pointer-events:auto;cursor:pointer;transition:opacity .15s,transform .15s; }
+                    .cf-filler-marker:hover { opacity:1;transform:scaleX(2); }
+                    .cf-filler-tip { white-space:nowrap;font-size:10px;background:rgba(249,115,22,0.95);color:#fff;border:none; }
+
+                    /* OpenCut-inspired: Analysis boxes */
+                    .cf-analysis-box { background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px;margin-bottom:8px; }
+                    .cf-analysis-stat { display:inline-flex;flex-direction:column;align-items:center;padding:6px 12px;min-width:70px; }
+                    .cf-stat-value { font-size:20px;font-weight:700;color:#e2e8f0;line-height:1.2; }
+                    .cf-stat-label { font-size:9px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px; }
+                    .cf-filler-breakdown { margin-top:8px; }
+                    .cf-filler-row { display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px; }
+                    .cf-filler-word { color:#f97316;font-weight:600;min-width:70px;font-family:monospace; }
+                    .cf-filler-bar-bg { flex:1;height:6px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden; }
+                    .cf-filler-bar-fill { height:100%;background:linear-gradient(90deg,#f97316,#fb923c);border-radius:3px;transition:width .3s; }
+                    .cf-filler-count { color:rgba(255,255,255,0.5);min-width:20px;text-align:right; }
+                    .cf-muted { font-size:11px;color:rgba(255,255,255,0.3);padding:4px 0; }
+
+                    /* OpenCut-inspired: Speech pace */
+                    .cf-pace-box { padding:8px 10px; }
+                    .cf-pace-grid { display:flex;gap:12px;justify-content:center; }
+                    .cf-pace-normal .cf-stat-value { color:#10b981; }
+                    .cf-pace-fast .cf-stat-value { color:#f97316; }
+                    .cf-pace-slow .cf-stat-value { color:#60a5fa; }
+                    .cf-pace-detail { font-size:10px;color:rgba(255,255,255,0.35);text-align:center;margin-top:6px; }
+
+                    /* OpenCut-inspired: Keywords */
+                    .cf-keywords-box { margin-bottom:8px; }
+                    .cf-kw-row { display:flex;align-items:baseline;gap:6px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04); }
+                    .cf-kw-row:last-child { border-bottom:none; }
+                    .cf-kw-chapter { font-size:10px;color:rgba(255,255,255,0.5);min-width:80px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+                    .cf-kw-tags { display:flex;flex-wrap:wrap;gap:3px; }
+                    .cf-kw-tag { display:inline-block;font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(139,92,246,0.12);color:#a78bfa;border:1px solid rgba(139,92,246,0.15); }
+
+                    /* Status bar (in-panel progress) */
+                    .cf-status-bar { position:relative;height:22px;background:rgba(255,255,255,0.04);border-radius:6px;overflow:hidden;margin:-6px 0 10px; }
+                    .cf-status-fill { position:absolute;top:0;left:0;height:100%;background:linear-gradient(90deg,rgba(124,58,237,0.3),rgba(124,58,237,0.5));border-radius:6px;transition:width 0.4s ease; }
+                    .cf-status-text { position:relative;z-index:1;display:block;font-size:10px;color:rgba(255,255,255,0.5);text-align:center;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px; }
+
+                    /* First-time onboarding */
+                    .cf-onboard { margin-top:16px;padding:12px;background:rgba(124,58,237,0.06);border:1px solid rgba(124,58,237,0.12);border-radius:8px;text-align:left; }
+                    .cf-onboard-title { font-size:11px;font-weight:700;color:rgba(124,58,237,0.7);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px; }
+                    .cf-onboard-step { display:flex;align-items:flex-start;gap:8px;font-size:11px;color:rgba(255,255,255,0.35);line-height:1.5;margin-bottom:6px; }
+                    .cf-onboard-num { display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:rgba(124,58,237,0.2);color:#a78bfa;font-size:9px;font-weight:700;flex-shrink:0;margin-top:1px; }
+
+                    /* ═══ AI Chat ═══ */
+                    .cf-chat-messages { max-height:220px;min-height:60px;overflow-y:auto;margin-bottom:8px;padding:8px;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid rgba(255,255,255,0.04);scrollbar-width:thin;scrollbar-color:rgba(124,58,237,0.2) transparent;display:flex;flex-direction:column;gap:6px; }
+                    .cf-chat-messages::-webkit-scrollbar { width:4px; } .cf-chat-messages::-webkit-scrollbar-thumb { background:rgba(124,58,237,0.2);border-radius:4px; }
+                    .cf-chat-empty { font-size:11px;color:rgba(255,255,255,0.15);text-align:center;padding:16px 8px; }
+                    .cf-chat-msg { font-size:11.5px;line-height:1.5;padding:8px 10px;border-radius:8px;max-width:92%;word-wrap:break-word; }
+                    .cf-chat-user { background:rgba(124,58,237,0.15);color:rgba(255,255,255,0.8);align-self:flex-end;border:1px solid rgba(124,58,237,0.2); }
+                    .cf-chat-ai { background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.7);align-self:flex-start;border:1px solid rgba(255,255,255,0.06); }
+                    .cf-chat-ai strong { color:#a78bfa; }
+                    .cf-chat-thinking { opacity:0.5;animation:cfPulse 1.5s infinite; }
+                    .cf-chat-input-row { display:flex;gap:6px;align-items:center; }
+                    .cf-chat-input { flex:1;max-width:none;width:auto; }
+
+                    /* ═══ Flashcards ═══ */
+                    .cf-flashcard-container { display:flex;flex-direction:column;align-items:center;gap:8px; }
+                    .cf-flashcard { width:100%;min-height:120px;cursor:pointer;perspective:600px;position:relative; }
+                    .cf-flashcard-face { position:absolute;top:0;left:0;width:100%;min-height:120px;padding:16px;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;backface-visibility:hidden;transition:transform 0.4s cubic-bezier(0.16,1,0.3,1),opacity 0.4s;box-sizing:border-box; }
+                    .cf-flashcard-front { background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(59,130,246,0.08));border:1px solid rgba(124,58,237,0.2);transform:rotateY(0deg);opacity:1; }
+                    .cf-flashcard-back { background:linear-gradient(135deg,rgba(16,185,129,0.1),rgba(59,130,246,0.06));border:1px solid rgba(16,185,129,0.2);transform:rotateY(180deg);opacity:0; }
+                    .cf-flipped .cf-flashcard-front { transform:rotateY(-180deg);opacity:0; }
+                    .cf-flipped .cf-flashcard-back { transform:rotateY(0deg);opacity:1; }
+                    .cf-flashcard-label { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;opacity:0.4; }
+                    .cf-flashcard-front .cf-flashcard-label { color:#a78bfa; }
+                    .cf-flashcard-back .cf-flashcard-label { color:#10b981; }
+                    .cf-flashcard-text { font-size:12.5px;line-height:1.5;color:rgba(255,255,255,0.8); }
+                    .cf-flashcard-nav { display:flex;align-items:center;gap:12px;justify-content:center; }
+                    .cf-fc-counter { font-size:11px;color:rgba(255,255,255,0.3);font-weight:600;min-width:50px;text-align:center; }
+                    .cf-mindmap-outline { padding:10px;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid rgba(255,255,255,0.04);max-height:280px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(124,58,237,0.2) transparent; }
+                    .cf-mindmap-outline::-webkit-scrollbar { width:4px; } .cf-mindmap-outline::-webkit-scrollbar-thumb { background:rgba(124,58,237,0.2);border-radius:4px; }
+                    .cf-mm-root { font-size:13px;font-weight:700;color:#a78bfa;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid rgba(124,58,237,0.15); }
+                    .cf-mm-section { font-size:11.5px;font-weight:600;color:rgba(255,255,255,0.7);margin:8px 0 4px;padding-left:8px;border-left:2px solid rgba(124,58,237,0.3); }
+                    .cf-mm-point { font-size:11px;color:rgba(255,255,255,0.5);padding:2px 0 2px 20px;line-height:1.5; }
+                    .cf-mm-sub { font-size:10px;color:rgba(255,255,255,0.3);padding:1px 0 1px 34px;line-height:1.5;font-style:italic; }
+                    .cf-prompt-list { max-height:120px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(124,58,237,0.2) transparent; }
+                    .cf-prompt-list::-webkit-scrollbar { width:4px; } .cf-prompt-list::-webkit-scrollbar-thumb { background:rgba(124,58,237,0.2);border-radius:4px; }
+                    .cf-prompt-item { display:flex;align-items:center;justify-content:space-between;padding:5px 6px;border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.15s; }
+                    .cf-prompt-item:hover { background:rgba(124,58,237,0.06); }
+                    .cf-prompt-name { font-size:11px;color:rgba(255,255,255,0.5);cursor:pointer;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+                    .cf-prompt-name:hover { color:#a78bfa; }
+                    .cf-prompt-del { font-size:14px;color:rgba(255,255,255,0.15);cursor:pointer;padding:0 4px;flex:0 0 auto; }
+                    .cf-prompt-del:hover { color:rgba(239,68,68,0.6); }
+                `;
+                this._styleElement = document.createElement('style'); this._styleElement.id = 'chapterforge-styles'; this._styleElement.textContent = css; document.head.appendChild(this._styleElement);
+
+                this._navHandler = () => {
+                    this._onVideoChange();
+                    if (window.location.pathname.startsWith('/feed/subscriptions')) {
+                        setTimeout(() => this._injectSubscriptionsButton(), 1000);
+                    }
+                    if (!window.location.pathname.startsWith('/watch') && this._liveIntervalId) {
+                        this._stopLiveTracking();
+                    }
+                    // Clean HUD when leaving watch page
+                    if (!window.location.pathname.startsWith('/watch')) {
+                        this._stopChapterTracking();
+                        this._chapterHUDEl?.remove();
+                        this._chapterHUDEl = null;
+                    }
+                };
+                document.addEventListener('yt-navigate-finish', this._navHandler);
+
+                this._clickHandler = (e) => {
+                    if (!this._panelEl?.classList.contains('cf-visible')) return;
+                    // Debounce: ignore clicks within 300ms of a panel render (DOM rebuild race condition)
+                    if (Date.now() - (this._lastRenderTime || 0) < 300) return;
+                    // Check if click is inside panel (handles DOM rebuild edge cases)
+                    if (this._panelEl.contains(e.target)) return;
+                    if (e.target.closest('#cf-panel')) return;
+                    const rect = this._panelEl.getBoundingClientRect();
+                    if (rect.width > 0 && e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) return;
+                    if (e.target.closest('#cf-player-btn')) return;
+                    this._panelEl.classList.remove('cf-visible');
+                };
+                document.addEventListener('click', this._clickHandler);
+
+                this._resizeObserver = new ResizeObserver(() => { if (this._chapterData) this._renderProgressBarOverlay(); });
+                this._barObsHandler = () => { setTimeout(() => { const bar = document.querySelector('.ytp-progress-bar'); if (bar) this._resizeObserver.observe(bar); }, 1000); };
+                document.addEventListener('yt-navigate-finish', this._barObsHandler);
+                setTimeout(this._barObsHandler, 2000);
+
+                if (window.location.pathname.startsWith('/watch')) setTimeout(() => this._onVideoChange(), 500);
+                if (window.location.pathname.startsWith('/feed/subscriptions')) setTimeout(() => this._injectSubscriptionsButton(), 1500);
+                if (appState.settings.cfLlmProvider === 'browserai') { appState.settings.cfLlmProvider = 'ollama'; settingsManager.save(appState.settings); showToast('Browser AI provider removed — switched to Ollama', '#f59e0b'); }
+                if (appState.settings?.cfDebugLog) console.log('[ChapterForge] v25.0 initialized — Provider:', appState.settings.cfLlmProvider || 'builtin');
+            },
+
+            destroy() {
+                this._stopLiveTracking();
+                this._stopChapterTracking();
+                this._removeBatchUI();
+                this._chapterHUDEl?.remove(); this._chapterHUDEl = null;
+                try { this._browserLLMPipeline?.dispose?.(); } catch(e) {}
+                this._browserLLMPipeline = null; this._browserLLMModelId = null;
+                if (this._navHandler) document.removeEventListener('yt-navigate-finish', this._navHandler);
+                if (this._clickHandler) document.removeEventListener('click', this._clickHandler);
+                if (this._barObsHandler) document.removeEventListener('yt-navigate-finish', this._barObsHandler);
+                if (this._resizeObserver) this._resizeObserver.disconnect();
+                this._styleElement?.remove();
+                this._panelEl?.remove(); this._panelEl = null;
+                document.getElementById('cf-player-btn')?.remove();
+                document.getElementById('cf-batch-btn')?.remove();
+                document.querySelectorAll('.cf-bar-overlay,.cf-chapter-markers,.cf-chapter-label-row').forEach(el => el.remove());
+            }
+
+        },
+        // ── ChapterForge sub-features (shown in YTKit settings panel) ──
+        {
+            id: 'cfMode', name: 'Processing Mode', description: 'Auto: generate chapters for every video. Manual: player button to trigger.',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { 'manual': 'Manual (Player Button)', 'auto': 'Auto (All Videos)' }, init() {}, destroy() {}
+        },
+        // ══════════════════════════════════════════════════════════════
+        //  DeArrow — Crowdsourced Better Titles & Thumbnails
+        // ══════════════════════════════════════════════════════════════
+        {
+            id: 'deArrow',
+            name: 'DeArrow',
+            description: 'Replace clickbait titles and thumbnails with crowdsourced alternatives from the DeArrow database',
+            group: 'DeArrow',
+            icon: 'player',
+            isParent: true,
+
+            _DA_API: 'https://sponsor.ajay.app/api/branding',
+            _DA_THUMB_API: 'https://dearrow-thumb.ajay.app/api/v1/getThumbnail',
+            _cache: {},           // in-memory: videoId -> branding data
+            _cacheMeta: {},       // in-memory: videoId -> { ts: timestamp }
+            _pendingFetches: {},
+            _persistKey: 'da_branding_cache',
+            _maxCacheEntries: 2000,
+            _observer: null,
+            _navHandler: null,
+            _hoverHandler: null,
+            _hoverOutHandler: null,
+            _styleEl: null,
+            _processTimer: null,
+            _persistTimer: null,
+            _persistDirty: false,
+            _generation: 0,       // monotonic counter — incremented on navigation to abort stale processing
+            _isProcessing: false, // flag to prevent re-entrant batch processing
+            _stats: { fetched: 0, cached: 0, titles: 0, thumbs: 0, formatted: 0, errors: 0 },
+
+            _log(...args) { if (appState.settings.daDebugLog) console.log('[DeArrow]', ...args); },
+
+            _isWatchPage() { return window.location.pathname.startsWith('/watch'); },
+
+            // ── Persistent cache: load from GM storage ──
+            _loadCache() {
+                const ttl = parseInt(appState.settings.daCacheTTL) || 0;
+                if (ttl <= 0) { this._log('Persistent cache disabled'); return; }
+                try {
+                    const stored = GM_getValue(this._persistKey, null);
+                    if (stored) {
+                        const parsed = typeof stored === 'string' ? JSON.parse(stored) : stored;
+                        const now = Date.now();
+                        const ttlH = parseInt(appState.settings.daCacheTTL);
+                        const maxAge = (isNaN(ttlH) ? 4 : ttlH) * 3600000 * 6; // hard-expire at 6x TTL
+                        let count = 0;
+                        for (const [vid, entry] of Object.entries(parsed)) {
+                            if (entry?.ts && (now - entry.ts) < maxAge && entry.data) {
+                                this._cache[vid] = entry.data;
+                                this._cacheMeta[vid] = { ts: entry.ts };
+                                count++;
+                            }
+                        }
+                        this._log(`Loaded ${count} cached entries from storage`);
+                    }
+                } catch (e) {
+                    this._log('Cache load error:', e.message);
+                }
+            },
+
+            // ── Persistent cache: save to GM storage (debounced) ──
+            _schedulePersist() {
+                if ((parseInt(appState.settings.daCacheTTL) || 0) <= 0) return;
+                this._persistDirty = true;
+                if (this._persistTimer) return;
+                this._persistTimer = setTimeout(() => {
+                    this._persistTimer = null;
+                    if (!this._persistDirty) return;
+                    this._persistDirty = false;
+                    this._persistCache();
+                }, 5000); // batch writes every 5s
+            },
+
+            _persistCache() {
+                try {
+                    const out = {};
+                    const entries = Object.entries(this._cache);
+                    // If over limit, keep only the most recent entries
+                    const sorted = entries
+                        .map(([vid, data]) => ({ vid, data, ts: this._cacheMeta[vid]?.ts || 0 }))
+                        .sort((a, b) => b.ts - a.ts)
+                        .slice(0, this._maxCacheEntries);
+                    for (const { vid, data, ts } of sorted) {
+                        out[vid] = { data, ts };
+                    }
+                    GM_setValue(this._persistKey, JSON.stringify(out));
+                    this._log(`Persisted ${sorted.length} cache entries`);
+                } catch (e) {
+                    this._log('Cache persist error:', e.message);
+                }
+            },
+
+            // ── API: Fetch branding data (with persistent cache + background refresh) ──
+            async _fetchBranding(videoId) {
+                const now = Date.now();
+                const ttlHours = parseInt(appState.settings.daCacheTTL);
+                const ttlMs = (isNaN(ttlHours) ? 4 : ttlHours) * 3600000;
+
+                // Cache disabled — always fetch fresh
+                if (ttlMs <= 0) {
+                    if (this._pendingFetches[videoId]) return this._pendingFetches[videoId];
+                    return this._fetchFromAPI(videoId);
+                }
+                const meta = this._cacheMeta[videoId];
+
+                // Fresh cache hit — return immediately
+                if (this._cache[videoId] && meta && (now - meta.ts) < ttlMs) {
+                    this._stats.cached++;
+                    return this._cache[videoId];
+                }
+
+                // Stale cache hit — return immediately but refresh in background
+                if (this._cache[videoId] && meta) {
+                    this._stats.cached++;
+                    this._backgroundRefresh(videoId);
+                    return this._cache[videoId];
+                }
+
+                // No cache — fetch synchronously
+                if (this._pendingFetches[videoId]) return this._pendingFetches[videoId];
+                return this._fetchFromAPI(videoId);
+            },
+
+            _fetchFromAPI(videoId) {
+                const url = `${this._DA_API}?videoID=${videoId}`;
+                this._pendingFetches[videoId] = new Promise((resolve) => {
+                    GM_xmlhttpRequest({
+                        method: 'GET',
+                        url,
+                        anonymous: true,
+                        timeout: 8000,
+                        onload: (r) => {
+                            delete this._pendingFetches[videoId];
+                            if (r.status === 200) {
+                                try {
+                                    const data = JSON.parse(r.responseText);
+                                    this._cacheStore(videoId, data);
+                                    this._stats.fetched++;
+                                    resolve(data);
+                                } catch(e) {
+                                    this._log('Parse error for', videoId, e.message);
+                                    this._stats.errors++;
+                                    resolve(null);
+                                }
+                            } else if (r.status === 404) {
+                                const empty = { titles: [], thumbnails: [], randomTime: 0, videoDuration: null };
+                                this._cacheStore(videoId, empty);
+                                resolve(empty);
+                            } else {
+                                this._log('API returned', r.status, 'for', videoId);
+                                this._stats.errors++;
+                                resolve(null);
+                            }
+                        },
+                        onerror: (e) => { delete this._pendingFetches[videoId]; this._log('Network error for', videoId); this._stats.errors++; resolve(null); },
+                        ontimeout: () => { delete this._pendingFetches[videoId]; this._log('Timeout for', videoId); this._stats.errors++; resolve(null); }
+                    });
+                });
+                return this._pendingFetches[videoId];
+            },
+
+            _cacheStore(videoId, data) {
+                this._cache[videoId] = data;
+                this._cacheMeta[videoId] = { ts: Date.now() };
+                this._schedulePersist();
+            },
+
+            // ── Background refresh for stale entries (no UI blocking) ──
+            _backgroundRefresh(videoId) {
+                if (this._pendingFetches[videoId]) return; // already fetching
+                const url = `${this._DA_API}?videoID=${videoId}`;
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url,
+                    anonymous: true,
+                    timeout: 10000,
+                    onload: (r) => {
+                        if (r.status === 200) {
+                            try {
+                                const data = JSON.parse(r.responseText);
+                                this._cacheStore(videoId, data);
+                            } catch(e) { /* silent */ }
+                        } else if (r.status === 404) {
+                            this._cacheStore(videoId, { titles: [], thumbnails: [], randomTime: 0, videoDuration: null });
+                        }
+                    },
+                    onerror: () => {},
+                    ontimeout: () => {}
+                });
+            },
+
+            // ── Title formatting ──
+            _formatTitle(title, format) {
+                if (!title) return title;
+                // DeArrow uses > before words to prevent auto-formatting those words
+                let clean = title.replace(/>\s*/g, '');
+                if (format === 'original') return clean;
+
+                const words = clean.split(/(\s+)/);
+                const lowerWords = new Set(['a','an','and','as','at','but','by','for','in','nor','of','on','or','so','the','to','up','yet','is','it','be','do','no','vs']);
+                const allCapsPattern = /^[A-Z0-9]{2,}$/;
+
+                if (format === 'sentence') {
+                    let first = true;
+                    return words.map(w => {
+                        if (/^\s+$/.test(w)) return w;
+                        if (allCapsPattern.test(w)) return w;
+                        if (first) { first = false; return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }
+                        return w.toLowerCase();
+                    }).join('');
+                }
+                if (format === 'title_case') {
+                    return words.map((w, i) => {
+                        if (/^\s+$/.test(w)) return w;
+                        if (allCapsPattern.test(w)) return w;
+                        if (i > 0 && lowerWords.has(w.toLowerCase())) return w.toLowerCase();
+                        return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+                    }).join('');
+                }
+                return clean;
+            },
+
+            _formatOriginalTitle(title) {
+                if (!appState.settings.daFallbackFormat) return title;
+                return this._formatTitle(title, appState.settings.daTitleFormat || 'sentence');
+            },
+
+            // ── Get best title/thumbnail from branding data ──
+            _getBestTitle(data) {
+                if (!data?.titles?.length) return null;
+                const best = data.titles[0];
+                if (!best.original && (best.locked || best.votes >= 0)) {
+                    return this._formatTitle(best.title, appState.settings.daTitleFormat || 'sentence');
+                }
+                return null;
+            },
+
+            _getBestThumbnailTime(data) {
+                if (!data?.thumbnails?.length) return null;
+                const best = data.thumbnails[0];
+                if (!best.original && (best.locked || best.votes >= 0) && best.timestamp != null) {
+                    return best.timestamp;
+                }
+                if (data.randomTime != null && data.randomTime > 0) return data.randomTime;
+                return null;
+            },
+
+            _getThumbnailUrl(videoId, time) {
+                return `${this._DA_THUMB_API}?videoID=${videoId}&time=${time}`;
+            },
+
+            // ── Extract video ID from elements ──
+            _getVideoIdFromElement(el) {
+                const link = el.querySelector('a[href*="/watch?v="], a[href*="/shorts/"]') || el.closest('a[href*="/watch?v="], a[href*="/shorts/"]');
+                if (link) {
+                    const href = link.getAttribute('href') || '';
+                    const match = href.match(/[?&]v=([a-zA-Z0-9_-]{11})/) || href.match(/\/shorts\/([a-zA-Z0-9_-]{11})/);
+                    if (match) return match[1];
+                }
+                return null;
+            },
+
+            // ── Title selectors for all YouTube layouts ──
+            // DeArrow approach: NEVER modify the original element text.
+            // Instead, clone it, hide original with display:none, show clone.
+            // This avoids fighting YouTube's Polymer re-renders entirely.
+            _TITLE_SELECTORS: [
+                // New YouTube layout (subscriptions feed, home, etc.)
+                '.yt-lockup-metadata-view-model-wiz__title .yt-core-attributed-string',
+                '.yt-lockup-metadata-view-model__title .yt-core-attributed-string',
+                // Shorts in new layout
+                '.ShortsLockupViewModelHostMetadataTitle .yt-core-attributed-string',
+                '.shortsLockupViewModelHostMetadataTitle .yt-core-attributed-string',
+                // Classic layout selectors
+                'yt-formatted-string#video-title',
+                '#video-title-link yt-formatted-string',
+                '#video-title yt-formatted-string',
+                'a#video-title',
+                '#video-title',
+                'h3 a yt-formatted-string',
+                'h3 yt-formatted-string',
+                '[id="video-title"]',
+            ],
+
+            _WATCH_TITLE_SELECTORS: [
+                'h1.ytd-watch-metadata yt-formatted-string',
+                'ytd-watch-metadata h1 yt-formatted-string',
+                'h1.ytd-watch-metadata',
+                '#title h1 yt-formatted-string',
+                'ytd-video-primary-info-renderer h1 yt-formatted-string',
+                // New layout watch page
+                'h1 .yt-core-attributed-string',
+            ],
+
+            // ── Find the ORIGINAL title element (exclude our clones) ──
+            _findTitleElement(el, requireText = true) {
+                for (const sel of this._TITLE_SELECTORS) {
+                    const found = el.querySelector(`${sel}:not(.daCustomTitle)`);
+                    if (found) {
+                        if (!requireText) return found;
+                        const text = found.textContent?.trim();
+                        if (text && text.length > 0) return found;
+                    }
+                }
+                return null;
+            },
+
+            // ── Get or create the custom title clone ──
+            _getOrCreateClone(originalEl) {
+                // Check if a clone already exists as a sibling
+                const existing = originalEl.parentElement?.querySelector('.daCustomTitle');
+                if (existing) return existing;
+                // Clone the element (shallow — no children)
+                const clone = originalEl.cloneNode(false);
+                clone.classList.add('daCustomTitle');
+                // Remove id to avoid duplicate IDs
+                clone.removeAttribute('id');
+                // Remove Polymer-specific attributes that cause re-render binding
+                clone.removeAttribute('is-empty');
+                clone.removeAttribute('disable-upgrade');
+                // Insert clone right before the original
+                originalEl.parentElement?.insertBefore(clone, originalEl);
+                return clone;
+            },
+
+            // ── Set text on our clone element ──
+            _setCloneText(clone, text) {
+                // Clear any children and set plain text
+                while (clone.firstChild) clone.removeChild(clone.firstChild);
+                clone.appendChild(document.createTextNode(text));
+                clone.title = text;
+            },
+
+            // ── Show custom title, hide original ──
+            _showCustomTitle(originalEl, clone) {
+                originalEl.style.setProperty('display', 'none', 'important');
+                clone.style.removeProperty('display');
+                // Clear parent tooltip so it doesn't show the old title
+                const parentLink = originalEl.closest('a');
+                if (parentLink) {
+                    parentLink.setAttribute('title', clone.textContent || '');
+                    parentLink.setAttribute('aria-label', clone.textContent || '');
+                }
+            },
+
+            // ── Show original title, hide clone ──
+            _showOriginalTitle(originalEl) {
+                const clone = originalEl.parentElement?.querySelector('.daCustomTitle');
+                if (clone) clone.style.setProperty('display', 'none', 'important');
+                // Restore original display — use -webkit-box for line clamping (YouTube default)
+                if (originalEl.closest('.ytp-title-link')) {
+                    originalEl.style.removeProperty('display');
+                } else {
+                    originalEl.style.setProperty('display', '-webkit-box', 'important');
+                }
+                const parentLink = originalEl.closest('a');
+                if (parentLink) {
+                    parentLink.setAttribute('title', originalEl.textContent?.trim() || '');
+                    parentLink.setAttribute('aria-label', originalEl.textContent?.trim() || '');
+                }
+            },
+
+            // ── Wait for title text to appear (YouTube lazy-renders) ──
+            _waitForTitleText(el, maxWait = 3000) {
+                return new Promise(resolve => {
+                    const titleEl = this._findTitleElement(el, false);
+                    if (!titleEl) return resolve(null);
+                    const text = titleEl.textContent?.trim();
+                    if (text && text.length > 0) return resolve(titleEl);
+                    const start = Date.now();
+                    const check = () => {
+                        const t = titleEl.textContent?.trim();
+                        if (t && t.length > 0) return resolve(titleEl);
+                        if (Date.now() - start > maxWait) {
+                            const fresh = this._findTitleElement(el, true);
+                            return resolve(fresh);
+                        }
+                        setTimeout(check, 150);
+                    };
+                    setTimeout(check, 150);
+                });
+            },
+
+            // ── Process a single video element (clone approach) ──
+            async _processVideoElement(el) {
+                if (el.dataset.daProcessed) return;
+                const videoId = this._getVideoIdFromElement(el);
+                if (!videoId) return;
+                el.dataset.daProcessed = videoId;
+
+                const data = await this._fetchBranding(videoId);
+                if (!data) { this._log('No data for', videoId); return; }
+
+                const s = appState.settings;
+
+                // ── Replace title using clone approach ──
+                if (s.daReplaceTitles) {
+                    const originalEl = await this._waitForTitleText(el);
+                    if (!originalEl) {
+                        if (this._stats.errors < 5) this._log('No title element for', videoId, '- tag:', el.tagName);
+                    } else {
+                        const originalText = originalEl.textContent.trim();
+                        const newTitle = this._getBestTitle(data);
+
+                        if (newTitle && newTitle !== originalText) {
+                            // Crowdsourced title available — clone, set text, swap visibility
+                            const clone = this._getOrCreateClone(originalEl);
+                            this._setCloneText(clone, newTitle);
+                            clone.classList.add('da-replaced-title');
+                            clone.dataset.daOriginal = originalText;
+                            clone.dataset.daVideoId = videoId;
+                            this._showCustomTitle(originalEl, clone);
+                            this._stats.titles++;
+                            if (this._stats.titles <= 5) this._log('Replaced:', originalText.substring(0, 50), '=>', newTitle.substring(0, 50));
+                        } else if (s.daFallbackFormat && !newTitle) {
+                            // No crowdsourced title — format original if enabled
+                            const formatted = this._formatOriginalTitle(originalText);
+                            if (formatted !== originalText) {
+                                const clone = this._getOrCreateClone(originalEl);
+                                this._setCloneText(clone, formatted);
+                                clone.classList.add('da-formatted-title');
+                                clone.dataset.daOriginal = originalText;
+                                clone.dataset.daVideoId = videoId;
+                                this._showCustomTitle(originalEl, clone);
+                                this._stats.formatted++;
+                            }
+                        }
+                        if (this._stats.fetched <= 5 && !newTitle) {
+                            this._log('No DeArrow submission for', videoId);
+                        }
+                    }
+                }
+
+                // ── Replace thumbnail ──
+                if (s.daReplaceThumbs) {
+                    const thumbTime = this._getBestThumbnailTime(data);
+                    if (thumbTime != null) {
+                        const thumbContainer = el.querySelector('ytd-thumbnail, ytd-playlist-thumbnail');
+                        const img = thumbContainer?.querySelector('img');
+                        if (img && img.src) {
+                            img.dataset.daOriginalSrc = img.src;
+                            const newSrc = this._getThumbnailUrl(videoId, thumbTime);
+                            const probe = new Image();
+                            probe.onload = () => {
+                                if (probe.naturalWidth > 1) {
+                                    img.src = newSrc;
+                                    img.classList.add('da-replaced-thumb');
+                                    this._stats.thumbs++;
+                                }
+                            };
+                            probe.src = newSrc;
+                        }
+                    }
+                }
+            },
+
+            // ── Process watch page title (clone approach) ──
+            async _processWatchPage() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const videoId = urlParams.get('v');
+                if (!videoId) return;
+
+                const data = await this._fetchBranding(videoId);
+                if (!data) return;
+
+                const s = appState.settings;
+                if (!s.daReplaceTitles) return;
+
+                // Find original watch page title (exclude our clones)
+                let originalEl = null;
+                for (const sel of this._WATCH_TITLE_SELECTORS) {
+                    originalEl = document.querySelector(`${sel}:not(.daCustomTitle)`);
+                    if (originalEl?.textContent?.trim()) break;
+                }
+                if (!originalEl || originalEl.dataset.daWatchProcessed === videoId) return;
+                originalEl.dataset.daWatchProcessed = videoId;
+
+                const originalText = originalEl.textContent.trim();
+                const newTitle = this._getBestTitle(data);
+
+                if (newTitle && newTitle !== originalText) {
+                    const clone = this._getOrCreateClone(originalEl);
+                    this._setCloneText(clone, newTitle);
+                    clone.classList.add('da-replaced-title');
+                    clone.dataset.daOriginal = originalText;
+                    clone.dataset.daVideoId = videoId;
+                    this._showCustomTitle(originalEl, clone);
+                    this._stats.titles++;
+                } else if (s.daFallbackFormat) {
+                    const formatted = this._formatOriginalTitle(originalText);
+                    if (formatted !== originalText) {
+                        const clone = this._getOrCreateClone(originalEl);
+                        this._setCloneText(clone, formatted);
+                        clone.classList.add('da-formatted-title');
+                        clone.dataset.daOriginal = originalText;
+                        clone.dataset.daVideoId = videoId;
+                        this._showCustomTitle(originalEl, clone);
+                        this._stats.formatted++;
+                    }
+                }
+            },
+
+            // ── Scan page for video elements ──
+            _abortProcessing() {
+                this._generation++;
+                if (this._processTimer) { clearTimeout(this._processTimer); this._processTimer = null; }
+                this._isProcessing = false;
+                // Abandon pending fetches — they'll resolve but results are discarded
+                this._pendingFetches = {};
+                this._log('Aborted processing (gen', this._generation, ')');
+            },
+
+            _processPage() {
+                // KILL on watch pages — no scanning, no processing, no observer
+                if (this._isWatchPage()) return;
+                if (this._processTimer || this._isProcessing) return;
+                const gen = this._generation;
+                this._processTimer = setTimeout(async () => {
+                    this._processTimer = null;
+                    if (gen !== this._generation) return;
+                    if (this._isWatchPage()) return; // double-check after delay
+                    this._isProcessing = true;
+                    try {
+
+                    // Pause observer during processing to prevent feedback loop
+                    if (this._observer) this._observer.disconnect();
+
+                    const selectors = [
+                        'ytd-rich-item-renderer',
+                        'ytd-video-renderer',
+                        'ytd-compact-video-renderer',
+                        'ytd-grid-video-renderer',
+                        'ytd-reel-item-renderer',
+                        'ytd-playlist-video-renderer',
+                    ].join(', ');
+                    const els = [...document.querySelectorAll(selectors)].filter(el => !el.dataset.daProcessed);
+                    if (els.length > 0) {
+                        this._log(`Processing ${els.length} videos on ${window.location.pathname} (gen ${gen})`);
+                        const BATCH = 10;
+                        const DELAY = 100;
+                        for (let i = 0; i < els.length; i += BATCH) {
+                            if (gen !== this._generation || this._isWatchPage()) { this._log('Batch aborted at', i, '/', els.length); break; }
+                            const batch = els.slice(i, i + BATCH);
+                            await Promise.all(batch.map(el => this._processVideoElement(el)));
+                            if (gen !== this._generation) break;
+                            if (i + BATCH < els.length) await new Promise(r => setTimeout(r, DELAY));
+                        }
+                        if (gen === this._generation) this._log('Batch complete — Stats:', JSON.stringify(this._stats));
+                    }
+
+                    // Resume observer after processing (only if still not on watch page)
+                    if (gen === this._generation && this._observer && !this._isWatchPage()) {
+                        const target = document.querySelector('ytd-app') || document.body;
+                        this._observer.observe(target, { childList: true, subtree: true });
+                    }
+
+                    } finally { this._isProcessing = false; }
+                }, 300);
+            },
+
+            // ── Hover: toggle between clone and original ──
+            _setupHoverRestore() {
+                this._hoverHandler = (e) => {
+                    if (!appState.settings.daShowOriginalHover) return;
+                    const t = e.target;
+                    if (!t || !t.closest) return;
+                    // Check if hovering a clone title
+                    const clone = t.closest('.da-replaced-title, .da-formatted-title');
+                    if (clone?.classList.contains('daCustomTitle') && clone.dataset.daOriginal) {
+                        // Find the original sibling (next sibling since clone is inserted before)
+                        const originalEl = clone.nextElementSibling;
+                        if (originalEl && !originalEl.classList.contains('daCustomTitle')) {
+                            this._showOriginalTitle(originalEl);
+                            clone._daHoverActive = true;
+                        }
+                    }
+                    // Thumbnail hover
+                    const img = t.closest('.da-replaced-thumb');
+                    if (img?.dataset.daOriginalSrc) {
+                        img.dataset.daCurrent = img.src;
+                        img.src = img.dataset.daOriginalSrc;
+                    }
+                };
+                this._hoverOutHandler = (e) => {
+                    const t = e.target;
+                    if (!t || !t.closest) return;
+                    const clone = t.closest('.da-replaced-title, .da-formatted-title');
+                    if (clone?.classList.contains('daCustomTitle') && clone._daHoverActive) {
+                        const originalEl = clone.nextElementSibling;
+                        if (originalEl && !originalEl.classList.contains('daCustomTitle')) {
+                            this._showCustomTitle(originalEl, clone);
+                        }
+                        delete clone._daHoverActive;
+                    }
+                    const img = t.closest('.da-replaced-thumb');
+                    if (img?.dataset.daCurrent) {
+                        img.src = img.dataset.daCurrent;
+                        delete img.dataset.daCurrent;
+                    }
+                };
+                document.addEventListener('mouseenter', this._hoverHandler, true);
+                document.addEventListener('mouseleave', this._hoverOutHandler, true);
+            },
+
+            init() {
+                const css = `
+                    .daCustomTitle { transition:opacity 0.15s; }
+                    .da-replaced-thumb { transition:opacity 0.2s; }
+                    /* Ensure clones inherit the same line-clamp behavior as originals */
+                    .daCustomTitle {
+                        -webkit-line-clamp: inherit;
+                        -webkit-box-orient: inherit;
+                        overflow: inherit;
+                        text-overflow: inherit;
+                        display: -webkit-box;
+                    }
+                `;
+                this._styleEl = injectStyle(css, 'deArrow', true);
+                this._stats = { fetched: 0, cached: 0, titles: 0, thumbs: 0, formatted: 0, errors: 0 };
+
+                // Load persistent cache from GM storage
+                this._loadCache();
+
+                // Process initial page after a short delay (skip on watch pages)
+                if (!this._isWatchPage()) {
+                    setTimeout(() => this._processPage(), 800);
+                }
+
+                // SPA navigation — abort all in-flight processing immediately
+                this._navHandler = () => {
+                    this._abortProcessing();
+                    // Always disconnect observer during navigation
+                    if (this._observer) this._observer.disconnect();
+                    // Remove all clones and unhide originals on navigation
+                    document.querySelectorAll('.daCustomTitle').forEach(clone => {
+                        const originalEl = clone.nextElementSibling;
+                        if (originalEl) {
+                            originalEl.style.removeProperty('display');
+                            delete originalEl.dataset.daWatchProcessed;
+                        }
+                        clone.remove();
+                    });
+                    document.querySelectorAll('[data-da-processed]').forEach(el => delete el.dataset.daProcessed);
+                    // On watch pages: stay dead — no processing, no observer
+                    if (this._isWatchPage()) {
+                        this._log('Watch page — DeArrow dormant');
+                        return;
+                    }
+                    // On feed/browse pages: resume after settle
+                    setTimeout(() => this._processPage(), 1000);
+                };
+                document.addEventListener('yt-navigate-finish', this._navHandler);
+
+                // MutationObserver for dynamically loaded content (infinite scroll, etc.)
+                // Completely dormant on watch pages — no throttle timers, no processing
+                let mutationThrottle = null;
+                const DA_TAGS = new Set(['YTD-RICH-ITEM-RENDERER', 'YTD-VIDEO-RENDERER', 'YTD-COMPACT-VIDEO-RENDERER', 'YTD-GRID-VIDEO-RENDERER', 'YTD-REEL-ITEM-RENDERER', 'YTD-PLAYLIST-VIDEO-RENDERER']);
+                this._observer = new MutationObserver((mutations) => {
+                    if (this._isWatchPage()) return;
+                    if (mutationThrottle) return;
+                    // Only trigger when video renderers are actually added
+                    let hasRelevant = false;
+                    for (const m of mutations) {
+                        for (const node of m.addedNodes) {
+                            if (node.nodeType !== 1) continue;
+                            if (DA_TAGS.has(node.tagName) || node.querySelector?.('ytd-rich-item-renderer,ytd-video-renderer,ytd-compact-video-renderer')) {
+                                hasRelevant = true;
+                                break;
+                            }
+                        }
+                        if (hasRelevant) break;
+                    }
+                    if (!hasRelevant) return;
+                    mutationThrottle = setTimeout(() => { mutationThrottle = null; this._processPage(); }, TIMING.MUTATION_THROTTLE);
+                });
+                // Only attach observer if not on a watch page
+                if (!this._isWatchPage()) {
+                    const target = document.querySelector('ytd-app') || document.body;
+                    this._observer.observe(target, { childList: true, subtree: true });
+                }
+
+                // Hover restore
+                this._setupHoverRestore();
+
+                this._log('Initialized (clone approach) — Titles:', appState.settings.daReplaceTitles, 'Thumbs:', appState.settings.daReplaceThumbs, 'Format:', appState.settings.daTitleFormat);
+            },
+
+            destroy() {
+                this._abortProcessing();
+                if (this._navHandler) document.removeEventListener('yt-navigate-finish', this._navHandler);
+                if (this._observer) this._observer.disconnect();
+                if (this._hoverHandler) document.removeEventListener('mouseenter', this._hoverHandler, true);
+                if (this._hoverOutHandler) document.removeEventListener('mouseleave', this._hoverOutHandler, true);
+                this._styleEl?.remove();
+                // Remove all clones and restore originals
+                document.querySelectorAll('.daCustomTitle').forEach(clone => {
+                    const originalEl = clone.nextElementSibling;
+                    if (originalEl) {
+                        originalEl.style.removeProperty('display');
+                    }
+                    clone.remove();
+                });
+                document.querySelectorAll('.da-replaced-thumb').forEach(img => {
+                    if (img.dataset.daOriginalSrc) img.src = img.dataset.daOriginalSrc;
+                    img.classList.remove('da-replaced-thumb');
+                });
+                document.querySelectorAll('[data-da-processed]').forEach(el => delete el.dataset.daProcessed);
+                document.querySelectorAll('[data-da-watch-processed]').forEach(el => delete el.dataset.daWatchProcessed);
+                // Flush any pending cache writes
+                if (this._persistTimer) { clearTimeout(this._persistTimer); this._persistTimer = null; }
+                if (this._persistDirty) this._persistCache();
+                this._cache = {};
+                this._cacheMeta = {};
+                this._pendingFetches = {};
+                if (this._processTimer) { clearTimeout(this._processTimer); this._processTimer = null; }
+                this._log('Destroyed — Stats:', this._stats);
+            }
+        },
+        // ── DeArrow sub-features ──
+        {
+            id: 'daReplaceTitles', name: 'Replace Titles', description: 'Replace clickbait titles with crowdsourced alternatives',
+            group: 'DeArrow', icon: 'settings-2', dependsOn: 'deArrow', init() {}, destroy() {}
+        },
+        {
+            id: 'daReplaceThumbs', name: 'Replace Thumbnails', description: 'Replace clickbait thumbnails with video screenshots',
+            group: 'DeArrow', icon: 'settings-2', dependsOn: 'deArrow', init() {}, destroy() {}
+        },
+        {
+            id: 'daTitleFormat', name: 'Title Format', description: 'How to format replacement titles',
+            group: 'DeArrow', icon: 'settings-2', type: 'select', dependsOn: 'deArrow',
+            options: { 'sentence': 'Sentence case', 'title_case': 'Title Case', 'original': 'As Submitted' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'daFallbackFormat', name: 'Format Original Titles', description: 'When no crowdsourced title exists, format the original title to your preferred case',
+            group: 'DeArrow', icon: 'settings-2', dependsOn: 'deArrow', init() {}, destroy() {}
+        },
+        {
+            id: 'daShowOriginalHover', name: 'Show Original on Hover', description: 'Hover over a title or thumbnail to briefly see the original',
+            group: 'DeArrow', icon: 'settings-2', dependsOn: 'deArrow', init() {}, destroy() {}
+        },
+        {
+            id: 'daCacheTTL', name: 'Cache Duration', description: 'Hours to cache branding data locally before refreshing (0 = no cache)',
+            group: 'DeArrow', icon: 'settings-2', type: 'select', dependsOn: 'deArrow',
+            options: { '0': 'Disabled', '1': '1 hour', '4': '4 hours', '12': '12 hours', '24': '24 hours', '72': '3 days' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'daDebugLog', name: 'Debug Logging', description: 'Enable verbose DeArrow console logging for troubleshooting',
+            group: 'DeArrow', icon: 'settings-2', dependsOn: 'deArrow', init() {}, destroy() {}
+        },
+        {
+            id: 'cfLlmProvider', name: 'Chapter AI Provider', description: 'Built-in (local heuristic), Browser AI (local LLM via Transformers.js), or cloud providers',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { 'builtin': 'Built-in (NLP)', 'ollama': 'Local AI (Ollama)', 'openai': 'Web AI - OpenAI', 'openrouter': 'Web AI - OpenRouter', 'custom': 'Web AI - Custom' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfTranscriptMethod', name: 'Transcript Source', description: 'How to get the video transcript: captions first then Whisper, captions only, or Whisper only',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { 'auto': 'Auto (Captions -> Whisper)', 'captions-only': 'Captions Only', 'whisper-only': 'Whisper Only' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfWhisperModel', name: 'Whisper Model', description: 'Speech-to-text model size — Tiny is fast, Base is more accurate',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { 'whisper-tiny.en': 'Tiny (fastest, ~75MB)', 'whisper-base.en': 'Base (better, ~150MB)' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfMaxAutoDuration', name: 'Auto Max Duration', description: 'Maximum video length (minutes) for auto-processing in Auto mode',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { '15': '15 minutes', '30': '30 minutes', '60': '60 minutes', '120': '2 hours', '9999': 'No Limit' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfShowPlayerButton', name: 'Always Show Player Button', description: 'Show ChapterForge button on the player even in Auto mode',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfDebugLog', name: 'Debug Logging', description: 'Enable verbose console logging for transcript/audio troubleshooting',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfShowChapterHUD', name: 'Chapter HUD Overlay', description: 'Show current chapter name overlay on the video player during playback',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfHudPosition', name: 'HUD Position', description: 'Where to display the chapter HUD overlay on the video player',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { 'top-left': 'Top Left', 'top-right': 'Top Right', 'bottom-left': 'Bottom Left', 'bottom-right': 'Bottom Right' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfSpeedControl', name: 'Speed Control', description: 'Auto-speed intro/outro sections and skip selected chapters',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfAutoSkipMode', name: 'AutoSkip Mode', description: 'Skip pauses and filler words during playback (Gentle = long pauses, Normal = pauses + fillers, Aggressive = all gaps + speed silence)',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { 'off': 'Off', 'gentle': 'Gentle — long pauses', 'normal': 'Normal — pauses + fillers', 'aggressive': 'Aggressive — all gaps' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfShowChapters', name: 'Show Chapters on Bar', description: 'Display chapter markers on the YouTube progress bar',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfShowPOIs', name: 'Show POI Markers', description: 'Display points of interest markers on the progress bar',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfChapterOpacity', name: 'Chapter Opacity', description: 'Opacity of chapter overlay segments on the progress bar',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            settingKey: 'cfChapterOpacity',
+            options: { '0.15': '15%', '0.25': '25%', '0.35': '35%', '0.5': '50%', '0.7': '70%' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfShowFillerMarkers', name: 'Show Filler Markers', description: 'Display detected filler word markers on the progress bar',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfFillerWords', name: 'Filler Words', description: 'Comma-separated list of filler words/phrases to detect and optionally skip',
+            group: 'ChapterForge', icon: 'settings-2', type: 'textarea', dependsOn: 'chapterForge',
+            placeholder: 'um, uh, you know, I mean, like, sort of',
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfSummaryMode', name: 'Summary Mode', description: 'Format for AI-generated summaries — clean prose or timestamped index',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { 'paragraph': 'Paragraph (clean prose)', 'timestamped': 'Timestamped Index' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfAutoModel', name: 'Auto-select Ollama Model', description: 'Automatically pick the best installed Ollama model for the video length',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfUseInnertube', name: 'Audio: Innertube', description: 'Use YouTube Innertube API for direct audio extraction (for Whisper)',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfUseCobalt', name: 'Audio: Cobalt API', description: 'Use Cobalt API as fallback for audio extraction (for Whisper)',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfUseCapture', name: 'Audio: Player Capture', description: 'Capture audio directly from the video player element (for Whisper)',
+            group: 'ChapterForge', icon: 'settings-2', dependsOn: 'chapterForge', init() {}, destroy() {}
+        },
+        {
+            id: 'cfCustomSummaryPrompt', name: 'Custom Summary Prompt', description: 'Override the default AI system prompt for summaries (leave empty for default)',
+            group: 'ChapterForge', icon: 'settings-2', type: 'textarea', dependsOn: 'chapterForge',
+            placeholder: 'Leave empty to use default prompt...',
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfCustomChapterPrompt', name: 'Custom Chapter Prompt', description: 'Override the default AI system prompt for chapter generation (leave empty for default)',
+            group: 'ChapterForge', icon: 'settings-2', type: 'textarea', dependsOn: 'chapterForge',
+            placeholder: 'Leave empty to use default prompt...',
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfBrowserAiModel', name: 'Browser AI Model', description: 'Local LLM model for chapter generation (requires Browser AI provider)',
+            group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
+            options: { 'SmolLM2-360M-Instruct': 'SmolLM2 360M (fast)', 'Qwen2.5-0.5B-Instruct': 'Qwen2.5 0.5B (better)', 'Llama-3.2-1B-Instruct': 'Llama 3.2 1B (best)' },
+            init() {}, destroy() {}
+        },
     ];
 
     function injectStyle(selector, featureId, isRawCss = false) {
+        const id = `yt-suite-style-${featureId}`;
+        document.getElementById(id)?.remove();
         const style = document.createElement('style');
-        style.id = `yt-suite-style-${featureId}`;
+        style.id = id;
         style.textContent = isRawCss ? selector : `${selector} { display: none !important; }`;
         document.head.appendChild(style);
         return style;
@@ -7824,12 +12920,12 @@
     // ══════════════════════════════════════════════════════════════════════════
     //  SECTION 3: HELPERS
     // ══════════════════════════════════════════════════════════════════════════
-    let appState = {};
 
     function applyBotFilter() {
         if (!window.location.pathname.startsWith('/watch')) return;
-        const messages = document.querySelectorAll('yt-live-chat-text-message-renderer:not(.yt-suite-hidden-bot)');
+        const messages = document.querySelectorAll('yt-live-chat-text-message-renderer:not([data-ytkit-bot-checked])');
         messages.forEach(msg => {
+            msg.dataset.ytkitBotChecked = '1';
             const authorName = msg.querySelector('#author-name')?.textContent.toLowerCase() || '';
             if (authorName.includes('bot')) {
                 msg.style.display = 'none';
@@ -7838,12 +12934,24 @@
         });
     }
 
+    let _lastKeywordHash = '';
     function applyKeywordFilter() {
         if (!window.location.pathname.startsWith('/watch')) return;
         const keywordsRaw = appState.settings.chatKeywordFilter;
-        const messages = document.querySelectorAll('yt-live-chat-text-message-renderer');
+        const currentHash = keywordsRaw || '';
+
+        // If keywords changed, recheck all messages
+        if (currentHash !== _lastKeywordHash) {
+            _lastKeywordHash = currentHash;
+            document.querySelectorAll('yt-live-chat-text-message-renderer[data-ytkit-kw-checked]').forEach(el => {
+                delete el.dataset.ytkitKwChecked;
+            });
+        }
+
+        const messages = document.querySelectorAll('yt-live-chat-text-message-renderer:not([data-ytkit-kw-checked])');
         if (!keywordsRaw || !keywordsRaw.trim()) {
             messages.forEach(el => {
+                el.dataset.ytkitKwChecked = '1';
                 if (el.classList.contains('yt-suite-hidden-keyword')) {
                     el.style.display = '';
                     el.classList.remove('yt-suite-hidden-keyword');
@@ -7853,15 +12961,13 @@
         }
         const keywords = keywordsRaw.toLowerCase().split(',').map(k => k.trim()).filter(Boolean);
         messages.forEach(msg => {
+            msg.dataset.ytkitKwChecked = '1';
             const messageText = msg.querySelector('#message')?.textContent.toLowerCase() || '';
             const authorText = msg.querySelector('#author-name')?.textContent.toLowerCase() || '';
             const shouldHide = keywords.some(k => messageText.includes(k) || authorText.includes(k));
             if (shouldHide) {
                 msg.style.display = 'none';
                 msg.classList.add('yt-suite-hidden-keyword');
-            } else if (msg.classList.contains('yt-suite-hidden-keyword')) {
-                msg.style.display = '';
-                msg.classList.remove('yt-suite-hidden-keyword');
             }
         });
     }
@@ -8809,6 +13915,8 @@
         'Action Buttons': { icon: 'actions', color: '#c084fc' },
         'Player Controls': { icon: 'controls', color: '#38bdf8' },
         'Downloads': { icon: 'downloads', color: '#f97316' },
+        'ChapterForge': { icon: 'player', color: '#7c3aed' },
+        'DeArrow': { icon: 'content', color: '#22d3ee' },
         'Advanced': { icon: 'advanced', color: '#94a3b8' },
     };
 
@@ -8862,7 +13970,7 @@
     function buildSettingsPanel() {
         if (document.getElementById('ytkit-settings-panel')) return;
 
-        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Playback', 'Ad Blocker', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads', 'Advanced'];
+        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Playback', 'Ad Blocker', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads', 'ChapterForge', 'DeArrow', 'Advanced'];
         const featuresByCategory = categoryOrder.reduce((acc, cat) => ({...acc, [cat]: []}), {});
         features.forEach(f => { if (f.group && featuresByCategory[f.group]) featuresByCategory[f.group].push(f); });
 
@@ -9112,7 +14220,7 @@
             toggleInput.onchange = async () => {
                 appState.settings.ytAdBlock = toggleInput.checked;
                 toggleSwitch.classList.toggle('active', toggleInput.checked);
-                await settingsManager.save(appState.settings);
+                settingsManager.save(appState.settings);
                 if (toggleInput.checked) adblockFeature?.init?.(); else adblockFeature?.destroy?.();
                 updateAllToggleStates();
             };
@@ -9224,7 +14332,7 @@
             saveUrlBtn.textContent = 'Save';
             saveUrlBtn.onclick = async () => {
                 appState.settings.adblockFilterUrl = urlInput.value.trim();
-                await settingsManager.save(appState.settings);
+                settingsManager.save(appState.settings);
                 createToast('Filter URL saved', 'success');
             };
 
@@ -9450,7 +14558,7 @@
             toggleInput.onchange = async () => {
                 appState.settings.hideVideosFromHome = toggleInput.checked;
                 toggleSwitch.classList.toggle('active', toggleInput.checked);
-                await settingsManager.save(appState.settings);
+                settingsManager.save(appState.settings);
                 if (toggleInput.checked) {
                     videoHiderFeature?.init?.();
                 } else {
@@ -9711,7 +14819,7 @@
                     textarea.value = appState.settings.hideVideosKeywordFilter || '';
                     textarea.onchange = async () => {
                         appState.settings.hideVideosKeywordFilter = textarea.value;
-                        await settingsManager.save(appState.settings);
+                        settingsManager.save(appState.settings);
                         videoHiderFeature?._processAllVideos();
                     };
                     container.appendChild(textarea);
@@ -9751,7 +14859,7 @@
                     durInput.style.cssText = 'width:80px;padding:8px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:6px;color:var(--ytkit-text-primary);font-size:14px;';
                     durInput.onchange = async () => {
                         appState.settings.hideVideosDurationFilter = parseInt(durInput.value) || 0;
-                        await settingsManager.save(appState.settings);
+                        settingsManager.save(appState.settings);
                         videoHiderFeature?._processAllVideos();
                     };
 
@@ -9796,7 +14904,7 @@
                     limiterInput.onchange = async () => {
                         appState.settings.hideVideosSubsLoadLimit = limiterInput.checked;
                         limiterSwitch.classList.toggle('active', limiterInput.checked);
-                        await settingsManager.save(appState.settings);
+                        settingsManager.save(appState.settings);
                     };
 
                     const limiterTrack = document.createElement('span');
@@ -9825,7 +14933,7 @@
                     thresholdInput.onchange = async () => {
                         appState.settings.hideVideosSubsLoadThreshold = Math.max(1, Math.min(20, parseInt(thresholdInput.value) || 3));
                         thresholdInput.value = appState.settings.hideVideosSubsLoadThreshold;
-                        await settingsManager.save(appState.settings);
+                        settingsManager.save(appState.settings);
                     };
 
                     thresholdRow.appendChild(thresholdLabel);
@@ -9967,7 +15075,7 @@
             resetBtn.className = 'ytkit-reset-group-btn';
             resetBtn.title = 'Reset this group to defaults';
             resetBtn.textContent = 'Reset';
-            resetBtn.onclick = async () => {
+            resetBtn.onclick = () => {
                 const categoryFeatures = featuresByCategory[cat];
                 const backup = {};
                 categoryFeatures.forEach(f => { backup[f.id] = appState.settings[f.id]; });
@@ -9975,13 +15083,13 @@
                     const defaultValue = settingsManager.defaults[f.id];
                     if (defaultValue !== undefined) {
                         appState.settings[f.id] = defaultValue;
-                        try { f.destroy?.(); } catch(e) {}
+                        try { f.destroy?.(); f._initialized = false; } catch(e) {}
                         if (defaultValue) {
-                            try { f.init?.(); } catch(e) {}
+                            try { f.init?.(); f._initialized = true; } catch(e) {}
                         }
                     }
                 });
-                await settingsManager.save(appState.settings);
+                settingsManager.save(appState.settings);
                 updateAllToggleStates();
                 // Update UI
                 categoryFeatures.forEach(f => {
@@ -9997,11 +15105,11 @@
                     categoryFeatures.forEach(f => {
                         if (backup[f.id] !== undefined) {
                             appState.settings[f.id] = backup[f.id];
-                            try { f.destroy?.(); } catch(e) {}
-                            if (backup[f.id]) { try { f.init?.(); } catch(e) {} }
+                            try { f.destroy?.(); f._initialized = false; } catch(e) {}
+                            if (backup[f.id]) { try { f.init?.(); f._initialized = true; } catch(e) {} }
                         }
                     });
-                    await settingsManager.save(appState.settings);
+                    settingsManager.save(appState.settings);
                     updateAllToggleStates();
                     categoryFeatures.forEach(f => {
                         const t = document.getElementById(`ytkit-toggle-${f.id}`);
@@ -10109,7 +15217,7 @@ pause
 
         const versionSpan = document.createElement('span');
         versionSpan.className = 'ytkit-version';
-        versionSpan.textContent = 'v20.1';
+        versionSpan.textContent = 'v25.0';
         versionSpan.style.position = 'relative';
         versionSpan.style.cursor = 'pointer';
         // What's New badge
@@ -10124,7 +15232,7 @@ pause
             versionSpan.onclick = () => {
                 GM_setValue('ytkit_last_seen_version', CURRENT_VER);
                 badge.remove();
-                showToast('v20.1: Streamlined — removed 22 features, added Safe Mode diagnostics', '#3b82f6', { duration: 6 });
+                showToast('v25.0: AI Chat, Flashcards, Mind Map, Blog Export, SEO Chapters, Prompt Library', '#3b82f6', { duration: 6 });
             };
         }
 
@@ -10206,7 +15314,7 @@ pause
                 exportBtn.textContent = 'Export Channel Settings';
                 exportBtn.style.cssText = btnStyle + 'background:#1a365d;';
                 exportBtn.onclick = async () => {
-                    const data = await ChannelSettingsManager.exportAll();
+                    const data = ChannelSettingsManager.exportAll();
                     const blob = new Blob([data], { type: 'application/json' });
                     const a = document.createElement('a');
                     a.href = URL.createObjectURL(blob);
@@ -10226,7 +15334,7 @@ pause
                         const file = ev.target.files[0];
                         if (!file) return;
                         const text = await file.text();
-                        const ok = await ChannelSettingsManager.importAll(text);
+                        const ok = ChannelSettingsManager.importAll(text);
                         showToast(ok ? 'Channel settings imported' : 'Import failed — invalid file', ok ? '#22c55e' : '#ef4444');
                     };
                     input.click();
@@ -10247,7 +15355,7 @@ pause
             select.id = `ytkit-select-${f.id}`;
             select.style.cssText = `padding:8px 12px;border-radius:8px;background:var(--ytkit-bg-base);color:#fff;border:1px solid rgba(255,255,255,0.1);cursor:pointer;font-size:13px;min-width:150px;`;
             const settingKey = f.settingKey || f.id;
-            const currentValue = appState.settings[settingKey] || Object.keys(f.options)[0];
+            const currentValue = String(appState.settings[settingKey] ?? Object.keys(f.options)[0]);
             for (const [value, label] of Object.entries(f.options)) {
                 const option = document.createElement('option');
                 option.value = value;
@@ -10363,20 +15471,8 @@ pause
     }
 
     function createToast(message, type = 'success', duration = 3000) {
-        document.querySelector('.ytkit-toast')?.remove();
-        const toast = document.createElement('div');
-        toast.className = `ytkit-toast ytkit-toast-${type}`;
-        const span = document.createElement('span');
-        span.textContent = message;
-        toast.appendChild(span);
-        document.body.appendChild(toast);
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => toast.classList.add('show'));
-        });
-        setTimeout(() => {
-            toast.classList.remove('show');
-            setTimeout(() => toast.remove(), 400);
-        }, duration);
+        const colorMap = { success: '#22c55e', error: '#ef4444', warning: '#f59e0b', info: '#3b82f6' };
+        showToast(message, colorMap[type] || '#22c55e', { duration: duration / 1000 });
     }
 
     function updateAllToggleStates() {
@@ -10425,12 +15521,8 @@ pause
     function handleFileExport(filename, content) {
         const blob = new Blob([content], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
+        const a = Object.assign(document.createElement('a'), { href: url, download: filename });
         a.click();
-        document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }
 
@@ -10569,7 +15661,7 @@ pause
         });
 
         // Feature toggles
-        doc.addEventListener('change', async (e) => {
+        doc.addEventListener('change', (e) => {
             if (e.target.matches('.ytkit-feature-cb')) {
                 const card = e.target.closest('[data-feature-id]');
                 const featureId = card.dataset.featureId;
@@ -10591,7 +15683,7 @@ pause
                         arr = arr.filter(v => v !== feature._arrayValue);
                     }
                     appState.settings[feature._arrayKey] = arr;
-                    await settingsManager.save(appState.settings);
+                    settingsManager.save(appState.settings);
                     // Re-init parent feature to apply changes
                     const parentFeature = features.find(f => f.id === feature.parentId);
                     if (parentFeature) {
@@ -10602,7 +15694,7 @@ pause
                     }
                 } else {
                     appState.settings[featureId] = isEnabled;
-                    await settingsManager.save(appState.settings);
+                    settingsManager.save(appState.settings);
 
                     if (feature) {
                         isEnabled ? feature.init?.() : feature.destroy?.();
@@ -10652,12 +15744,12 @@ pause
         });
 
         // Textarea input
-        doc.addEventListener('input', async (e) => {
+        doc.addEventListener('input', (e) => {
             if (e.target.matches('.ytkit-input')) {
                 const card = e.target.closest('[data-feature-id]');
                 const featureId = card.dataset.featureId;
                 appState.settings[featureId] = e.target.value;
-                await settingsManager.save(appState.settings);
+                settingsManager.save(appState.settings);
                 const feature = features.find(f => f.id === featureId);
                 if (feature) {
                     feature.destroy?.();
@@ -10675,15 +15767,15 @@ pause
                 const newValue = e.target.value;
 
                 appState.settings[settingKey] = newValue;
-                await settingsManager.save(appState.settings);
+                settingsManager.save(appState.settings);
 
                 // Reinitialize the feature to apply changes immediately
                 if (feature) {
                     if (typeof feature.destroy === 'function') {
-                        try { feature.destroy(); } catch (e) { /* ignore */ }
+                        try { feature.destroy(); feature._initialized = false; } catch (e) { /* ignore */ }
                     }
                     if (typeof feature.init === 'function') {
-                        try { feature.init(); } catch (e) { console.warn('[YTKit] Feature reinit error:', e); }
+                        try { feature.init(); feature._initialized = true; } catch (e) { console.warn('[YTKit] Feature reinit error:', e); }
                     }
                 }
 
@@ -10698,7 +15790,7 @@ pause
                 const settingKey = feature?.settingKey || featureId;
                 const val = parseFloat(e.target.value);
                 appState.settings[settingKey] = val;
-                await settingsManager.save(appState.settings);
+                settingsManager.save(appState.settings);
                 if (feature) {
                     try { feature.destroy?.(); } catch(err) {}
                     try { feature.init?.(); } catch(err) {}
@@ -10711,22 +15803,22 @@ pause
                 const feature = features.find(f => f.id === featureId);
                 const settingKey = feature?.settingKey || featureId;
                 appState.settings[settingKey] = e.target.value;
-                await settingsManager.save(appState.settings);
+                settingsManager.save(appState.settings);
                 if (feature) {
                     try { feature.destroy?.(); } catch(err) {}
                     try { feature.init?.(); } catch(err) {}
                 }
             }
         });
-        doc.addEventListener('click', async (e) => {
+        doc.addEventListener('click', (e) => {
             if (e.target.closest('#ytkit-export')) {
-                const configString = await settingsManager.exportAllSettings();
+                const configString = settingsManager.exportAllSettings();
                 handleFileExport('ytkit_settings.json', configString);
                 createToast('Settings exported successfully', 'success');
             }
             if (e.target.closest('#ytkit-import')) {
                 handleFileImport(async (content) => {
-                    const success = await settingsManager.importAllSettings(content);
+                    const success = settingsManager.importAllSettings(content);
                     if (success) {
                         createToast('Settings imported! Reloading...', 'success');
                         setTimeout(() => location.reload(), 1000);
@@ -11586,8 +16678,8 @@ ytd-live-chat-frame {
     // ══════════════════════════════════════════════════════════════════════════
     //  SECTION 6: BOOTSTRAP
     // ══════════════════════════════════════════════════════════════════════════
-    async function main() {
-        appState.settings = await settingsManager.load();
+    function main() {
+        appState.settings = settingsManager.load();
         appState.currentPage = getCurrentPage();
 
         injectPanelStyles();
@@ -11646,9 +16738,11 @@ ytd-live-chat-frame {
                 if (isEnabled) {
                     if (f.pages && !f.pages.includes(appState.currentPage)) return;
                     if (f.dependsOn && !appState.settings[f.dependsOn]) return;
+                    if (f._initialized) return;
 
                     try {
                         f.init?.();
+                        f._initialized = true;
                         initLog.push(f.id);
                     } catch (error) {
                         console.error(`[YTKit] Error initializing "${f.id}":`, error);
@@ -11668,14 +16762,14 @@ ytd-live-chat-frame {
 
         // Button injection is handled by startButtonChecker() called from each button feature's init()
 
-        const hasRun = await settingsManager.getFirstRunStatus();
+        const hasRun = settingsManager.getFirstRunStatus();
         if (!hasRun) {
-            await settingsManager.setFirstRunStatus(true);
+            settingsManager.setFirstRunStatus(true);
         }
 
         // Track page changes for lazy loading (skip in safe mode)
         if (!isSafeMode) {
-            window.addEventListener('yt-navigate-finish', () => {
+            document.addEventListener('yt-navigate-finish', () => {
             const newPage = getCurrentPage();
             if (newPage !== appState.currentPage) {
                 const oldPage = appState.currentPage;
@@ -11691,10 +16785,10 @@ ytd-live-chat-frame {
                         const wasActive = f.pages.includes(oldPage);
                         const shouldBeActive = f.pages.includes(newPage);
 
-                        if (!wasActive && shouldBeActive) {
-                            try { f.init?.(); } catch(e) {}
-                        } else if (wasActive && !shouldBeActive) {
-                            try { f.destroy?.(); } catch(e) {}
+                        if (!wasActive && shouldBeActive && !f._initialized) {
+                            try { f.init?.(); f._initialized = true; } catch(e) {}
+                        } else if (wasActive && !shouldBeActive && f._initialized) {
+                            try { f.destroy?.(); f._initialized = false; } catch(e) {}
                         }
                     }
                 });
@@ -11702,7 +16796,7 @@ ytd-live-chat-frame {
         });
         } // end !isSafeMode
 
-        console.log(`%c[YTKit] v20.1 Initialized${isSafeMode ? ' (SAFE MODE)' : ''}`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
+        console.log(`%c[YTKit] v25.0 Initialized${isSafeMode ? ' (SAFE MODE)' : ''}`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
     }
 
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
