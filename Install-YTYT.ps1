@@ -8,10 +8,11 @@
     - VLC protocol handler (ytvlc://)
     - Download protocol handler (ytdl://)
     - Ollama local LLM for AI-powered chapters (optional)
+    - WhisperServer local transcription for AI chapters (optional)
     - Userscript for YouTube integration
 .NOTES
     Author: SysAdminDoc
-    Version: 2.4.0
+    Version: 2.5.0
     Repository: https://github.com/SysAdminDoc/YTYT-Downloader
 #>
 
@@ -33,7 +34,7 @@ $consolePtr = [Console.Window]::GetConsoleWindow()
 # CONFIGURATION
 # ============================================
 $script:AppName = "YTYT-Downloader"
-$script:AppVersion = "2.4.0"
+$script:AppVersion = "2.5.0"
 $script:InstallPath = "$env:LOCALAPPDATA\YTYT-Downloader"
 $script:YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 $script:DefaultDownloadPath = "$env:USERPROFILE\Videos\YouTube"
@@ -46,6 +47,16 @@ $script:OllamaInstallerUrl = "https://ollama.com/download/OllamaSetup.exe"
 $script:OllamaModels = [ordered]@{
     "qwen3:32b"    = "128K context, hybrid reasoning (20 GB) - Recommended"
 }
+
+# WhisperServer Configuration
+$script:WhisperServerDir = Join-Path $env:LOCALAPPDATA "WhisperServer"
+$script:WhisperBinDir    = Join-Path $script:WhisperServerDir "bin"
+$script:WhisperModelDir  = Join-Path $script:WhisperServerDir "models"
+$script:WhisperPort      = 8178
+$script:WhisperVersion   = "v1.8.3"
+$script:WhisperBinUrl    = "https://github.com/ggml-org/whisper.cpp/releases/download/$($script:WhisperVersion)/whisper-blas-bin-x64.zip"
+$script:WhisperModelUrl  = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+$script:WhisperModelFile = "ggml-large-v3-turbo.bin"
 
 # Image URLs
 $script:IconUrl = "https://raw.githubusercontent.com/SysAdminDoc/YTYT-Downloader/refs/heads/main/images/icons/ytyticn.ico"
@@ -156,7 +167,7 @@ if (!(Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir -Force 
 # ============================================
 function Uninstall-Previous {
     # Force kill related processes
-    @("yt-dlp", "ffmpeg", "ffprobe", "vlc") | ForEach-Object {
+    @("yt-dlp", "ffmpeg", "ffprobe", "vlc", "whisper-server") | ForEach-Object {
         Get-Process -Name $_ -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Milliseconds 500
@@ -182,6 +193,15 @@ function Uninstall-Previous {
     $serverShortcut = Join-Path $startupPath "YTYT-Server.lnk"
     if (Test-Path $serverShortcut) {
         Remove-Item $serverShortcut -Force -ErrorAction SilentlyContinue
+    }
+    $whisperShortcut = Join-Path $startupPath "WhisperServer.lnk"
+    if (Test-Path $whisperShortcut) {
+        Remove-Item $whisperShortcut -Force -ErrorAction SilentlyContinue
+    }
+    # Remove WhisperServer silent launcher VBS
+    $whisperVbs = Join-Path $env:LOCALAPPDATA "WhisperServer\WhisperServer-silent.vbs"
+    if (Test-Path $whisperVbs) {
+        Remove-Item $whisperVbs -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -725,6 +745,26 @@ if ($script:OllamaFound) {
                                     <TextBlock x:Name="txtOllamaModelInfo" Text="Powers YTKit ChapterForge: AI chapters, summaries, POIs, filler detection, pause removal, speech pace analysis, auto-model selection, and multi-language translation" FontSize="10" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                 </StackPanel>
                             </Border>
+                            
+                            <!-- WhisperServer (Local Transcription) -->
+                            <TextBlock Text="Transcription Engine (Local)" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,12,0,8"/>
+                            <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="16">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Ellipse x:Name="whisperIndicator" Width="10" Height="10" Fill="{StaticResource AccentRed}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="WhisperServer (whisper.cpp)" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                                            <TextBlock x:Name="txtWhisperStatus" Text="Not installed" FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <CheckBox x:Name="chkInstallWhisper" Content="Install WhisperServer + large-v3-turbo model (1.6 GB download)" IsChecked="True" Margin="0,0,0,6"/>
+                                    <TextBlock Text="Fallback transcription for videos without captions. YTKit uses YouTube captions first (instant, free), and only sends audio to WhisperServer when captions are unavailable. Runs on port 8178 and auto-starts with Windows." FontSize="10" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                         
                         <!-- Right Column: Installation Log -->
@@ -880,7 +920,7 @@ if ($script:OllamaFound) {
                                 <TextBlock Text="OK" FontSize="16" Foreground="{StaticResource AccentGreen}" FontWeight="Bold" Margin="0,0,16,0" VerticalAlignment="Top"/>
                                 <StackPanel>
                                     <TextBlock Text="Setup Complete!" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource AccentGreen}" Margin="0,0,0,4"/>
-                                    <TextBlock Text="After installing either userscript, visit any YouTube video. You'll see download buttons next to the like/share buttons. If you installed YTKit with Ollama, set ChapterForge provider to 'Ollama' in its settings panel. New: pause skip, filler skip, and speech analysis in the Analysis tab. Auto-model picks the best AI model for your video length." FontSize="13" Foreground="#86efac" TextWrapping="Wrap"/>
+                                    <TextBlock Text="After installing either userscript, visit any YouTube video. You'll see download buttons next to the like/share buttons. With Ollama installed, YTKit auto-generates AI chapters using video captions. WhisperServer provides backup transcription for caption-less videos." FontSize="13" Foreground="#86efac" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -916,6 +956,7 @@ if ($script:OllamaFound) {
                             <TextBlock Text="[X] Desktop and startup shortcuts" Foreground="{StaticResource TextMuted}" FontFamily="Cascadia Code, Consolas" FontSize="12" Margin="0,4"/>
                             <TextBlock Text="[!] Ollama and AI models are installed separately" Foreground="{StaticResource AccentOrange}" FontFamily="Cascadia Code, Consolas" FontSize="12" Margin="0,8,0,0"/>
                             <TextBlock Text="    Run: ollama rm model-name  to remove models" Foreground="{StaticResource TextMuted}" FontFamily="Cascadia Code, Consolas" FontSize="10" Margin="0,2,0,0"/>
+                            <TextBlock Text="[!] WhisperServer data in %LOCALAPPDATA%\WhisperServer" Foreground="{StaticResource AccentOrange}" FontFamily="Cascadia Code, Consolas" FontSize="12" Margin="0,4,0,0"/>
                             <TextBlock Text="[!] Userscript must be removed manually from browser" Foreground="{StaticResource AccentOrange}" FontFamily="Cascadia Code, Consolas" FontSize="12" Margin="0,4,0,0"/>
                         </StackPanel>
                     </Border>
@@ -1028,6 +1069,11 @@ $cmbOllamaModel = $null  # No longer a ComboBox
 $txtOllamaModelInfo = $window.FindName("txtOllamaModelInfo")
 $pnlOllamaModels = $window.FindName("pnlOllamaModels")
 
+# WhisperServer controls
+$whisperIndicator = $window.FindName("whisperIndicator")
+$txtWhisperStatus = $window.FindName("txtWhisperStatus")
+$chkInstallWhisper = $window.FindName("chkInstallWhisper")
+
 # ============================================
 # LOAD IMAGES
 # ============================================
@@ -1101,6 +1147,28 @@ if ($script:OllamaFound) {
     }
 } else {
     $txtOllamaStatus.Text = "Not detected - check box below to install"
+}
+
+# Set WhisperServer defaults
+$script:WhisperServerExe = $null
+if (Test-Path $script:WhisperBinDir) {
+    $exeCheck = Get-ChildItem $script:WhisperBinDir -Filter "whisper-server*" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($exeCheck) { $script:WhisperServerExe = $exeCheck.FullName }
+}
+$script:WhisperModelPath = Join-Path $script:WhisperModelDir $script:WhisperModelFile
+$script:WhisperModelExists = Test-Path $script:WhisperModelPath
+
+if ($script:WhisperServerExe -and $script:WhisperModelExists) {
+    $whisperIndicator.Fill = [System.Windows.Media.Brushes]::LimeGreen
+    $sizeMB = [math]::Round((Get-Item $script:WhisperModelPath).Length / 1MB)
+    $txtWhisperStatus.Text = "Installed ($script:WhisperModelFile, ${sizeMB} MB)"
+    $chkInstallWhisper.IsChecked = $true
+} elseif ($script:WhisperServerExe) {
+    $whisperIndicator.Fill = [System.Windows.Media.Brushes]::Orange
+    $txtWhisperStatus.Text = "Binary found, model missing"
+    $chkInstallWhisper.IsChecked = $true
+} else {
+    $txtWhisperStatus.Text = "Not installed - check box below to install"
 }
 
 # Track wizard state
@@ -2476,7 +2544,118 @@ objShell.Run "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "
                     }
                     Set-Progress 96
                     
-                    # Step 10: Desktop shortcut (optional)
+                    # Step 10: WhisperServer (optional)
+                    if ($chkInstallWhisper.IsChecked) {
+                        Update-Status ""
+                        Update-Status "Setting up WhisperServer (local transcription)..."
+                        
+                        # Create directories
+                        foreach ($d in @($script:WhisperServerDir, $script:WhisperBinDir, $script:WhisperModelDir)) {
+                            if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+                        }
+                        
+                        # Download whisper.cpp binary if not present
+                        if (-not $script:WhisperServerExe) {
+                            Update-Status "  Downloading whisper.cpp $($script:WhisperVersion) (BLAS)..."
+                            Set-Progress 96
+                            try {
+                                $zipPath = Join-Path $env:TEMP "whisper-bin.zip"
+                                Invoke-DownloadWithUI -Uri $script:WhisperBinUrl -OutFile $zipPath
+                                Update-Status "  Extracting whisper.cpp binaries..."
+                                Get-ChildItem $script:WhisperBinDir -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+                                [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $script:WhisperBinDir)
+                                Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+                                $exeCheck = Get-ChildItem $script:WhisperBinDir -Filter "whisper-server*" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                                if ($exeCheck) {
+                                    $script:WhisperServerExe = $exeCheck.FullName
+                                    Update-Status "  [OK] whisper.cpp binaries installed"
+                                } else {
+                                    Update-Status "  [!] whisper-server.exe not found after extraction"
+                                }
+                            } catch {
+                                Update-Status "  [!] Binary download failed: $($_.Exception.Message)"
+                            }
+                        } else {
+                            Update-Status "  [OK] whisper.cpp binary already present"
+                        }
+                        
+                        # Download model if not present
+                        if (-not $script:WhisperModelExists) {
+                            Update-Status "  Downloading $($script:WhisperModelFile) (1.6 GB - this may take several minutes)..."
+                            Set-Progress 97
+                            try {
+                                Invoke-DownloadWithUI -Uri $script:WhisperModelUrl -OutFile $script:WhisperModelPath
+                                if (Test-Path $script:WhisperModelPath) {
+                                    $sizeMB = [math]::Round((Get-Item $script:WhisperModelPath).Length / 1MB)
+                                    Update-Status "  [OK] Model downloaded (${sizeMB} MB)"
+                                    $script:WhisperModelExists = $true
+                                }
+                            } catch {
+                                Update-Status "  [!] Model download failed: $($_.Exception.Message)"
+                                Update-Status "      Download manually from: https://huggingface.co/ggerganov/whisper.cpp"
+                            }
+                        } else {
+                            Update-Status "  [OK] Model already present"
+                        }
+                        
+                        # Create startup shortcut to auto-launch server (fully hidden)
+                        if ($script:WhisperServerExe -and $script:WhisperModelExists) {
+                            try {
+                                # Write a VBS launcher that runs whisper-server with no visible window
+                                $vbsPath = Join-Path $script:WhisperServerDir "WhisperServer-silent.vbs"
+                                $vbsContent = @"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.CurrentDirectory = "$($script:WhisperBinDir)"
+WshShell.Run """$($script:WhisperServerExe)"" -m ""$($script:WhisperModelPath)"" --host 0.0.0.0 --port $($script:WhisperPort)", 0, False
+"@
+                                $vbsContent | Set-Content $vbsPath -Encoding ASCII
+                                
+                                $startupDir = [Environment]::GetFolderPath('Startup')
+                                $shortcutPath = Join-Path $startupDir "WhisperServer.lnk"
+                                $ws = New-Object -ComObject WScript.Shell
+                                $shortcut = $ws.CreateShortcut($shortcutPath)
+                                $shortcut.TargetPath = "wscript.exe"
+                                $shortcut.Arguments = "`"$vbsPath`""
+                                $shortcut.WindowStyle = 7
+                                $shortcut.WorkingDirectory = $script:WhisperServerDir
+                                $shortcut.Description = "WhisperServer - Local speech-to-text for YTKit"
+                                $shortcut.Save()
+                                Update-Status "  [OK] WhisperServer set to auto-start on login (hidden)"
+                            } catch {
+                                Update-Status "  [i] Could not add startup entry (non-critical)"
+                            }
+                            
+                            # Start server now (hidden via VBS)
+                            try {
+                                $existingProc = Get-Process -Name "whisper-server" -ErrorAction SilentlyContinue
+                                if (-not $existingProc) {
+                                    $vbsPath = Join-Path $script:WhisperServerDir "WhisperServer-silent.vbs"
+                                    if (Test-Path $vbsPath) {
+                                        Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
+                                    } else {
+                                        Start-Process -FilePath $script:WhisperServerExe `
+                                            -ArgumentList "-m `"$($script:WhisperModelPath)`" --host 0.0.0.0 --port $($script:WhisperPort)" `
+                                            -WorkingDirectory $script:WhisperBinDir `
+                                            -WindowStyle Hidden
+                                    }
+                                    Update-Status "  [OK] WhisperServer started on port $($script:WhisperPort)"
+                                } else {
+                                    Update-Status "  [OK] WhisperServer already running"
+                                }
+                            } catch {
+                                Update-Status "  [i] Could not start server (start manually or reboot)"
+                            }
+                            
+                            # Update indicator
+                            $window.Dispatcher.Invoke([action]{
+                                $whisperIndicator.Fill = [System.Windows.Media.Brushes]::LimeGreen
+                                $txtWhisperStatus.Text = "Running on port $($script:WhisperPort)"
+                            }, [System.Windows.Threading.DispatcherPriority]::Render)
+                        }
+                    }
+                    Set-Progress 98
+                    
+                    # Step 11: Desktop shortcut (optional)
                     if ($chkDesktopShortcut.IsChecked) {
                         Update-Status "Creating desktop shortcut..."
                         $WshShell = New-Object -ComObject WScript.Shell
@@ -2500,6 +2679,10 @@ objShell.Run "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "
                     if ($chkInstallOllama.IsChecked) {
                         Update-Status "  AI: Ollama + $($selectedModels -join ', ')"
                         Update-Status "      YTKit ChapterForge auto-detects at localhost:11434"
+                    }
+                    if ($chkInstallWhisper.IsChecked -and $script:WhisperServerExe -and $script:WhisperModelExists) {
+                        Update-Status "  Transcription: WhisperServer on port $($script:WhisperPort)"
+                        Update-Status "      YTKit pre-configured at http://localhost:$($script:WhisperPort)"
                     }
                     Update-Status "========================================"
                     
