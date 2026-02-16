@@ -767,7 +767,7 @@
     // ══════════════════════════════════════════════════════════════════════════
 
     // Settings version for migrations
-    const SETTINGS_VERSION = 3;
+    const SETTINGS_VERSION = 4;
 
     // Page type detection for lazy-loading features
     const PageTypes = {
@@ -1329,6 +1329,23 @@
             // Migration from version 2 to 3
             2: (settings) => {
                 return settings;
+            },
+            // Migration from version 3 to 4: Ollama + captions-first defaults
+            3: (settings) => {
+                // Update Vibe endpoint from old default to WhisperServer port
+                if (!settings.cfVibeEndpoint || settings.cfVibeEndpoint === 'http://localhost:3022') {
+                    settings.cfVibeEndpoint = 'http://localhost:8178';
+                }
+                // Captions-first transcript (instant, free, reliable) — WhisperServer is fallback only
+                if (!settings.cfTranscriptMethod || settings.cfTranscriptMethod === 'vibe') settings.cfTranscriptMethod = 'auto';
+                // Ollama for real AI chapters instead of basic NLP heuristic
+                if (!settings.cfLlmProvider || settings.cfLlmProvider === 'builtin') settings.cfLlmProvider = 'ollama';
+                // Enable ChapterForge + auto mode
+                if (settings.chapterForge === false || settings.chapterForge === undefined) settings.chapterForge = true;
+                if (settings.cfMode === 'manual' || !settings.cfMode) settings.cfMode = 'auto';
+                // Enable filler + pause skipping
+                if (!settings.cfAutoSkipMode || settings.cfAutoSkipMode === 'off') settings.cfAutoSkipMode = 'normal';
+                return settings;
             }
         },
 
@@ -1771,7 +1788,7 @@
                 }
 
                 if (needsRecheck && !debounceTimer) {
-                    debounceTimer = setTimeout(() => {
+                    debounceTimer = setTimeout(() => { 
                         debounceTimer = null;
                         lastCheckTime = Date.now();
                         checkAllButtons();
@@ -2063,7 +2080,7 @@
             hideInfoPanels: true,
 
             // ═══ ChapterForge ═══
-            chapterForge: false,
+            chapterForge: true,
 
             // ═══ DeArrow ═══
             deArrow: false,
@@ -2074,15 +2091,16 @@
             daShowOriginalHover: true,    // show original title/thumb on hover
             daCacheTTL: '4',               // hours to cache branding data before background refresh
             daDebugLog: false,             // verbose DeArrow console logging (off by default)
-            cfMode: 'manual',          // 'manual' | 'auto'
-            cfLlmProvider: 'builtin',  // 'builtin' | 'openai' | 'ollama' | 'openrouter' | 'custom'
+            cfMode: 'auto',          // 'manual' | 'auto'
+            cfLlmProvider: 'ollama',  // 'builtin' | 'openai' | 'ollama' | 'openrouter' | 'custom'
             cfLlmEndpoint: '',         // custom API endpoint (auto-set for known providers)
             cfLlmApiKey: '',           // API key for provider
             cfLlmModel: 'gpt-4o',// model name
             cfShowChapters: true,
             cfShowPOIs: true,
             cfChapterOpacity: 0.35,
-            cfTranscriptMethod: 'auto',     // 'auto' | 'captions-only' | 'whisper-only'
+            cfTranscriptMethod: 'auto',     // 'auto' | 'captions-only' | 'whisper-only' | 'vibe'
+            cfVibeEndpoint: 'http://localhost:8178',  // WhisperServer transcription endpoint
             cfWhisperModel: 'whisper-tiny.en',  // 'whisper-tiny.en' | 'whisper-base.en'
             cfMaxAutoDuration: 60,          // max minutes for auto-processing
             cfShowPlayerButton: true,       // show player button even in auto mode
@@ -2101,7 +2119,7 @@
             cfShowFillerMarkers: true,     // show filler markers on progress bar
             cfFillerWords: 'um, uh, uhh, umm, hmm, hm, er, erm, ah, mhm, you know, I mean, sort of, kind of, okay so, so yeah, yeah so, like',
             cfTranslateLang: '',           // target language for AI translation (empty = disabled)
-            cfAutoSkipMode: 'off',         // 'off' | 'gentle' | 'normal' | 'aggressive'
+            cfAutoSkipMode: 'normal',      // 'off' | 'gentle' | 'normal' | 'aggressive'
             cfAutoModel: true,             // auto-select best Ollama model for video length
             cfSummaryMode: 'paragraph',    // 'paragraph' (clean prose) or 'timestamped' (indexed)
             cfSummaryLength: 'standard',   // 'brief', 'standard', 'detailed'
@@ -7913,7 +7931,7 @@
             _mindMapData: null,            // mind map outline text
             _mindMapLoading: false,        // mind map generation in progress
             _blogLoading: false,           // blog post generation in progress
-
+    
             _CF_PROVIDERS: {
                 builtin:    { name: 'Built-in (NLP)', endpoint: null, needsKey: false, defaultModel: null },
                 ollama:     { name: 'Local AI (Ollama)', endpoint: 'http://localhost:11434/v1/chat/completions', needsKey: false, defaultModel: 'qwen3:32b' },
@@ -7921,9 +7939,9 @@
                 openrouter: { name: 'Web AI - OpenRouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', needsKey: true, defaultModel: 'qwen/qwen3-32b' },
                 custom:     { name: 'Web AI - Custom', endpoint: '', needsKey: false, defaultModel: '' },
             },
+    
 
-
-
+    
             _CF_CACHE_PREFIX: 'cf_cache_',
             _CF_TRANSCRIPT_PREFIX: 'cf_tx_',
             _CF_NOTES_PREFIX: 'cf_notes_',
@@ -7941,9 +7959,9 @@
                 actionitems: { name: 'Action Items', prompt: `ROLE: Productivity assistant.\n\nTASK: Extract all actionable items, recommendations, and steps from this video.\n\nCONSTRAINTS:\n- List each action item as a checkbox line: [ ] Action description\n- Only include concrete, actionable recommendations the speaker makes\n- If the video has no actionable content, output: "No action items found in this video."\n- Order by sequence of appearance\n- No timestamps, headers, preamble, or commentary\n- Output ONLY the action items. Nothing before. Nothing after.` },
                 blog: { name: 'Blog Post', prompt: `ROLE: Blog writer converting video content into a polished article.\n\nTASK: Transform this video transcript into a well-structured blog post.\n\nCONSTRAINTS:\n- Start with a compelling one-sentence hook (no "In this video" openings)\n- Use 3-5 bold **Section Headers** to organize the content\n- Write 2-4 sentences per section in engaging, readable prose\n- Preserve the speaker's key arguments, examples, and data points\n- End with a brief conclusion or takeaway paragraph\n- Write in third person ("the presenter explains..." not "I")\n- Total length: 400-800 words\n- No timestamps, no bullet points, no disclaimers\n- Output ONLY the blog post. Nothing before. Nothing after.` },
             },
-
+    
             // ── Debug logging ──
-
+    
             _log(...args) {
                 if (appState.settings?.cfDebugLog) console.log('[ChapterForge]', ...args);
             },
@@ -7954,7 +7972,7 @@
                 if (!str) return '';
                 return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             },
-
+    
             // ── Helpers ──
             _getVideoId() { return new URLSearchParams(window.location.search).get('v'); },
             _formatTime(seconds) {
@@ -7973,7 +7991,7 @@
             },
             _countCache() { let c = 0; for (let i = 0; i < localStorage.length; i++) { if (localStorage.key(i).startsWith(this._CF_CACHE_PREFIX)) c++; } return c; },
             _clearCache() { const keys = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(this._CF_CACHE_PREFIX)) keys.push(k); } keys.forEach(k => localStorage.removeItem(k)); },
-
+    
             // ═══ TRANSCRIPT CACHE (for cross-video search) ═══
             _cacheTranscript(videoId, segments, title) {
                 try {
@@ -7986,7 +8004,7 @@
             },
             _getCachedTranscript(videoId) { try { const raw = localStorage.getItem(this._CF_TRANSCRIPT_PREFIX + videoId); return raw ? JSON.parse(raw) : null; } catch { return null; } },
             _countTranscriptCache() { let c = 0; for (let i = 0; i < localStorage.length; i++) { if (localStorage.key(i).startsWith(this._CF_TRANSCRIPT_PREFIX)) c++; } return c; },
-
+    
             // ═══ NOTES STORAGE ═══
             _getNotes(videoId) { try { const raw = localStorage.getItem(this._CF_NOTES_PREFIX + videoId); return raw ? JSON.parse(raw) : []; } catch { return []; } },
             _setNotes(videoId, notes) { try { localStorage.setItem(this._CF_NOTES_PREFIX + videoId, JSON.stringify(notes)); } catch(e) {} },
@@ -8001,7 +8019,7 @@
                 notes.splice(index, 1);
                 this._setNotes(videoId, notes);
             },
-
+    
             // ═══ SEARCH WITHIN VIDEO ═══
             _searchTranscript(query) {
                 if (!this._lastTranscriptSegments?.length || !query?.trim()) return [];
@@ -8015,7 +8033,7 @@
                 }
                 return results;
             },
-
+    
             // ═══ CROSS-VIDEO TRANSCRIPT SEARCH ═══
             _searchAllTranscripts(query) {
                 if (!query?.trim()) return [];
@@ -8039,7 +8057,7 @@
                 }
                 return results;
             },
-
+    
             // ═══ VIDEO SUMMARY ═══
             async _generateSummary(showBubble) {
                 const videoId = this._getVideoId();
@@ -8068,7 +8086,7 @@
                     return null;
                 }
                 this._log('Summary: got', segments.length, 'segments, provider:', appState.settings.cfLlmProvider || 'builtin');
-
+    
                 const provider = appState.settings.cfLlmProvider || 'builtin';
                 const summaryMode = appState.settings.cfSummaryMode || 'paragraph';
                 let summary;
@@ -8149,7 +8167,7 @@ CONSTRAINTS:
                     return ranked.map(r => r.text.trim()).join(' ');
                     } catch(e) { this._warn('Extractive summary error:', e); return segs.map(s => s.text).join(' ').slice(0, 500); }
                 };
-
+    
                 if (provider === 'builtin') {
                     this._log('Summary: using builtin TextRank');
                     summary = _extractiveSummary(segments);
@@ -8174,7 +8192,7 @@ CONSTRAINTS:
                         summary = _extractiveSummary(segments);
                     }
                 }
-
+    
                 this._lastSummary = summary;
                 this._log('Summary: done,', summary?.length, 'chars');
                 this._updateStatus('Done', 'ready', 100);
@@ -8287,7 +8305,7 @@ CONSTRAINTS:
                 }
             },
             _lastSummary: null,
-
+    
             // ═══ EXPORT CHAPTERS ═══
             _exportChaptersYouTube() {
                 if (!this._chapterData?.chapters?.length) return;
@@ -8301,7 +8319,7 @@ CONSTRAINTS:
                 const a = document.createElement('a'); a.href = url; a.download = `chapters_${this._getVideoId()}.json`;
                 document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
             },
-
+    
             // ═══ SMART CLIP LINKS ═══
             _copyClipLink(startTime, endTime) {
                 const videoId = this._getVideoId();
@@ -8594,12 +8612,12 @@ CONSTRAINTS:
                 this._renderPanel();
                 showToast('Applied SponsorBlock chapters', '#10b981');
             },
-
+    
             // ═══ CHAPTER-AWARE SPEED CONTROL ═══
             _speedControlActive: false,
             _speedControlRAF: null,
             _speedSettings: { introSpeed: 2, outroSpeed: 2, normalSpeed: 1, skipChapters: {} },
-
+    
             _toggleSpeedControl() {
                 this._speedControlActive = !this._speedControlActive;
                 appState.settings.cfSpeedControl = this._speedControlActive;
@@ -8616,9 +8634,9 @@ CONSTRAINTS:
                         const ct = video.currentTime;
                         const chapters = this._chapterData.chapters;
                         const currentChapter = chapters.findIndex((ch, i) => ct >= ch.start && (i === chapters.length - 1 || ct < chapters[i + 1].start));
-
+    
                         let targetSpeed = this._speedSettings.normalSpeed;
-
+    
                         if (currentChapter >= 0 && this._speedSettings.skipChapters[currentChapter]) {
                             const nextChapter = chapters[currentChapter + 1];
                             if (nextChapter) { video.currentTime = nextChapter.start; }
@@ -8627,7 +8645,7 @@ CONSTRAINTS:
                         } else if (currentChapter === chapters.length - 1) {
                             targetSpeed = this._speedSettings.outroSpeed;
                         }
-
+    
                         if (Math.abs(video.playbackRate - targetSpeed) > 0.01) {
                             video.playbackRate = targetSpeed;
                         }
@@ -8641,7 +8659,7 @@ CONSTRAINTS:
                 const video = document.querySelector('video.html5-main-video, video');
                 if (video) video.playbackRate = 1;
             },
-
+    
             // ── GM helpers ──
             _gmGet(url, extraHeaders = {}) {
                 return new Promise((resolve, reject) => {
@@ -8702,21 +8720,31 @@ CONSTRAINTS:
                     return { authorization: `SAPISIDHASH ${ts}_${hash}`, 'x-origin': origin };
                 } catch(e) { return null; }
             },
-
+    
             // ═══════════════════════════════════════════
             //  TRANSCRIPT FETCHER
             // ═══════════════════════════════════════════
             async _fetchTranscript(videoId, onStatus) {
                 const transcriptMethod = appState.settings.cfTranscriptMethod || 'auto';
-
+    
                 if (transcriptMethod === 'whisper-only') {
                     this._log('Transcript method: whisper-only — skipping captions');
                     return null;
                 }
 
+                if (transcriptMethod === 'vibe') {
+                    this._log('Transcript method: vibe — trying WhisperServer first');
+                    try {
+                        return await this._vibeTranscribe(videoId, onStatus);
+                    } catch(e) {
+                        this._warn('WhisperServer transcription failed:', e.message);
+                        this._log('Falling back to caption-based methods...');
+                    }
+                }
+    
                 this._log('=== Fetching transcript for:', videoId, '(method:', transcriptMethod, ') ===');
                 onStatus?.('Fetching transcript...', 'loading', 5);
-
+    
                 // ── PRIMARY: Use YTKit's TranscriptService ──
                 try {
                     onStatus?.('Trying YTKit TranscriptService...', 'loading', 8);
@@ -8726,7 +8754,7 @@ CONSTRAINTS:
                         this._log('TranscriptService found', trackData.tracks.length, 'tracks:', trackData.tracks.map(t => `${t.languageCode}(${t.kind})`).join(', '));
                         const selectedTrack = TranscriptService._selectBestTrack(trackData.tracks);
                         this._log('Selected track:', selectedTrack.languageCode, selectedTrack.kind);
-
+    
                         if (selectedTrack.baseUrl) {
                             try {
                                 const tsSegments = await TranscriptService._fetchTranscriptContent(selectedTrack.baseUrl);
@@ -8741,7 +8769,7 @@ CONSTRAINTS:
                             } catch(e) {
                                 this._log('TranscriptService._fetchTranscriptContent failed:', e.message);
                             }
-
+    
                             this._log('Trying GM-backed caption download as fallback...');
                             onStatus?.('Trying GM caption fetch...', 'loading', 15);
                             const gmSegments = await this._gmDownloadCaptions(selectedTrack, videoId);
@@ -8756,7 +8784,7 @@ CONSTRAINTS:
                 } catch(e) {
                     this._log('TranscriptService failed:', e.message);
                 }
-
+    
                 // ── FALLBACK 2: Direct page-level variable access via unsafeWindow ──
                 try {
                     onStatus?.('Trying page context access...', 'loading', 20);
@@ -8778,7 +8806,7 @@ CONSTRAINTS:
                 } catch(e) {
                     this._log('unsafeWindow access failed:', e.message);
                 }
-
+    
                 // ── FALLBACK 3: Polymer element data ──
                 try {
                     onStatus?.('Trying Polymer element data...', 'loading', 25);
@@ -8800,14 +8828,14 @@ CONSTRAINTS:
                 } catch(e) {
                     this._log('Polymer access failed:', e.message);
                 }
-
+    
                 // ── FALLBACK 4: GM-backed fresh page fetch ──
                 try {
                     onStatus?.('Fetching fresh page via GM...', 'loading', 30);
                     this._log('Method 4: GM page fetch');
                     const html = await this._gmGet(`https://www.youtube.com/watch?v=${videoId}`);
                     this._log('Got', html.length, 'chars, captionTracks:', html.includes('captionTracks'), 'timedtext:', html.includes('timedtext'));
-
+    
                     // 4A: ytInitialPlayerResponse
                     const prMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var\s+(?:meta|head)|<\/script|\n)/s);
                     if (prMatch) {
@@ -8821,7 +8849,7 @@ CONSTRAINTS:
                             }
                         } catch(e) { this._log('4A: JSON parse failed:', e.message?.slice(0,80)); }
                     }
-
+    
                     // 4B: captionTracks regex
                     if (html.includes('captionTracks')) {
                         for (const pat of [/"captionTracks":\s*(\[.*?\])(?=\s*,\s*")/s, /"captionTracks":\s*(\[(?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*\])/]) {
@@ -8838,7 +8866,7 @@ CONSTRAINTS:
                             }
                         }
                     }
-
+    
                     // 4C: timedtext URL
                     if (html.includes('timedtext')) {
                         const urlMatch = html.match(/(https?:\\\/\\\/[^"]*timedtext[^"]*)/);
@@ -8852,7 +8880,7 @@ CONSTRAINTS:
                 } catch(e) {
                     this._log('GM page fetch failed:', e.message);
                 }
-
+    
                 // ── FALLBACK 5: Innertube player API via GM ──
                 try {
                     onStatus?.('Trying Innertube player API...', 'loading', 40);
@@ -8862,7 +8890,7 @@ CONSTRAINTS:
                     if (!apiKey) apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
                     let clientVersion; try { clientVersion = pw.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION'); } catch(e) {}
                     if (!clientVersion) clientVersion = '2.20250210.01.00';
-
+    
                     const body = { context: { client: { clientName: 'WEB', clientVersion, hl: 'en', gl: 'US' } }, videoId };
                     const authHeaders = await this._buildSapisidAuth() || {};
                     const data = await this._gmPostJson(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`, body, authHeaders);
@@ -8877,7 +8905,7 @@ CONSTRAINTS:
                 } catch(e) {
                     this._log('Innertube player API failed:', e.message);
                 }
-
+    
                 // ── FALLBACK 6: Innertube get_transcript ──
                 try {
                     onStatus?.('Trying Innertube get_transcript...', 'loading', 50);
@@ -8890,7 +8918,7 @@ CONSTRAINTS:
                 } catch(e) {
                     this._log('get_transcript failed:', e.message);
                 }
-
+    
                 // ── FALLBACK 7: DOM scrape ──
                 try {
                     onStatus?.('Trying DOM transcript scrape...', 'loading', 55);
@@ -8903,11 +8931,11 @@ CONSTRAINTS:
                 } catch(e) {
                     this._log('DOM scrape failed:', e.message);
                 }
-
+    
                 this._warn('ALL transcript methods failed for video:', videoId);
                 return null;
             },
-
+    
             // GM-backed caption download with SAPISIDHASH auth and multi-format fallback
             async _gmDownloadCaptions(trackOrFirst, videoId, allTracks) {
                 let track = trackOrFirst;
@@ -8918,16 +8946,16 @@ CONSTRAINTS:
                          || allTracks[0];
                 }
                 if (!track?.baseUrl) { this._log('No baseUrl in track:', JSON.stringify(track)?.slice(0,200)); return null; }
-
+    
                 let baseUrl = track.baseUrl;
                 if (baseUrl.includes('\\u0026')) baseUrl = baseUrl.replace(/\\u0026/g, '&');
                 if (baseUrl.includes('\\u002F')) baseUrl = baseUrl.replace(/\\u002F/g, '/');
                 if (track.languageCode && !baseUrl.includes('&lang=')) baseUrl += '&lang=' + encodeURIComponent(track.languageCode);
                 if (track.kind && !baseUrl.includes('&kind=')) baseUrl += '&kind=' + encodeURIComponent(track.kind);
                 if (typeof track.name === 'string' && !baseUrl.includes('&name=')) baseUrl += '&name=' + encodeURIComponent(track.name);
-
+    
                 this._log('Downloading captions for track:', track.languageCode, track.kind || 'manual');
-
+    
                 const authHeaders = await this._buildSapisidAuth() || {};
                 for (const fmt of ['json3', null, 'srv3']) {
                     try {
@@ -8939,7 +8967,7 @@ CONSTRAINTS:
                         if (segments?.length) { this._log('A(GM): got', segments.length, 'segments via fmt=' + (fmt || 'xml')); return segments; }
                     } catch(e) { this._log('A(GM): fmt=' + (fmt || 'xml'), 'error:', e.message); }
                 }
-
+    
                 for (const fmt of ['json3', null, 'srv3']) {
                     try {
                         const url = fmt ? baseUrl + '&fmt=' + fmt : baseUrl;
@@ -8951,11 +8979,11 @@ CONSTRAINTS:
                         if (segments?.length) { this._log('B(fetch): got', segments.length, 'segments via fmt=' + (fmt || 'xml')); return segments; }
                     } catch(e) { this._log('B(fetch): fmt=' + (fmt || 'xml'), 'error:', e.message); }
                 }
-
+    
                 this._log('All caption download methods failed for track:', track.languageCode);
                 return null;
             },
-
+    
             _parseCaptionResponse(text, fmt) {
                 if (fmt === 'json3') {
                     try {
@@ -8974,7 +9002,7 @@ CONSTRAINTS:
                 while ((m = re.exec(text)) !== null) { const raw = (m[3] || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/\n/g, ' ').trim(); if (raw) segments.push({ start: parseFloat(m[1]||'0'), dur: parseFloat(m[2]||'0'), text: raw }); }
                 return segments.length ? segments : null;
             },
-
+    
             async _fetchTranscriptViaInnertube(videoId, lang) {
                 const pw = _rw;
                 const vidBytes = [...new TextEncoder().encode(videoId)]; const langBytes = [...new TextEncoder().encode(lang || 'en')];
@@ -8996,21 +9024,21 @@ CONSTRAINTS:
                 this._log('get_transcript: no segments in response');
                 return null;
             },
-
+    
             _parseTranscriptSegments(segments) {
                 const result = [];
                 for (const seg of segments) { const r = seg.transcriptSegmentRenderer; if (!r) continue; const text = r.snippet?.runs?.map(x => x.text || '').join('').trim(); if (!text) continue; result.push({ start: parseInt(r.startMs||'0')/1000, dur: (parseInt(r.endMs||'0')-parseInt(r.startMs||'0'))/1000, text: text.replace(/\n/g,' ').trim() }); }
                 return result.length ? result : null;
             },
-
+    
             async _scrapeTranscriptFromDOM() {
                 const existing = document.querySelectorAll('ytd-transcript-segment-renderer');
                 if (existing.length) return this._extractTranscriptFromDOM(existing);
-
+    
                 const descExpand = document.querySelector('tp-yt-paper-button#expand, #expand.button, #description-inline-expander #expand');
                 if (descExpand) descExpand.click();
                 await new Promise(r => setTimeout(r, 500));
-
+    
                 const btnSelectors = ['button', 'ytd-button-renderer', 'yt-button-shape button'];
                 for (const sel of btnSelectors) {
                     for (const btn of document.querySelectorAll(sel)) {
@@ -9022,7 +9050,7 @@ CONSTRAINTS:
                         }
                     }
                 }
-
+    
                 for (let i = 0; i < 20; i++) {
                     await new Promise(r => setTimeout(r, 300));
                     const segs = document.querySelectorAll('ytd-transcript-segment-renderer');
@@ -9046,7 +9074,7 @@ CONSTRAINTS:
                 }
                 return result.length ? result : null;
             },
-
+    
             _buildTranscriptText(segments, maxChars = 30000) {
                 // Build 30-second blocks from segments
                 const blocks = []; let currentBlock = { start: 0, texts: [] }; let lastBlockStart = 0;
@@ -9110,7 +9138,7 @@ CONSTRAINTS:
                 }
                 return result;
             },
-
+    
             // ═══ TRANSCRIPT DOWNLOAD ═══
             async _downloadTranscript() {
                 const videoId = this._getVideoId();
@@ -9124,7 +9152,7 @@ CONSTRAINTS:
                     if (btn) { btn.disabled = false; btn.textContent = 'Transcript: TXT'; btn.classList.remove('cf-loading'); }
                     return;
                 }
-
+    
                 const title = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim()
                     || document.querySelector('#title h1')?.textContent?.trim() || videoId;
                 this._lastTranscriptSegments = segments;
@@ -9137,23 +9165,23 @@ CONSTRAINTS:
                 this._updateStatus('Done', 'ready', 100);
                 if (btn) { btn.disabled = false; btn.textContent = 'Transcript: TXT'; btn.classList.remove('cf-loading'); }
             },
-
+    
             // ═══ LIVE VIDEO ROLLING CHAPTERS ═══
             _liveIntervalId: null,
             _liveAccumulated: [],
             _liveLastGenTime: 0,
             _liveNoNewCount: 0,
-
+    
             _isLiveVideo() {
                 return !!document.querySelector('.ytp-live-badge:not(.ytp-live-badge-disabled), .ytp-live, .html5-video-player.playing-mode.ytp-live');
             },
-
+    
             _isVideoEnded() {
                 const vid = document.querySelector('video.html5-main-video, video');
                 if (!vid) return true;
                 return vid.ended || (vid.paused && vid.currentTime > 0 && vid.duration > 0 && Math.abs(vid.currentTime - vid.duration) < 1);
             },
-
+    
             async _startLiveTracking() {
                 if (this._liveIntervalId) return;
                 this._liveAccumulated = [];
@@ -9161,10 +9189,10 @@ CONSTRAINTS:
                 this._liveNoNewCount = 0;
                 this._log('Live tracking started');
                 this._updateStatus('Live tracking...', 'loading', 0);
-
+    
                 this._liveIntervalId = setInterval(async () => {
                     const videoId = this._getVideoId();
-
+    
                     if (!videoId || this._isVideoEnded()) {
                         this._log('Live: video ended or no video, stopping');
                         this._stopLiveTracking();
@@ -9178,7 +9206,7 @@ CONSTRAINTS:
                             return;
                         }
                     }
-
+    
                     try {
                         const segments = await this._fetchTranscript(videoId, null);
                         if (segments?.length) {
@@ -9191,20 +9219,20 @@ CONSTRAINTS:
                                     added++;
                                 }
                             }
-
+    
                             if (added > 0) {
                                 this._liveNoNewCount = 0;
                                 this._log('Live: added', added, 'new segments, total:', this._liveAccumulated.length);
                             } else {
                                 this._liveNoNewCount++;
                             }
-
+    
                             if (this._liveNoNewCount >= 5) {
                                 this._log('Live: no new content for 5 polls, stopping');
                                 this._stopLiveTracking();
                                 return;
                             }
-
+    
                             const now = Date.now();
                             if (this._liveAccumulated.length >= 10 && now - this._liveLastGenTime > 120000) {
                                 this._liveLastGenTime = now;
@@ -9253,7 +9281,7 @@ CONSTRAINTS:
                     }
                 }, 30000);
             },
-
+    
             _stopLiveTracking() {
                 if (this._liveIntervalId) {
                     clearInterval(this._liveIntervalId);
@@ -9263,14 +9291,14 @@ CONSTRAINTS:
                     if (this._panelEl?.classList.contains('cf-visible')) this._renderPanel();
                 }
             },
-
+    
             // ═══ SUBSCRIPTIONS BATCH PROCESSOR ═══
             _batchProcessing: false,
             _batchProgress: { done: 0, total: 0, current: '' },
-
+    
             async _batchProcessSubscriptions() {
                 if (this._batchProcessing) return;
-
+    
                 const videoLinks = new Set();
                 document.querySelectorAll('a#video-title-link[href*="watch"], a.yt-simple-endpoint[href*="watch"], a[href*="/watch?v="]').forEach(a => {
                     const match = a.href?.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
@@ -9280,21 +9308,21 @@ CONSTRAINTS:
                     const match = a.href?.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
                     if (match) videoLinks.add(match[1]);
                 });
-
+    
                 if (!videoLinks.size) { return; }
-
+    
                 const uncached = [...videoLinks].filter(id => !this._getCachedData(id));
                 if (!uncached.length) { return; }
-
+    
                 this._batchProcessing = true;
                 this._batchProgress = { done: 0, total: uncached.length, current: '' };
                 this._updateBatchUI();
-
+    
                 for (const videoId of uncached) {
                     if (!this._batchProcessing) break;
                     this._batchProgress.current = videoId;
                     this._updateBatchUI();
-
+    
                     try {
                         const segments = await this._fetchTranscript(videoId, null);
                         if (segments?.length) {
@@ -9317,19 +9345,19 @@ CONSTRAINTS:
                             if (data?.chapters?.length) this._setCachedData(videoId, data);
                         }
                     } catch(e) { this._log('Batch error for', videoId, ':', e.message); }
-
+    
                     this._batchProgress.done++;
                     this._updateBatchUI();
                     await new Promise(r => setTimeout(r, 500));
                 }
-
+    
                 const done = this._batchProgress.done;
                 this._batchProcessing = false;
                 this._removeBatchUI();
             },
-
+    
             _cancelBatch() { this._batchProcessing = false; },
-
+    
             _updateBatchUI() {
                 let bar = document.getElementById('cf-batch-bar');
                 if (!bar) {
@@ -9347,21 +9375,21 @@ CONSTRAINTS:
                 bar.querySelector('#cf-batch-cancel')?.addEventListener('click', () => { this._cancelBatch(); this._removeBatchUI(); });
             },
             _removeBatchUI() { document.getElementById('cf-batch-bar')?.remove(); },
-
+    
             _injectSubscriptionsButton() {
                 if (document.getElementById('cf-batch-btn')) return;
                 if (!window.location.pathname.startsWith('/feed/subscriptions')) return;
-
+    
                 const headerButtons = document.querySelector('#masthead #end #buttons');
                 if (!headerButtons) { setTimeout(() => this._injectSubscriptionsButton(), 1000); return; }
-
+    
                 const ns = 'http://www.w3.org/2000/svg';
                 const btn = document.createElement('button');
                 btn.id = 'cf-batch-btn';
                 btn.className = 'cf-batch-btn';
                 btn.title = 'ChapterForge: Process all videos on this page';
                 btn.style.cssText = 'display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:20px;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-family:"Roboto",Arial,sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.2s;box-shadow:0 2px 8px rgba(124,58,237,0.3);';
-
+    
                 const svg = document.createElementNS(ns, 'svg');
                 svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '18'); svg.setAttribute('height', '18');
                 svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor');
@@ -9370,15 +9398,15 @@ CONSTRAINTS:
                 p1.setAttribute('fill', 'currentColor'); p1.setAttribute('stroke', 'none');
                 svg.appendChild(p1);
                 btn.appendChild(svg);
-
+    
                 const text = document.createElement('span');
                 text.textContent = 'Process All';
                 btn.appendChild(text);
-
+    
                 btn.addEventListener('click', () => this._batchProcessSubscriptions());
                 btn.addEventListener('mouseenter', () => { btn.style.background = 'linear-gradient(135deg,#8b5cf6,#7c3aed)'; btn.style.boxShadow = '0 4px 16px rgba(124,58,237,0.5)'; });
                 btn.addEventListener('mouseleave', () => { btn.style.background = 'linear-gradient(135deg,#7c3aed,#6d28d9)'; btn.style.boxShadow = '0 2px 8px rgba(124,58,237,0.3)'; });
-
+    
                 const hideAllBtn = headerButtons.querySelector('.ytkit-subs-hide-all-btn');
                 const vlcBtn = headerButtons.querySelector('.ytkit-subs-vlc-btn');
                 if (hideAllBtn) {
@@ -9389,31 +9417,31 @@ CONSTRAINTS:
                     headerButtons.appendChild(btn);
                 }
             },
-
+    
             async _getAudioStreamUrl(videoId) {
                 const pw = _rw;
                 const sources = [];
-
+    
                 try { const pr = pw.ytInitialPlayerResponse; if (pr?.videoDetails?.videoId === videoId && pr?.streamingData?.adaptiveFormats) { sources.push(...pr.streamingData.adaptiveFormats); this._log('Audio: page PR has', pr.streamingData.adaptiveFormats.length, 'adaptiveFormats'); } } catch(e) {}
-
+    
                 try {
                     const wf = document.querySelector('ytd-watch-flexy');
                     for (const p of ['playerData_', '__data', 'data']) { let pr = wf?.[p]; if (pr?.playerResponse) pr = pr.playerResponse; if (pr?.videoDetails?.videoId === videoId && pr?.streamingData?.adaptiveFormats) { sources.push(...pr.streamingData.adaptiveFormats); break; } }
                 } catch(e) {}
-
+    
                 if (!sources.some(f => f.mimeType?.startsWith('audio/') && f.url)) {
                     let visitorData; try { visitorData = pw.ytcfg?.get?.('VISITOR_DATA'); } catch(e) {}
                     let clientVersion; try { clientVersion = pw.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') || '2.20250210.01.00'; } catch(e) { clientVersion = '2.20250210.01.00'; }
                     let apiKey; try { apiKey = pw.ytcfg?.get?.('INNERTUBE_API_KEY'); } catch(e) {}
                     if (!apiKey) apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-
+    
                     const clients = [
                         { name: 'WEB_CREATOR', body: { context: { client: { clientName: 'WEB_CREATOR', clientVersion: '1.20250210.01.00', hl: 'en', gl: 'US', ...(visitorData ? { visitorData } : {}) } }, videoId, contentCheckOk: true, racyCheckOk: true }, ua: null },
                         { name: 'WEB', body: { context: { client: { clientName: 'WEB', clientVersion, hl: 'en', gl: 'US', ...(visitorData ? { visitorData } : {}) } }, videoId, contentCheckOk: true, racyCheckOk: true }, ua: null },
                         { name: 'TVHTML5_EMBEDDED', body: { context: { client: { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', hl: 'en', gl: 'US' } }, videoId, contentCheckOk: true, racyCheckOk: true, thirdParty: { embedUrl: 'https://www.youtube.com' } }, ua: null },
                         { name: 'ANDROID', body: { context: { client: { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30, hl: 'en', gl: 'US' } }, videoId, contentCheckOk: true, racyCheckOk: true }, ua: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip' },
                     ];
-
+    
                     for (const client of clients) {
                         try {
                             const hdrs = client.ua ? { 'User-Agent': client.ua } : {};
@@ -9432,7 +9460,7 @@ CONSTRAINTS:
                         } catch(e) { this._log('Audio:', client.name, 'failed:', e.message); }
                     }
                 }
-
+    
                 const audioFormats = sources.filter(f => f.mimeType?.startsWith('audio/') && f.url).sort((a, b) => (a.bitrate || 999999) - (b.bitrate || 999999));
                 if (!audioFormats.length) { this._log('Audio: no usable audio streams found in', sources.length, 'total formats'); return null; }
                 const opus = audioFormats.find(f => f.mimeType?.includes('opus'));
@@ -9441,7 +9469,7 @@ CONSTRAINTS:
                 this._log('Audio chosen:', chosen.mimeType, chosen.bitrate + 'bps');
                 return { url, ua: chosen._downloadUA || null };
             },
-
+    
             _downloadAudioData(url, onProgress, userAgent) {
                 const self = this;
                 const attempts = [];
@@ -9468,7 +9496,7 @@ CONSTRAINTS:
                 }
                 return new Promise((resolve, reject) => tryDownload(resolve, reject));
             },
-
+    
             async _decodeAndResample(arrayBuffer) {
                 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 let audioBuffer;
@@ -9481,7 +9509,7 @@ CONSTRAINTS:
                 this._log('Audio resampled:', srcRate + 'Hz -> 16000Hz,', (resampled.length / 16000).toFixed(1) + 's');
                 return resampled;
             },
-
+    
             // ═══ SHARED: Transformers.js Library Loader ═══
             async _loadTransformersLib() {
                 if (this._transformersLib) return this._transformersLib;
@@ -9507,16 +9535,16 @@ CONSTRAINTS:
                 this._transformersLib = transformers;
                 return transformers;
             },
-
+    
             async _loadWhisperPipeline(onProgress) {
                 if (this._whisperPipeline) return this._whisperPipeline;
                 const modelId = 'onnx-community/' + (appState.settings.cfWhisperModel || 'whisper-tiny.en');
                 this._log('Loading Whisper model:', modelId);
                 onProgress?.('Loading Whisper library...', 0);
-
+    
                 const transformers = await this._loadTransformersLib();
                 const { pipeline } = transformers;
-
+    
                 onProgress?.('Loading Whisper model: ' + modelId + '...', 10);
                 this._whisperPipeline = await pipeline('automatic-speech-recognition', modelId, {
                     dtype: 'q4', device: navigator.gpu ? 'webgpu' : 'wasm',
@@ -9525,18 +9553,18 @@ CONSTRAINTS:
                 this._log('Whisper model loaded');
                 return this._whisperPipeline;
             },
-
+    
             // ═══ BROWSER AI: Local LLM via Transformers.js + WebGPU ═══
             async _loadBrowserLLMPipeline(onStatus) {
                 const modelKey = appState.settings.cfBrowserAiModel || 'SmolLM2-360M-Instruct';
                 const modelInfo = this._CF_BROWSER_AI_MODELS[modelKey];
                 if (!modelInfo) throw new Error('Unknown Browser AI model: ' + modelKey);
-
+    
                 // Reuse pipeline if same model already loaded
                 if (this._browserLLMPipeline && this._browserLLMModelId === modelInfo.id) {
                     return this._browserLLMPipeline;
                 }
-
+    
                 // If a different model was loaded, discard it
                 if (this._browserLLMPipeline && this._browserLLMModelId !== modelInfo.id) {
                     this._log('Browser AI: model changed, discarding old pipeline');
@@ -9544,20 +9572,20 @@ CONSTRAINTS:
                     this._browserLLMPipeline = null;
                     this._browserLLMModelId = null;
                 }
-
+    
                 this._log('Browser AI: loading model:', modelInfo.id, '(' + modelInfo.size + ')');
                 onStatus?.('Loading Transformers.js...', 'loading', 10);
-
+    
                 if (!navigator.gpu) {
                     this._warn('Browser AI: WebGPU not available. Try Chrome or Edge.');
                     throw new Error('WebGPU not available. Browser AI requires Chrome or Edge with WebGPU support.');
                 }
-
+    
                 const transformers = await this._loadTransformersLib();
                 const { pipeline } = transformers;
-
+    
                 onStatus?.(`Loading ${modelKey} (${modelInfo.size})...`, 'loading', 20);
-
+    
                 this._browserLLMPipeline = await pipeline('text-generation', modelInfo.id, {
                     dtype: 'q4f16',
                     device: 'webgpu',
@@ -9575,29 +9603,29 @@ CONSTRAINTS:
                 this._log('Browser AI: model loaded:', modelInfo.id);
                 return this._browserLLMPipeline;
             },
-
+    
             async _callBrowserAI(systemPrompt, userPrompt, onStatus) {
                 const generator = await this._loadBrowserLLMPipeline(onStatus);
                 onStatus?.('Generating with Browser AI...', 'loading', 70);
-
+    
                 const messages = [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: userPrompt },
                 ];
-
+    
                 this._log('Browser AI: generating, prompt length:', systemPrompt.length + userPrompt.length);
                 const startTime = performance.now();
-
+    
                 const result = await generator(messages, {
                     max_new_tokens: 1024,
                     temperature: 0.1,
                     do_sample: true,
                     return_full_text: false,
                 });
-
+    
                 const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
                 const output = result?.[0]?.generated_text;
-
+    
                 // Extract assistant response — handle both string and array-of-messages formats
                 let text;
                 if (typeof output === 'string') {
@@ -9611,12 +9639,12 @@ CONSTRAINTS:
                 } else {
                     text = String(output || '').trim();
                 }
-
+    
                 this._log('Browser AI: generated', text.length, 'chars in', elapsed + 's');
                 onStatus?.(`Generated in ${elapsed}s`, 'loading', 90);
                 return text;
             },
-
+    
             async _getAudioViaCobalt(videoId, onProgress) {
                 this._log('Trying Cobalt API for audio...');
                 onProgress?.('Trying Cobalt API...', 10);
@@ -9631,7 +9659,7 @@ CONSTRAINTS:
                         onerror: (e) => reject(new Error('Cobalt download error')), ontimeout: () => reject(new Error('Cobalt download timeout')), timeout: 120000 });
                 });
             },
-
+    
             async _capturePlayerAudio(onStatus) {
                 const video = document.querySelector('video.html5-main-video');
                 if (!video || !video.duration || video.duration > 1800) throw new Error('Player capture: video not available or >30min');
@@ -9655,7 +9683,7 @@ CONSTRAINTS:
                     setTimeout(() => { try { recorder.stop(); } catch(e) {} }, Math.min(video.duration * 1000, 300000));
                 });
             },
-
+    
             async _whisperTranscribe(videoId, onStatus) {
                 const s = appState.settings;
                 const methods = [];
@@ -9663,10 +9691,10 @@ CONSTRAINTS:
                 if (s.cfUseCobalt !== false) methods.push('cobalt');
                 if (s.cfUseCapture !== false) methods.push('capture');
                 if (!methods.length) methods.push('innertube', 'cobalt');
-
+    
                 this._log('Whisper audio methods:', methods.join(', '));
                 let audioData = null;
-
+    
                 for (const method of methods) {
                     if (audioData) break;
                     try {
@@ -9685,27 +9713,166 @@ CONSTRAINTS:
                         this._warn('Audio method "' + method + '" failed:', e.message);
                     }
                 }
-
+    
                 if (!audioData) throw new Error('All audio download methods failed (' + methods.join(', ') + ')');
-
+    
                 onStatus?.('Decoding audio...', 38);
                 const samples = await this._decodeAndResample(audioData);
                 this._log('Audio ready:', (samples.length / 16000).toFixed(1) + 's');
-
+    
                 const transcriber = await this._loadWhisperPipeline((msg, pct) => onStatus?.(msg, Math.round(40 + (pct || 0) * 0.2)));
                 onStatus?.('Transcribing with Whisper AI...', 62);
                 const startTime = performance.now();
                 const result = await transcriber(samples, { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true, language: 'en' });
                 const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-
+    
                 const segments = [];
                 if (result.chunks?.length) { for (const chunk of result.chunks) { const text = chunk.text?.trim(); if (!text) continue; segments.push({ start: chunk.timestamp?.[0] || 0, dur: (chunk.timestamp?.[1] || (chunk.timestamp?.[0] || 0) + 5) - (chunk.timestamp?.[0] || 0), text }); } }
                 else if (result.text) { segments.push({ start: 0, dur: samples.length / 16000, text: result.text.trim() }); }
-
+    
                 onStatus?.(`Transcribed ${segments.length} segments in ${elapsed}s`, 100);
                 return segments;
             },
 
+            // ═══ VIBE TRANSCRIPTION (local Whisper via whisper.cpp server) ═══
+            _vibeCheck() {
+                const endpoint = appState.settings.cfVibeEndpoint || 'http://localhost:8178';
+                return new Promise(resolve => {
+                    GM_xmlhttpRequest({
+                        method: 'GET', url: endpoint + '/health',
+                        timeout: 3000,
+                        onload: (r) => {
+                            // Any HTTP response means the server is running
+                            resolve({ running: true, models: [], version: null });
+                        },
+                        onerror: () => resolve({ running: false, models: [], version: null }),
+                        ontimeout: () => resolve({ running: false, models: [], version: null })
+                    });
+                });
+            },
+
+            async _vibeTranscribe(videoId, onStatus) {
+                const endpoint = appState.settings.cfVibeEndpoint || 'http://localhost:8178';
+                this._log('WhisperServer: starting transcription via', endpoint);
+
+                // Check WhisperServer is running
+                onStatus?.('Checking WhisperServer...', 2);
+                const status = await this._vibeCheck();
+                if (!status.running) throw new Error('WhisperServer is not running. Start it from your Windows Startup folder, or re-run the YTYT installer with WhisperServer checked.');
+
+                // Download audio
+                const s = appState.settings;
+                const methods = [];
+                if (s.cfUseInnertube !== false) methods.push('innertube');
+                if (s.cfUseCobalt !== false) methods.push('cobalt');
+                methods.push('capture');
+                if (!methods.length) methods.push('innertube', 'cobalt', 'capture');
+
+                let audioData = null;
+                for (const method of methods) {
+                    if (audioData) break;
+                    try {
+                        if (method === 'innertube') {
+                            onStatus?.('Finding audio stream (Innertube)...', 5);
+                            const audioInfo = await this._getAudioStreamUrl(videoId);
+                            if (audioInfo) audioData = await this._downloadAudioData(audioInfo.url, (msg, pct) => onStatus?.(msg, Math.round(5 + pct * 0.3)), audioInfo.ua);
+                        } else if (method === 'cobalt') {
+                            onStatus?.('Finding audio stream (Cobalt)...', 5);
+                            audioData = await this._getAudioViaCobalt(videoId, (msg, pct) => onStatus?.(msg, Math.round(5 + pct * 0.3)));
+                        } else if (method === 'capture') {
+                            onStatus?.('Capturing audio from player...', 5);
+                            audioData = await this._capturePlayerAudio((msg, pct) => onStatus?.(msg, Math.round(5 + pct * 0.3)));
+                        }
+                    } catch(e) { this._warn('WhisperServer audio method "' + method + '" failed:', e.message); }
+                }
+                if (!audioData) throw new Error('Audio download failed — cannot send to WhisperServer');
+
+                // Build multipart/form-data body manually (GM_xmlhttpRequest doesn't support FormData)
+                onStatus?.('Sending audio to WhisperServer...', 40);
+                const boundary = '----CFVibeUpload' + Date.now();
+                const audioBytes = new Uint8Array(audioData);
+
+                // Determine audio format from first bytes
+                let mimeType = 'audio/webm';
+                let ext = 'webm';
+                if (audioBytes[0] === 0xFF && (audioBytes[1] & 0xE0) === 0xE0) { mimeType = 'audio/mpeg'; ext = 'mp3'; }
+                else if (audioBytes[0] === 0x4F && audioBytes[1] === 0x67) { mimeType = 'audio/ogg'; ext = 'ogg'; }
+                else if (audioBytes[0] === 0x52 && audioBytes[1] === 0x49) { mimeType = 'audio/wav'; ext = 'wav'; }
+                else if (audioBytes[0] === 0x1A && audioBytes[1] === 0x45) { mimeType = 'audio/webm'; ext = 'webm'; }
+
+                // Build multipart body as ArrayBuffer
+                const enc = new TextEncoder();
+                const parts = [];
+                // File part
+                const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.${ext}"\r\nContent-Type: ${mimeType}\r\n\r\n`;
+                parts.push(enc.encode(fileHeader));
+                parts.push(audioBytes);
+                parts.push(enc.encode('\r\n'));
+                // response_format part
+                parts.push(enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\nverbose_json\r\n`));
+                // language part (optional)
+                parts.push(enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\nen\r\n`));
+                // timestamp_granularities part
+                parts.push(enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="timestamp_granularities[]"\r\n\r\nsegment\r\n`));
+                // Closing boundary
+                parts.push(enc.encode(`--${boundary}--\r\n`));
+
+                // Merge all parts into a single Uint8Array
+                const totalLen = parts.reduce((sum, p) => sum + p.byteLength, 0);
+                const body = new Uint8Array(totalLen);
+                let offset = 0;
+                for (const part of parts) { body.set(part, offset); offset += part.byteLength; }
+
+                this._log('WhisperServer: uploading', (audioBytes.length / 1024 / 1024).toFixed(1) + 'MB audio as', mimeType);
+
+                // Send to WhisperServer
+                const response = await new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({
+                        method: 'POST',
+                        url: endpoint + '/v1/audio/transcriptions',
+                        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+                        data: body.buffer,
+                        responseType: 'json',
+                        timeout: 600000, // 10 min for long videos
+                        onload: (r) => {
+                            if (r.status >= 400) {
+                                const errMsg = typeof r.response === 'object' ? JSON.stringify(r.response) : r.responseText;
+                                reject(new Error(`WhisperServer API error ${r.status}: ${errMsg?.slice(0, 200)}`));
+                                return;
+                            }
+                            resolve(typeof r.response === 'object' ? r.response : JSON.parse(r.responseText));
+                        },
+                        onerror: (e) => reject(new Error('WhisperServer connection failed: ' + (e.error || 'network error'))),
+                        ontimeout: () => reject(new Error('WhisperServer transcription timed out (10 min limit)'))
+                    });
+                });
+
+                onStatus?.('Parsing WhisperServer results...', 90);
+                this._log('WhisperServer response:', JSON.stringify(response)?.slice(0, 500));
+
+                // Parse response — OpenAI verbose_json format
+                const segments = [];
+                if (response?.segments?.length) {
+                    for (const seg of response.segments) {
+                        const text = seg.text?.trim();
+                        if (!text) continue;
+                        segments.push({
+                            start: seg.start || 0,
+                            dur: (seg.end || seg.start || 0) - (seg.start || 0),
+                            text
+                        });
+                    }
+                } else if (response?.text) {
+                    // Fallback: plain text response
+                    segments.push({ start: 0, dur: 0, text: response.text.trim() });
+                }
+
+                if (!segments.length) throw new Error('WhisperServer returned empty transcription');
+                onStatus?.(`WhisperServer: transcribed ${segments.length} segments`, 100);
+                this._log('WhisperServer: got', segments.length, 'segments');
+                return segments;
+            },
+    
             // ═══ OLLAMA MODEL MANAGER ═══
             _CF_RECOMMENDED_MODELS: {
                 'qwen3:32b':      { size: '~20 GB', speed: 'Medium', quality: 'Excellent', desc: '128K context, hybrid reasoning, best local model for detailed chapters & summaries' },
@@ -10268,7 +10435,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 return pois;
             },
 
-
+    
             // ═══ CHAPTER GENERATION (routes between builtin/API) ═══
             async _generateChapters(videoId, onStatus) {
                 if (this._isGenerating) return null;
@@ -10276,30 +10443,30 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 try {
                     const transcriptMethod = appState.settings.cfTranscriptMethod || 'auto';
                     let segments = null;
-
+    
                     if (transcriptMethod !== 'whisper-only') {
                         segments = await this._fetchTranscript(videoId, onStatus);
                     }
-
-                    if (!segments?.length && transcriptMethod !== 'captions-only') {
+    
+                    if (!segments?.length && (transcriptMethod === 'auto' || transcriptMethod === 'whisper-only')) {
                         onStatus?.('Captions unavailable — trying Whisper AI...', 'loading', 0);
                         try { segments = await this._whisperTranscribe(videoId, (msg, pct) => onStatus?.(msg, 'loading', Math.round(pct * 0.4))); }
                         catch(e) { this._warn('Whisper failed:', e.message); onStatus?.(`Whisper failed: ${e.message}`, 'error', 0); this._isGenerating = false; return null; }
                     }
-
+    
                     if (!segments?.length) {
-                        const reason = transcriptMethod === 'captions-only' ? 'No captions found (Whisper disabled)' : 'No transcript available';
+                        const reason = transcriptMethod === 'captions-only' ? 'No captions found (Whisper disabled)' : transcriptMethod === 'vibe' ? 'WhisperServer transcription failed — is WhisperServer running?' : 'No transcript available';
                         onStatus?.(reason, 'error', 0);
                         this._isGenerating = false; return null;
                     }
-
+    
                     this._log('Got', segments.length, 'transcript segments');
                     this._lastTranscriptSegments = segments;
                     const vidTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || videoId;
                     this._cacheTranscript(videoId, segments, vidTitle);
                     const duration = this._getVideoDuration();
                     const provider = appState.settings.cfLlmProvider || 'builtin';
-
+    
                     let data;
                     if (provider === 'builtin') {
                         onStatus?.('Analyzing transcript (built-in)...', 'loading', 60);
@@ -10310,16 +10477,16 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                             if (!endpoint) throw new Error('No LLM endpoint configured');
                             const needsKey = this._CF_PROVIDERS[provider]?.needsKey;
                             if (needsKey && !appState.settings.cfLlmApiKey) throw new Error(`API key required for ${this._CF_PROVIDERS[provider]?.name || provider}`);
-
+    
                             onStatus?.('Preparing transcript for AI...', 'loading', 55);
                             const isLocal = this._isLocalProvider();
                             const txLimit = isLocal ? 200000 : 30000;
                             const transcriptText = this._buildTranscriptText(segments, txLimit);
                             const durationMin = Math.ceil(duration / 60);
-
+    
                             const systemPrompt = appState.settings.cfCustomChapterPrompt || this._buildChapterSystemPrompt(durationMin);
                             const userPrompt = `Generate chapters and points of interest for this ${durationMin}-minute video titled "${vidTitle}".\n\nFull transcript (${segments.length} segments, ${transcriptText.length} chars):\n\n${transcriptText}`;
-
+    
                             onStatus?.(isLocal ? `Processing full transcript locally (${Math.round(transcriptText.length/1000)}K chars)...` : 'Calling LLM API...', 'loading', 70);
                             const rawText = await this._callLlmApi(systemPrompt, userPrompt, onStatus);
                             onStatus?.('Parsing AI results...', 'loading', 95);
@@ -10337,7 +10504,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                             data = this._generateChaptersHeuristic(segments, duration);
                         }
                     }
-
+    
                     if (data?.chapters?.length) {
                         this._setCachedData(videoId, data);
                         onStatus?.(`Generated ${data.chapters.length} chapters, ${data.pois.length} POIs`, 'ready', 100);
@@ -10345,7 +10512,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     } else { onStatus?.('Generation produced no chapters', 'error', 0); this._isGenerating = false; return null; }
                 } catch(e) { this._warn('Generation error:', e); onStatus?.(e.message || 'Generation failed', 'error', 0); this._isGenerating = false; return null; }
             },
-
+    
             _parseChapterJSON(raw, duration) {
                 let json = null;
                 try { json = JSON.parse(raw); } catch(e) {}
@@ -10723,7 +10890,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 if (this._chapterData?.chapters?.length) this._keywordsPerChapter = this._extractKeywords(segments, this._chapterData.chapters);
             },
 
-
+    
             // ═══════════════════════════════════════════════════════════
             //  UI: Progress Bar Overlay (FIXED — no z-index conflicts)
             // ═══════════════════════════════════════════════════════════
@@ -10739,29 +10906,29 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 if (getComputedStyle(progressBar).position === 'static') progressBar.style.position = 'relative';
                 const s = appState.settings;
                 const poiColor = s.cfPoiColor || '#ff6b6b';
-
+    
                 // ── Chapter segments on the progress bar ──
                 if (s.cfShowChapters && this._chapterData.chapters.length > 1) {
                     const markerContainer = document.createElement('div');
                     markerContainer.className = 'cf-chapter-markers';
-
+    
                     // Label row above the progress bar — shows chapter names
                     const labelRow = document.createElement('div');
                     labelRow.className = 'cf-chapter-label-row';
-
+    
                     this._chapterData.chapters.forEach((ch, i) => {
                         const left = (ch.start / duration) * 100;
                         const width = ((ch.end - ch.start) / duration) * 100;
                         const color = this._CF_COLORS[i % this._CF_COLORS.length];
                         const fg = this._CF_COLORS_FG[i % this._CF_COLORS_FG.length];
-
+    
                         // Chapter segment (colored bar)
                         const seg = document.createElement('div');
                         seg.className = 'cf-chapter-seg';
                         seg.style.cssText = `left:${left}%;width:${width}%;--cf-seg-color:${color};--cf-seg-opacity:${s.cfChapterOpacity || 0.35}`;
                         seg.dataset.cfChapterIdx = i;
                         seg.addEventListener('click', (e) => { e.stopPropagation(); this._seekTo(ch.start); });
-
+    
                         // Tooltip on hover (positioned well above bar)
                         const tip = document.createElement('div');
                         tip.className = 'cf-bar-tooltip cf-chapter-tip';
@@ -10769,7 +10936,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                         seg.appendChild(tip);
                         seg.addEventListener('mouseenter', () => tip.style.opacity = '1');
                         seg.addEventListener('mouseleave', () => tip.style.opacity = '0');
-
+    
                         // Gap divider between chapters
                         if (i > 0) {
                             const gap = document.createElement('div');
@@ -10777,9 +10944,9 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                             gap.style.left = `${left}%`;
                             markerContainer.appendChild(gap);
                         }
-
+    
                         markerContainer.appendChild(seg);
-
+    
                         // Chapter label (name inside the colored segment area, above bar)
                         const label = document.createElement('div');
                         label.className = 'cf-chapter-label';
@@ -10788,15 +10955,15 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                         label.addEventListener('click', (e) => { e.stopPropagation(); this._seekTo(ch.start); });
                         labelRow.appendChild(label);
                     });
-
+    
                     progressBar.appendChild(markerContainer);
                     // Append label row to progress bar itself — purely absolute, no layout impact
                     progressBar.appendChild(labelRow);
                 }
-
+    
                 // ── POI markers ──
                 const overlay = document.createElement('div'); overlay.className = 'cf-bar-overlay';
-
+    
                 if (s.cfShowPOIs && this._chapterData.pois.length) {
                     this._chapterData.pois.forEach(p => {
                         const left = (p.time / duration) * 100;
@@ -10804,12 +10971,12 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                         hitbox.className = 'cf-poi-hitbox';
                         hitbox.style.left = `${left}%`;
                         hitbox.addEventListener('click', (e) => { e.stopPropagation(); this._seekTo(p.time); });
-
+    
                         const diamond = document.createElement('div');
                         diamond.className = 'cf-poi-diamond';
                         diamond.style.background = poiColor;
                         hitbox.appendChild(diamond);
-
+    
                         const tip = document.createElement('div');
                         tip.className = 'cf-bar-tooltip cf-poi-tip';
                         TrustedHTML.setHTML(tip, `<span class="cf-tip-poi-icon">&#9733;</span><span class="cf-tip-time">${this._formatTime(p.time)}</span><span class="cf-tip-label">${p.label}</span>`);
@@ -10819,19 +10986,19 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                         overlay.appendChild(hitbox);
                     });
                 }
-
+    
                 // ── Enhanced transcript hover ──
                 if (this._lastTranscriptSegments?.length) {
                     const transcriptTip = document.createElement('div');
                     transcriptTip.id = 'cf-transcript-tip';
                     transcriptTip.className = 'cf-transcript-tip';
                     const chapters = this._chapterData?.chapters || [];
-
+    
                     overlay.addEventListener('mousemove', (e) => {
                         const rect = progressBar.getBoundingClientRect();
                         const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
                         const hoverTime = percent * duration;
-
+    
                         let bestIdx = -1;
                         for (let si = 0; si < this._lastTranscriptSegments.length; si++) {
                             const seg = this._lastTranscriptSegments[si];
@@ -10839,26 +11006,26 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                             if (seg.start > hoverTime) break;
                             bestIdx = si;
                         }
-
+    
                         if (bestIdx >= 0) {
                             const segs = this._lastTranscriptSegments;
                             const lines = [];
                             if (bestIdx > 0) lines.push({ time: segs[bestIdx - 1].start, text: segs[bestIdx - 1].text, dim: true });
                             lines.push({ time: segs[bestIdx].start, text: segs[bestIdx].text, dim: false });
                             if (bestIdx < segs.length - 1) lines.push({ time: segs[bestIdx + 1].start, text: segs[bestIdx + 1].text, dim: true });
-
+    
                             let chapterName = '';
                             for (let ci = chapters.length - 1; ci >= 0; ci--) {
                                 if (hoverTime >= chapters[ci].start) { chapterName = chapters[ci].title; break; }
                             }
-
+    
                             let html = '';
                             if (chapterName) html += `<div class="cf-tx-chapter">${chapterName}</div>`;
                             for (const ln of lines) {
                                 const txt = ln.text.length > 80 ? ln.text.slice(0, 77) + '...' : ln.text;
                                 html += `<div class="cf-tx-line${ln.dim ? ' cf-tx-dim' : ''}"><span class="cf-tx-ts">${this._formatTime(ln.time)}</span> ${txt}</div>`;
                             }
-
+    
                             TrustedHTML.setHTML(transcriptTip, html);
                             transcriptTip.style.opacity = '1';
                             const tipWidth = 300;
@@ -10871,7 +11038,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     overlay.addEventListener('mouseleave', () => { transcriptTip.style.opacity = '0'; });
                     overlay.appendChild(transcriptTip);
                 }
-
+    
                 progressBar.appendChild(overlay);
 
                 // ── Filler word markers (OpenCut: filler detection) ──
@@ -10895,16 +11062,16 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     });
                     progressBar.appendChild(fillerContainer);
                 }
-
+    
                 // Start chapter HUD tracking
                 this._startChapterTracking();
             },
-
+    
             // ═══ CHAPTER HUD — Floating current chapter indicator on video ═══
             _startChapterTracking() {
                 this._stopChapterTracking();
                 if (!appState.settings.cfShowChapterHUD || !this._chapterData?.chapters?.length) return;
-
+    
                 const track = () => {
                     const video = document.querySelector('video.html5-main-video');
                     if (!video || !this._chapterData?.chapters?.length) {
@@ -10932,7 +11099,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 };
                 this._chapterTrackingRAF = requestAnimationFrame(track);
             },
-
+    
             _stopChapterTracking() {
                 if (this._chapterTrackingRAF) {
                     cancelAnimationFrame(this._chapterTrackingRAF);
@@ -10940,7 +11107,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 }
                 this._lastActiveChapterIdx = -1;
             },
-
+    
             _updateChapterHUD(chapterIdx) {
                 if (!appState.settings.cfShowChapterHUD) {
                     this._chapterHUDEl?.remove();
@@ -10949,7 +11116,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 }
                 const player = document.getElementById('movie_player');
                 if (!player) return;
-
+    
                 if (!this._chapterHUDEl) {
                     this._chapterHUDEl = document.createElement('div');
                     this._chapterHUDEl.className = 'cf-chapter-hud';
@@ -10959,25 +11126,25 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 // Apply position
                 const pos = appState.settings.cfHudPosition || 'top-left';
                 this._chapterHUDEl.setAttribute('data-cf-pos', pos);
-
+    
                 if (chapterIdx < 0 || !this._chapterData?.chapters?.[chapterIdx]) {
                     this._chapterHUDEl.style.opacity = '0';
                     return;
                 }
-
+    
                 const chapters = this._chapterData.chapters;
                 const ch = chapters[chapterIdx];
                 const color = this._CF_COLORS[chapterIdx % this._CF_COLORS.length];
                 const hasPrev = chapterIdx > 0;
                 const hasNext = chapterIdx < chapters.length - 1;
                 const counter = `${chapterIdx + 1}/${chapters.length}`;
-
+    
                 let html = `<button class="cf-hud-nav ${hasPrev ? '' : 'cf-hud-disabled'}" data-cf-nav="prev" title="Previous chapter"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>`;
                 html += `<span class="cf-hud-dot" style="background:${color}"></span>`;
                 html += `<span class="cf-hud-title">${this._esc(ch.title)}</span>`;
                 html += `<span class="cf-hud-counter">${counter}</span>`;
                 html += `<button class="cf-hud-nav ${hasNext ? '' : 'cf-hud-disabled'}" data-cf-nav="next" title="Next chapter"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>`;
-
+    
                 TrustedHTML.setHTML(this._chapterHUDEl, html);
                 this._chapterHUDEl.style.opacity = '1';
                 this._chapterHUDEl.style.setProperty('--cf-hud-accent', color);
@@ -10996,7 +11163,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     });
                 });
             },
-
+    
             // ═══ UI: Panel ═══
             _createPanel() {
                 if (this._panelEl) return this._panelEl;
@@ -11012,7 +11179,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 const hasData = !!this._chapterData?.chapters?.length; const s = appState.settings;
                 const videoId = this._getVideoId();
                 let tabHTML = '';
-
+    
                 if (this._activeTab === 'chapters') {
                     if (hasData) {
                         tabHTML = `<div class="cf-section-label">Chapters (${this._chapterData.chapters.length})</div><ul class="cf-chapter-list">`;
@@ -11289,7 +11456,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     const showKeyField = currentProvider.needsKey || s.cfLlmProvider === 'custom';
                     const showEndpointField = s.cfLlmProvider === 'custom';
                     const showOllamaManager = s.cfLlmProvider === 'ollama';
-
+                    
                     // Build Ollama model manager HTML
                     let ollamaHTML = '';
                     if (showOllamaManager) {
@@ -11314,7 +11481,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                             <div style="font-size:9px;color:rgba(255,255,255,0.15);margin-top:8px;line-height:1.4">Install Ollama from <span style="color:rgba(124,58,237,0.6)">ollama.com</span> then pull the model above or run: <span style="font-family:monospace;color:rgba(124,58,237,0.5)">ollama pull qwen3:32b</span></div>
                         `;
                     }
-
+                    
                     tabHTML = `
                         <div class="cf-section-label">AI Provider</div>
                         <div class="cf-settings-row"><span class="cf-settings-label">Provider</span><select class="cf-select" id="cf-provider-select">${providerOptions}</select></div>
@@ -11335,7 +11502,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                         <div style="font-size:9px;color:rgba(255,255,255,0.15);margin-top:12px;line-height:1.4;text-align:center">All other ChapterForge settings are in the main YTKit settings panel under the ChapterForge group.</div>
                     `;
                 }
-
+    
                 TrustedHTML.setHTML(this._panelEl, `
                     <div class="cf-panel-header"><div><span class="cf-panel-title">ChapterForge</span><span class="cf-panel-version">v25.0</span></div><button class="cf-panel-close" id="cf-close">&times;</button></div>
                     <div class="cf-tab-bar"><div class="cf-tab ${this._activeTab === 'chapters' ? 'active' : ''}" data-cf-tab="chapters">Chapters</div><div class="cf-tab ${this._activeTab === 'tools' ? 'active' : ''}" data-cf-tab="tools">Tools</div><div class="cf-tab ${this._activeTab === 'ai' ? 'active' : ''}" data-cf-tab="ai">AI</div><div class="cf-tab ${this._activeTab === 'analysis' ? 'active' : ''}" data-cf-tab="analysis">Analysis</div><div class="cf-tab ${this._activeTab === 'notes' ? 'active' : ''}" data-cf-tab="notes">Notes</div><div class="cf-tab ${this._activeTab === 'settings' ? 'active' : ''}" data-cf-tab="settings">Settings</div></div>
@@ -11346,7 +11513,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                         ${tabHTML}
                     </div>
                 `);
-
+    
                 // ── Core bindings ──
                 const self = this;
                 this._panelEl.querySelector('#cf-close')?.addEventListener('click', () => self._togglePanel());
@@ -11356,7 +11523,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 this._panelEl.querySelector('#cf-live-track')?.addEventListener('click', () => { if (self._liveIntervalId) { self._stopLiveTracking(); } else { self._startLiveTracking(); } self._renderPanel(); });
                 this._panelEl.querySelectorAll('.cf-tab').forEach(tab => { tab.addEventListener('click', (e) => { e.stopPropagation(); self._activeTab = tab.dataset.cfTab; self._renderPanel(); }); });
                 this._panelEl.querySelectorAll('[data-cf-seek]').forEach(el => { el.addEventListener('click', () => self._seekTo(parseFloat(el.dataset.cfSeek))); });
-
+    
                 this._panelEl.querySelectorAll('[data-cf-clip]').forEach(el => {
                     el.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -11366,7 +11533,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                         el.textContent = '\u2713'; setTimeout(() => el.textContent = '\uD83D\uDD17', 1200);
                     });
                 });
-
+    
                 const searchInput = this._panelEl.querySelector('#cf-search-input');
                 if (searchInput) {
                     searchInput.addEventListener('input', () => { self._searchQuery = searchInput.value; self._searchResults = self._searchTranscript(searchInput.value); const countEl = self._panelEl.querySelector('#cf-search-count'); if (countEl) countEl.textContent = self._searchResults?.length ? self._searchResults.length + ' hits' : ''; });
@@ -11447,7 +11614,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 this._panelEl.querySelector('#cf-intro-speed')?.addEventListener('change', (e) => { self._speedSettings.introSpeed = parseFloat(e.target.value); });
                 this._panelEl.querySelector('#cf-outro-speed')?.addEventListener('change', (e) => { self._speedSettings.outroSpeed = parseFloat(e.target.value); });
                 this._panelEl.querySelectorAll('.cf-skip-toggle').forEach(el => { el.addEventListener('click', () => { const idx = parseInt(el.dataset.cfSkip); self._speedSettings.skipChapters[idx] = !self._speedSettings.skipChapters[idx]; self._renderPanel(); }); });
-
+    
                 const noteInput = this._panelEl.querySelector('#cf-note-input');
                 const addNote = () => {
                     if (!noteInput?.value.trim() || !videoId) return;
@@ -11475,12 +11642,12 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     const a = document.createElement('a'); a.href = url; a.download = `notes_${videoId}.txt`;
                     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
                 });
-
+    
                 // ── Settings bindings ──
                 const bindSelect = (id, key, transform) => { this._panelEl.querySelector(id)?.addEventListener('change', (e) => { appState.settings[key] = transform ? transform(e.target.value) : e.target.value; settingsManager.save(appState.settings); self._renderPanel(); }); };
                 const bindToggle = (id, key, afterFn) => { this._panelEl.querySelector(id)?.addEventListener('click', () => { appState.settings[key] = !appState.settings[key]; settingsManager.save(appState.settings); self._renderPanel(); afterFn?.(); }); };
                 const bindInput = (id, key) => { const el = this._panelEl.querySelector(id); if (el) { el.addEventListener('input', () => { appState.settings[key] = el.value; settingsManager.save(appState.settings); }); el.addEventListener('blur', () => self._renderPanel()); } };
-
+    
                 this._panelEl.querySelector('#cf-provider-select')?.addEventListener('change', (e) => {
                     const prov = e.target.value;
                     appState.settings.cfLlmProvider = prov;
@@ -11495,7 +11662,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 bindInput('#cf-model-input', 'cfLlmModel');
                 bindInput('#cf-apikey-input', 'cfLlmApiKey');
                 bindInput('#cf-endpoint-input', 'cfLlmEndpoint');
-
+    
                 this._panelEl.querySelector('#cf-clear-cache')?.addEventListener('click', () => { self._clearCache(); const keys = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(self._CF_TRANSCRIPT_PREFIX) || k.startsWith(self._CF_NOTES_PREFIX)) keys.push(k); } keys.forEach(k => localStorage.removeItem(k)); self._chapterData = null; self._renderPanel(); self._renderProgressBarOverlay(); });
 
                 // Prompt Library
@@ -11596,7 +11763,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     });
                 });
             },
-
+    
             _updateStatus(text, state, pct) {
                 // Update player button mini-progress
                 let indicator = document.getElementById('cf-mini-progress');
@@ -11636,7 +11803,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     genBtn.textContent = `Generating... ${pct}%`;
                 }
             },
-
+    
             async _handleGenerate() {
                 const videoId = this._getVideoId();
                 if (!videoId) return;
@@ -11660,7 +11827,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 this._updateStatus(data ? 'Done' : 'Failed', data ? 'ready' : 'error', data ? 100 : 0);
                 if (btn) { btn.disabled = false; btn.textContent = data ? 'Regenerate Chapters' : 'Generate Chapters'; btn.classList.remove('cf-loading'); }
             },
-
+    
             // ═══ UI: Player Button ═══
             _injectPlayerButton() {
                 if (document.getElementById('cf-player-btn')) return;
@@ -11672,7 +11839,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 btn.addEventListener('click', () => this._togglePanel());
                 controls.insertBefore(btn, controls.firstChild);
             },
-
+    
             // ═══ LIFECYCLE ═══
             _onVideoChange() {
                 const videoId = this._getVideoId();
@@ -11698,25 +11865,25 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 this._stopAutoSkip();
                 const cached = this._getCachedData(videoId);
                 if (cached) this._chapterData = cached;
-
+    
                 // Clean HUD on video change
                 this._stopChapterTracking();
                 this._chapterHUDEl?.remove();
                 this._chapterHUDEl = null;
-
+    
                 this._waitForPlayer().then(() => {
                     this._currentDuration = this._getVideoDuration();
                     const s = appState.settings;
-
+    
                     if (s.cfMode === 'manual' || s.cfShowPlayerButton) {
                         this._injectPlayerButton();
                     }
                     this._renderProgressBarOverlay();
                     if (this._panelEl?.classList.contains('cf-visible')) this._renderPanel();
-
+    
                     const btn = document.getElementById('cf-player-btn');
                     if (btn) { const badge = btn.querySelector('.cf-badge'); if (this._chapterData && !badge) { const b = document.createElement('span'); b.className = 'cf-badge'; btn.appendChild(b); } else if (!this._chapterData && badge) badge.remove(); }
-
+    
                     if (s.cfMode === 'auto' && !this._chapterData) {
                         const maxDur = (s.cfMaxAutoDuration || 60) * 60;
                         if (this._currentDuration <= maxDur || maxDur >= 599940) {
@@ -11725,22 +11892,22 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                             this._log('Auto-skip: video duration', Math.round(this._currentDuration/60), 'min exceeds limit', s.cfMaxAutoDuration, 'min');
                         }
                     }
-
+    
                     if (s.cfMode === 'auto' && this._isLiveVideo() && !this._liveIntervalId) {
                         this._startLiveTracking();
                     }
                 });
             },
-
+    
             _waitForPlayer(timeout = 10000) {
                 return new Promise((resolve) => {
                     const check = () => { const player = document.getElementById('movie_player'); const video = document.querySelector('video.html5-main-video'); if (player && video && video.duration) return resolve(); if (timeout <= 0) return resolve(); timeout -= 200; setTimeout(check, 200); };
                     check();
                 });
             },
-
+    
             // ═══ INIT / DESTROY ═══
-
+    
             init() {
                 const css = `
                     .cf-btn { position:relative;display:flex;align-items:center;justify-content:center;width:36px;height:36px;border:none;background:transparent;cursor:pointer;border-radius:6px;transition:background 0.2s;color:#fff; }
@@ -11781,7 +11948,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     .cf-tab { padding:8px 10px;font-size:10px;font-weight:600;color:rgba(255,255,255,0.35);cursor:pointer;border-bottom:2px solid transparent;transition:all 0.15s;text-transform:uppercase;letter-spacing:0.5px;flex:1;text-align:center; } .cf-tab:hover { color:rgba(255,255,255,0.6); } .cf-tab.active { color:#a78bfa;border-bottom-color:#7c3aed; }
                     .cf-empty { text-align:center;padding:30px 20px;color:rgba(255,255,255,0.25);font-size:12px; }
                     .cf-clear-btn { background:transparent;border:1px solid rgba(239,68,68,0.3);color:rgba(239,68,68,0.7);border-radius:8px;padding:6px 12px;font-size:11px;cursor:pointer;transition:all 0.15s;margin-top:8px; } .cf-clear-btn:hover { background:rgba(239,68,68,0.1);color:#ef4444;border-color:rgba(239,68,68,0.5); }
-
+    
                     /* ═══ PROGRESS BAR: Chapter segments (FIXED z-index layering) ═══ */
                     .cf-bar-overlay { position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:25; }
                     .cf-chapter-markers { position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:24; }
@@ -11790,7 +11957,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     .cf-chapter-seg:hover::before { opacity:0.55; }
                     .cf-chapter-seg.cf-seg-active::before { opacity:0.5; }
                     .cf-chapter-gap { position:absolute;top:-1px;bottom:-1px;width:3px;transform:translateX(-50%);background:#0f0f14;z-index:1;pointer-events:none;border-radius:1px; }
-
+    
                     /* Chapter name labels — absolutely positioned above progress bar, zero layout impact */
                     .cf-chapter-label-row { position:absolute;bottom:100%;left:0;width:100%;height:0;pointer-events:none;z-index:25;opacity:0;transition:opacity 0.2s; }
                     .ytp-progress-bar:hover .cf-chapter-label-row,
@@ -11798,31 +11965,31 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     .cf-chapter-label { position:absolute;bottom:4px;height:14px;display:flex;align-items:center;padding:0 3px;font-size:9px;font-weight:600;color:var(--cf-label-fg, #e0e0e8);background:color-mix(in srgb, var(--cf-label-color, #7c3aed) 25%, #0f0f14 75%);border-radius:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;pointer-events:auto;transition:all 0.15s;letter-spacing:0.2px;border:1px solid color-mix(in srgb, var(--cf-label-color, #7c3aed) 20%, transparent);box-sizing:border-box;line-height:1; }
                     .cf-chapter-label:hover { background:color-mix(in srgb, var(--cf-label-color, #7c3aed) 40%, #0f0f14 60%);z-index:2; }
                     .cf-chapter-label.cf-label-active { background:color-mix(in srgb, var(--cf-label-color, #7c3aed) 45%, #0f0f14 55%);border-color:color-mix(in srgb, var(--cf-label-color, #7c3aed) 50%, transparent); }
-
+    
                     /* POI markers */
                     .cf-poi-hitbox { position:absolute;top:50%;width:34px;height:34px;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer;z-index:26; }
                     .cf-poi-diamond { position:absolute;top:50%;left:50%;width:10px;height:10px;transform:translate(-50%,-50%) rotate(45deg);border-radius:2px;transition:all 0.2s;box-shadow:0 0 6px rgba(255,107,107,0.4);pointer-events:none; }
                     .cf-poi-hover { transform:translate(-50%,-50%) rotate(45deg) scale(1.6);box-shadow:0 0 12px rgba(255,107,107,0.7),0 0 24px rgba(255,107,107,0.3); }
-
+    
                     /* Tooltips — positioned well above the bar to avoid YouTube overlap */
                     .cf-bar-tooltip { position:absolute;bottom:28px;left:50%;transform:translateX(-50%);padding:6px 12px;border-radius:8px;font-size:11px;white-space:nowrap;pointer-events:none;z-index:50;opacity:0;transition:opacity 0.15s; }
                     .cf-chapter-tip { background:rgba(15,15,20,0.95);color:#e0e0e8;border:1px solid rgba(124,58,237,0.25);box-shadow:0 4px 16px rgba(0,0,0,0.5);display:flex;gap:8px;align-items:center;backdrop-filter:blur(8px); }
                     .cf-tip-time { font-weight:700;color:#a78bfa;font-size:10px;font-variant-numeric:tabular-nums; }
                     .cf-tip-title { color:#e0e0e8;font-weight:500; }
-
+    
                     .cf-poi-tip { background:linear-gradient(135deg,rgba(30,10,10,0.95),rgba(15,15,20,0.95));color:#fca5a5;border:1px solid rgba(255,107,107,0.35);box-shadow:0 4px 20px rgba(255,107,107,0.15),0 0 40px rgba(255,107,107,0.05);display:flex;gap:6px;align-items:center;animation:cfGlow 2s ease-in-out infinite;backdrop-filter:blur(8px); }
                     .cf-tip-poi-icon { font-size:12px;color:#ff6b6b;filter:drop-shadow(0 0 3px rgba(255,107,107,0.6)); }
                     .cf-tip-label { color:#fca5a5;font-weight:500; }
                     @keyframes cfGlow { 0%,100%{box-shadow:0 4px 20px rgba(255,107,107,0.15)} 50%{box-shadow:0 4px 24px rgba(255,107,107,0.3),0 0 8px rgba(255,107,107,0.1)} }
                     .cf-poi-hitbox .cf-bar-tooltip { bottom:30px; }
-
+    
                     /* Transcript hover preview */
                     .cf-transcript-tip { position:absolute;bottom:38px;background:rgba(10,10,15,0.95);color:rgba(255,255,255,0.8);padding:8px 12px;border-radius:8px;font-size:11px;width:300px;white-space:normal;word-wrap:break-word;pointer-events:none;z-index:30;opacity:0;transition:opacity 0.12s;border:1px solid rgba(124,58,237,0.15);box-shadow:0 4px 16px rgba(0,0,0,0.5);line-height:1.5;backdrop-filter:blur(8px); }
                     .cf-tx-chapter { font-size:10px;font-weight:700;color:#a78bfa;margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid rgba(124,58,237,0.15);text-transform:uppercase;letter-spacing:0.5px; }
                     .cf-tx-line { font-size:11px;color:rgba(255,255,255,0.85);line-height:1.5;margin:2px 0; }
                     .cf-tx-dim { color:rgba(255,255,255,0.3);font-size:10px; }
                     .cf-tx-ts { font-family:'SF Mono','Cascadia Code',monospace;font-size:9px;color:#a78bfa;opacity:0.6;margin-right:4px; }
-
+    
                     /* ═══ CHAPTER HUD — Floating overlay on video player ═══ */
                     .cf-chapter-hud { position:absolute;display:flex;align-items:center;gap:6px;padding:5px 8px 5px 6px;background:rgba(10,10,15,0.82);border-radius:10px;border:1px solid color-mix(in srgb, var(--cf-hud-accent, #7c3aed) 25%, transparent);backdrop-filter:blur(16px);z-index:60;pointer-events:auto;opacity:0;transition:opacity 0.3s, transform 0.2s;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.5);max-width:70%; }
                     .cf-chapter-hud[data-cf-pos="top-left"] { top:12px;left:12px; }
@@ -11838,10 +12005,10 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     .cf-hud-nav.cf-hud-disabled { opacity:0.2;pointer-events:none; }
                     /* Hide HUD when controls are hidden (fullscreen idle) */
                     .ytp-autohide .cf-chapter-hud { opacity:0 !important; }
-
+    
                     .cf-btn-active { animation:cfBtnPulse 1.5s infinite; }
                     @keyframes cfBtnPulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-
+    
                     .cf-search-row { display:flex;align-items:center;gap:6px;margin-bottom:8px; }
                     .cf-search-input { flex:1; }
                     .cf-search-count { font-size:10px;color:#a78bfa;white-space:nowrap;min-width:40px;text-align:right; }
@@ -11969,7 +12136,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     .cf-prompt-del:hover { color:rgba(239,68,68,0.6); }
                 `;
                 this._styleElement = document.createElement('style'); this._styleElement.id = 'chapterforge-styles'; this._styleElement.textContent = css; document.head.appendChild(this._styleElement);
-
+    
                 this._navHandler = () => {
                     this._onVideoChange();
                     if (window.location.pathname.startsWith('/feed/subscriptions')) {
@@ -11986,7 +12153,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     }
                 };
                 document.addEventListener('yt-navigate-finish', this._navHandler);
-
+    
                 this._clickHandler = (e) => {
                     if (!this._panelEl?.classList.contains('cf-visible')) return;
                     // Debounce: ignore clicks within 300ms of a panel render (DOM rebuild race condition)
@@ -12000,18 +12167,18 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                     this._panelEl.classList.remove('cf-visible');
                 };
                 document.addEventListener('click', this._clickHandler);
-
+    
                 this._resizeObserver = new ResizeObserver(() => { if (this._chapterData) this._renderProgressBarOverlay(); });
                 this._barObsHandler = () => { setTimeout(() => { const bar = document.querySelector('.ytp-progress-bar'); if (bar) this._resizeObserver.observe(bar); }, 1000); };
                 document.addEventListener('yt-navigate-finish', this._barObsHandler);
                 setTimeout(this._barObsHandler, 2000);
-
+    
                 if (window.location.pathname.startsWith('/watch')) setTimeout(() => this._onVideoChange(), 500);
                 if (window.location.pathname.startsWith('/feed/subscriptions')) setTimeout(() => this._injectSubscriptionsButton(), 1500);
                 if (appState.settings.cfLlmProvider === 'browserai') { appState.settings.cfLlmProvider = 'ollama'; settingsManager.save(appState.settings); showToast('Browser AI provider removed — switched to Ollama', '#f59e0b'); }
                 if (appState.settings?.cfDebugLog) console.log('[ChapterForge] v25.0 initialized — Provider:', appState.settings.cfLlmProvider || 'builtin');
             },
-
+    
             destroy() {
                 this._stopLiveTracking();
                 this._stopChapterTracking();
@@ -12029,7 +12196,7 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
                 document.getElementById('cf-batch-btn')?.remove();
                 document.querySelectorAll('.cf-bar-overlay,.cf-chapter-markers,.cf-chapter-label-row').forEach(el => el.remove());
             }
-
+    
         },
         // ── ChapterForge sub-features (shown in YTKit settings panel) ──
         {
@@ -12795,9 +12962,15 @@ Rules: start in seconds (integers), first at 0, 3-8 chapters, 2-6 POIs. Titles 3
             init() {}, destroy() {}
         },
         {
-            id: 'cfTranscriptMethod', name: 'Transcript Source', description: 'How to get the video transcript: captions first then Whisper, captions only, or Whisper only',
+            id: 'cfTranscriptMethod', name: 'Transcript Source', description: 'How to get the video transcript: captions, Whisper (in-browser), or WhisperServer (local GPU-accelerated transcription)',
             group: 'ChapterForge', icon: 'settings-2', type: 'select', dependsOn: 'chapterForge',
-            options: { 'auto': 'Auto (Captions -> Whisper)', 'captions-only': 'Captions Only', 'whisper-only': 'Whisper Only' },
+            options: { 'auto': 'Auto (Captions -> Whisper)', 'captions-only': 'Captions Only', 'whisper-only': 'Whisper Only (Browser)', 'vibe': 'WhisperServer (Local)' },
+            init() {}, destroy() {}
+        },
+        {
+            id: 'cfVibeEndpoint', name: 'WhisperServer Address', description: 'HTTP endpoint for local whisper.cpp server. Auto-starts on login if installed via the YTYT installer.',
+            group: 'ChapterForge', icon: 'settings-2', type: 'text', dependsOn: 'chapterForge',
+            placeholder: 'http://localhost:8178',
             init() {}, destroy() {}
         },
         {
