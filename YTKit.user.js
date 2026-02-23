@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YTKit
-// @version      1.0.4
+// @version      1.2.0
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -2013,6 +2013,7 @@
             cobaltUrl: 'https://cobalt.meowing.de/#',
             hideCollaborations: true,
             hideInfoPanels: true,
+            colorTheme: 'none',
 
         },
 
@@ -2052,7 +2053,7 @@
                 bookmarks: bookmarks,
                 exportVersion: 3,
                 exportDate: new Date().toISOString(),
-                ytkitVersion: '1.0.4'
+                ytkitVersion: '1.1.0'
             };
             return JSON.stringify(exportData, null, 2);
         },
@@ -2329,6 +2330,247 @@
 
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
         },
+        {
+            id: 'colorThemeManager',
+            name: 'Color Theme',
+            description: 'Apply a color palette across YouTube (dark mode only)',
+            group: 'Appearance',
+            icon: 'palette',
+            type: 'select',
+            options: {
+                'none': 'None (Default)',
+                'catppuccin-mocha': 'Catppuccin Mocha',
+                'styled-dark': 'Styled Dark',
+                'dracula': 'Dracula',
+                'nord': 'Nord',
+                'gruvbox': 'Gruvbox Dark',
+                'tokyo-night': 'Tokyo Night'
+            },
+            settingKey: 'colorTheme',
+            _styleElement: null,
+
+            _themes: {
+                'catppuccin-mocha': {
+                    base: '#1e1e2e', mantle: '#181825', crust: '#11111b',
+                    surface0: '#313244', surface1: '#45475a', surface2: '#585b70',
+                    text: '#cdd6f4', subtext0: '#a6adc8', subtext1: '#bac2de',
+                    overlay0: '#6c7086', overlay1: '#7f849c', overlay2: '#9399b2',
+                    accent: '#cba6f7', red: '#f38ba8', green: '#a6e3a1',
+                    blue: '#89b4fa', sapphire: '#74c7ec', peach: '#fab387',
+                    yellow: '#f9e2af', teal: '#94e2d5', lavender: '#b4befe'
+                },
+                'styled-dark': {
+                    base: '#090909', mantle: '#0c0c0c', crust: '#050505',
+                    surface0: '#121212', surface1: '#151515', surface2: '#202020',
+                    text: '#cccccc', subtext0: '#aaaaaa', subtext1: '#888888',
+                    overlay0: '#353535', overlay1: '#454545', overlay2: '#555555',
+                    accent: '#3ea6ff', red: '#ff0000', green: '#0c8a1d',
+                    blue: '#1563d7', sapphire: '#157ef5', peach: '#ff6600',
+                    yellow: '#d6e22b', teal: '#00bfa5', lavender: '#7f9cf3'
+                },
+                'dracula': {
+                    base: '#282a36', mantle: '#21222c', crust: '#191a21',
+                    surface0: '#343746', surface1: '#3e4154', surface2: '#4a4d62',
+                    text: '#f8f8f2', subtext0: '#bfbfbf', subtext1: '#a0a0a0',
+                    overlay0: '#6272a4', overlay1: '#7283b5', overlay2: '#8294c6',
+                    accent: '#bd93f9', red: '#ff5555', green: '#50fa7b',
+                    blue: '#8be9fd', sapphire: '#6272a4', peach: '#ffb86c',
+                    yellow: '#f1fa8c', teal: '#8be9fd', lavender: '#bd93f9'
+                },
+                'nord': {
+                    base: '#2e3440', mantle: '#272c36', crust: '#242933',
+                    surface0: '#3b4252', surface1: '#434c5e', surface2: '#4c566a',
+                    text: '#eceff4', subtext0: '#d8dee9', subtext1: '#c0c8d8',
+                    overlay0: '#616e88', overlay1: '#6e7d99', overlay2: '#7b8ca6',
+                    accent: '#88c0d0', red: '#bf616a', green: '#a3be8c',
+                    blue: '#81a1c1', sapphire: '#5e81ac', peach: '#d08770',
+                    yellow: '#ebcb8b', teal: '#8fbcbb', lavender: '#b48ead'
+                },
+                'gruvbox': {
+                    base: '#282828', mantle: '#1d2021', crust: '#141617',
+                    surface0: '#3c3836', surface1: '#504945', surface2: '#665c54',
+                    text: '#ebdbb2', subtext0: '#d5c4a1', subtext1: '#bdae93',
+                    overlay0: '#7c6f64', overlay1: '#8c7e73', overlay2: '#a89984',
+                    accent: '#fe8019', red: '#fb4934', green: '#b8bb26',
+                    blue: '#83a598', sapphire: '#458588', peach: '#d65d0e',
+                    yellow: '#fabd2f', teal: '#8ec07c', lavender: '#d3869b'
+                },
+                'tokyo-night': {
+                    base: '#1a1b26', mantle: '#16161e', crust: '#12121a',
+                    surface0: '#24283b', surface1: '#2f3447', surface2: '#3b4261',
+                    text: '#c0caf5', subtext0: '#a9b1d6', subtext1: '#9aa5ce',
+                    overlay0: '#565f89', overlay1: '#626a94', overlay2: '#6e76a0',
+                    accent: '#7aa2f7', red: '#f7768e', green: '#9ece6a',
+                    blue: '#7dcfff', sapphire: '#2ac3de', peach: '#ff9e64',
+                    yellow: '#e0af68', teal: '#73daca', lavender: '#bb9af7'
+                }
+            },
+
+            _buildCSS(t) {
+                return `
+html[dark], [dark], :root[dark],
+html[darker-dark-theme-deprecate], [darker-dark-theme-deprecate] {
+    --yt-spec-base-background: ${t.base} !important;
+    --yt-spec-raised-background: ${t.base} !important;
+    --yt-spec-menu-background: ${t.mantle} !important;
+    --yt-spec-inverted-background: ${t.text} !important;
+    --yt-spec-additive-background: ${t.surface0} !important;
+    --yt-spec-outline: ${t.surface0} !important;
+    --yt-spec-text-primary: ${t.text} !important;
+    --yt-spec-text-secondary: ${t.subtext0} !important;
+    --yt-spec-text-disabled: ${t.subtext1} !important;
+    --yt-spec-text-primary-inverse: ${t.crust} !important;
+    --yt-spec-icon-inactive: ${t.text} !important;
+    --yt-spec-icon-disabled: ${t.overlay1} !important;
+    --yt-spec-call-to-action: ${t.accent} !important;
+    --yt-spec-call-to-action-inverse: ${t.accent} !important;
+    --yt-spec-brand-icon-active: ${t.accent} !important;
+    --yt-spec-brand-button-background: ${t.accent} !important;
+    --yt-spec-brand-link-text: ${t.sapphire} !important;
+    --yt-spec-badge-chip-background: ${t.surface0} !important;
+    --yt-spec-button-chip-background-hover: ${t.surface1} !important;
+    --yt-spec-touch-response: ${t.surface0} !important;
+    --yt-spec-general-background-a: ${t.base} !important;
+    --yt-spec-general-background-b: ${t.base} !important;
+    --yt-spec-general-background-c: ${t.crust} !important;
+    --yt-spec-brand-background-solid: ${t.base} !important;
+    --yt-spec-brand-background-primary: ${t.base} !important;
+    --yt-spec-brand-background-secondary: ${t.mantle} !important;
+    --yt-spec-snackbar-background: ${t.mantle} !important;
+    --yt-spec-10-percent-layer: ${t.surface1} !important;
+    --yt-spec-mono-tonal-hover: ${t.surface1} !important;
+    --yt-spec-mono-filled-hover: ${t.surface1} !important;
+    --yt-spec-static-brand-red: ${t.accent} !important;
+    --yt-spec-static-overlay-background-solid: ${t.crust} !important;
+    --yt-spec-static-overlay-background-heavy: ${t.crust} !important;
+    --yt-spec-static-overlay-text-primary: ${t.text} !important;
+    --yt-spec-error-indicator: ${t.red} !important;
+    --yt-spec-themed-blue: ${t.accent} !important;
+    --yt-spec-themed-green: ${t.green} !important;
+    --yt-spec-verified-badge-background: ${t.overlay0} !important;
+    --yt-spec-wordmark-text: ${t.text} !important;
+    --yt-spec-filled-button-text: ${t.text} !important;
+    --yt-spec-selected-nav-text: ${t.text} !important;
+    --yt-spec-suggested-action: ${t.accent}33 !important;
+    --yt-spec-brand-button-background-hover: ${t.accent} !important;
+    --yt-spec-call-to-action-hover: ${t.accent} !important;
+    --yt-spec-shadow: ${t.crust}bf !important;
+    --yt-spec-white-1: ${t.text} !important;
+    --yt-spec-grey-1: ${t.text} !important;
+    --yt-spec-grey-2: ${t.subtext0} !important;
+    --yt-lightsource-section1-color: ${t.base} !important;
+    --yt-lightsource-section2-color: ${t.surface0} !important;
+    --yt-lightsource-section3-color: ${t.surface1} !important;
+    --yt-lightsource-section4-color: ${t.surface2} !important;
+    --yt-lightsource-primary-title-color: ${t.text} !important;
+    --yt-lightsource-secondary-title-color: ${t.subtext0} !important;
+    --yt-brand-youtube-red: ${t.accent} !important;
+    --yt-brand-medium-red: ${t.accent} !important;
+    --yt-spec-red-indicator: ${t.accent} !important;
+    --yt-spec-red-70: ${t.red} !important;
+    --yt-spec-light-green: ${t.green} !important;
+    --yt-spec-dark-green: ${t.green} !important;
+    --yt-spec-light-blue: ${t.blue} !important;
+    --yt-spec-dark-blue: ${t.sapphire} !important;
+    --yt-spec-yellow: ${t.peach} !important;
+    --yt-endpoint-color: ${t.accent} !important;
+    --yt-endpoint-visited-color: ${t.accent} !important;
+    --yt-endpoint-hover-color: ${t.accent} !important;
+    --paper-dialog-background-color: ${t.mantle} !important;
+    --iron-icon-fill-color: ${t.text} !important;
+    --ytd-searchbox-background: ${t.base} !important;
+    --ytd-searchbox-border-color: ${t.surface0} !important;
+    --ytd-searchbox-legacy-border-color: ${t.surface0} !important;
+    --ytd-searchbox-legacy-button-color: ${t.mantle} !important;
+    --ytd-searchbox-legacy-button-border-color: ${t.surface0} !important;
+    --ytd-searchbox-text-color: ${t.text} !important;
+    --yt-live-chat-background-color: ${t.base} !important;
+    --yt-live-chat-secondary-background-color: ${t.surface1} !important;
+    --yt-live-chat-secondary-text-color: ${t.subtext0} !important;
+    --yt-live-chat-vem-background-color: ${t.mantle} !important;
+    --yt-spec-frosted-glass-desktop: ${t.base} !important;
+    --yt-frosted-glass-desktop: ${t.base} !important;
+    --yt-spec-static-ad-yellow: ${t.peach} !important;
+    --yt-spec-static-grey: ${t.subtext0} !important;
+    --paper-tooltip-background: ${t.overlay0} !important;
+    --paper-tooltip-text-color: ${t.text} !important;
+}
+/* Progress bar keeps red for visibility */
+html[dark] .ytp-play-progress.ytp-swatch-background-color,
+html[dark] .ytp-swatch-background-color { background: ${t.accent} !important; }
+/* Frosted glass header */
+html[dark] #background.ytd-masthead,
+html[dark] #frosted-glass { background: ${t.base} !important; }
+/* Active chips */
+html[dark] .ytChipShapeActive,
+html[dark] yt-chip-cloud-chip-renderer[selected] { background: ${t.accent} !important; color: ${t.crust} !important; }
+html[dark] .ytChipShapeInactive { background: ${t.surface0} !important; color: ${t.text} !important; }
+/* Buttons */
+html[dark] .yt-spec-button-shape-next--mono.yt-spec-button-shape-next--tonal { background-color: ${t.surface0} !important; color: ${t.text} !important; }
+html[dark] .yt-spec-button-shape-next--mono.yt-spec-button-shape-next--filled { background-color: ${t.accent} !important; color: ${t.crust} !important; }
+html[dark] .yt-spec-button-shape-next--mono.yt-spec-button-shape-next--outline { border-color: ${t.surface2} !important; color: ${t.text} !important; }
+/* Sidebar */
+html[dark] #guide-inner-content { background: ${t.mantle} !important; }
+html[dark] ytd-mini-guide-renderer { background: ${t.mantle} !important; }
+/* Thumbnails */
+html[dark] .badge-shape-wiz--thumbnail-default { color: ${t.text} !important; background: ${t.crust}cc !important; }
+/* Expandable metadata chapters */
+html[dark] ytd-expandable-metadata-renderer {
+    --yt-lightsource-section1-color: ${t.base} !important;
+    --yt-lightsource-section2-color: ${t.surface0} !important;
+}
+/* Channel page tabs */
+html[dark] .yt-tab-shape-wiz__tab { color: ${t.subtext1} !important; }
+html[dark] .yt-tab-shape-wiz__tab--tab-selected { color: ${t.text} !important; }
+html[dark] .yt-tab-group-shape-wiz__slider { background-color: ${t.text} !important; }
+/* Category pills / chips */
+html[dark] yt-chip-cloud-chip-renderer[selected] #chip-container { background: initial !important; }
+/* Video player live badge */
+html[dark] .ytp-live-badge[disabled]::before { background: ${t.accent} !important; }
+/* Subscribe button */
+html[dark] .ytp-sb-subscribe,
+html[dark] ytd-subscribe-button-renderer:not([subscribed]) button,
+html[dark] yt-subscribe-button-view-model:not([subscribed]) button { background: ${t.accent}4d !important; color: ${t.text} !important; }
+html[dark] ytd-subscribe-button-renderer[subscribed] button { background: ${t.surface1} !important; color: ${t.text} !important; }
+/* Comment author badge */
+html[dark] ytd-author-comment-badge-renderer:not([style*="transparent"]) {
+    --ytd-author-comment-badge-background-color: ${t.surface0} !important;
+    --ytd-author-comment-badge-icon-color: ${t.text} !important;
+}
+/* Playlist panel */
+html[dark] ytd-playlist-panel-renderer[collapsible][collapsed][use-color-palette] .header.ytd-playlist-panel-renderer { background-color: ${t.base} !important; }
+html[dark] ytd-playlist-panel-video-renderer {
+    --yt-lightsource-section2-color: ${t.surface1} !important;
+    --yt-active-playlist-panel-background-color: ${t.surface0} !important;
+}
+/* Popup dialogs */
+html[dark] .yt-spec-dialog-layout { background-color: ${t.mantle} !important; }
+/* Video player tooltips & panels */
+html[dark] .ytp-popup { background: ${t.surface0}e6 !important; }
+html[dark] .ytp-panel-menu, html[dark] .ytp-menuitem-label,
+html[dark] .ytp-menuitem-content, html[dark] .ytp-panel-header { color: ${t.text} !important; }
+html[dark] .ytp-panel-header { border-bottom-color: ${t.surface2} !important; }
+/* Searchbox focus */
+html[dark] ytd-searchbox[has-focus] #container.ytd-searchbox { border-color: ${t.accent} !important; }
+html[dark] .ytSearchboxComponentInputBoxHasFocusDark { border-color: ${t.accent} !important; }
+html[dark] .ytSearchboxComponentSuggestionsContainerDark { background: ${t.base} !important; border-color: ${t.base} !important; }
+html[dark] .ytSearchboxComponentSearchButtonDark { background: ${t.surface0} !important; border-color: ${t.surface0} !important; }
+/* Vertical ellipsis menu */
+html[dark] .ytListViewModelHost { background-color: ${t.mantle} !important; color: ${t.text} !important; }
+/* Red fill icons -> accent */
+html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] { fill: ${t.accent} !important; }
+`;
+            },
+
+            init() {
+                const theme = appState.settings.colorTheme || 'none';
+                if (theme === 'none' || !this._themes[theme]) return;
+                const css = this._buildCSS(this._themes[theme]);
+                this._styleElement = injectStyle(css, this.id, true);
+            },
+
+            destroy() { this._styleElement?.remove(); this._styleElement = null; }
+        },
         cssFeature('noAmbientMode', 'Disable Ambient Mode', 'Turn off the glowing background effect that matches video colors', 'Appearance', 'sun-dim',
             `#cinematics, #cinematics-container,
                     .ytp-autonav-endscreen-upnext-cinematics,
@@ -2355,7 +2597,7 @@
             init() {
                 // CSS selectors are scoped to ytd-watch-metadata — safe to inject globally
                 // (removing path guard so styles persist across SPA navigations)
-                const css = `ytd-watch-metadata[style*="--yt-saturated"]{--yt-saturated-base-background:transparent !important;--yt-saturated-raised-background:transparent !important;--yt-saturated-additive-background:transparent !important;--yt-saturated-text-primary:rgba(255,255,255,0.95) !important;--yt-saturated-text-secondary:rgba(255,255,255,0.6) !important;--yt-saturated-overlay-background:transparent !important}ytd-watch-metadata h1.ytd-watch-metadata yt-formatted-string{font-size:1.55rem !important;line-height:2rem !important;font-weight:700 !important;letter-spacing:-0.025em !important;color:rgba(255,255,255,0.97) !important;text-shadow:0 1px 2px rgba(0,0,0,0.2) !important}ytd-watch-metadata #title.ytd-watch-metadata{margin-bottom:2px !important}ytd-watch-metadata #top-row{display:flex !important;flex-wrap:nowrap !important;align-items:center !important;gap:0 !important;margin-bottom:6px !important;padding:10px 0 8px !important}ytd-watch-metadata[actions-on-separate-line] #top-row{flex-wrap:wrap !important}#owner.ytd-watch-metadata{display:flex !important;align-items:center !important;gap:8px !important;margin-bottom:0 !important;padding:0 !important;flex-shrink:0 !important;margin-right:auto !important}#owner.ytd-watch-metadata>#ytkit-watch-btn,#owner.ytd-watch-metadata>#ytkit-page-btn-watch{order:99 !important}#owner.ytd-watch-metadata ytd-video-owner-renderer #avatar{width:32px !important;height:32px !important;margin-right:0 !important}#owner.ytd-watch-metadata ytd-video-owner-renderer #avatar img{width:32px !important;height:32px !important;border-radius:50% !important;border:1.5px solid rgba(167,139,250,0.2) !important}#owner.ytd-watch-metadata ytd-video-owner-renderer{display:flex !important;align-items:center !important;gap:8px !important;min-width:0 !important}ytd-video-owner-renderer #upload-info{gap:0 !important}ytd-video-owner-renderer #channel-name{font-size:13px !important;font-weight:600 !important}ytd-video-owner-renderer #owner-sub-count{font-size:11px !important;opacity:0.4 !important;line-height:1.2 !important}ytd-watch-metadata #subscribe-button{margin:0 !important}ytd-watch-metadata #subscribe-button .yt-spec-button-shape-next,#notification-preference-button .yt-spec-button-shape-next{height:28px !important;font-size:11px !important;padding:0 12px !important;border-radius:14px !important;min-height:unset !important}#notification-preference-button .yt-spec-button-shape-next{padding:0 6px !important}yt-animated-action .ytAnimatedActionLottie,yt-animated-action .ytAnimatedActionContentWithBackground .ytAnimatedActionLottie{display:none !important}ytd-watch-metadata #actions.ytd-watch-metadata,#actions.item.style-scope.ytd-watch-metadata{flex:0 0 auto !important;min-width:0 !important;margin-left:auto !important}ytd-watch-metadata #actions-inner{display:flex !important;flex-wrap:wrap !important;gap:5px !important;align-items:center !important;justify-content:flex-end !important}#menu.ytd-watch-metadata{margin:0 !important}#top-level-buttons-computed.style-scope.ytd-menu-renderer{display:flex !important;flex-wrap:wrap !important;gap:5px !important;align-items:center !important}ytd-watch-metadata #actions ytd-menu-renderer>yt-icon-button,ytd-watch-metadata #actions ytd-menu-renderer>yt-button-shape:last-child{display:none !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next{height:30px !important;min-height:unset !important;min-width:unset !important;padding:0 12px !important;font-size:12px !important;border-radius:6px !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}segmented-like-dislike-button-view-model .ytSegmentedLikeDislikeButtonViewModelSegmentedButtonsWrapper{gap:5px !important}ytd-watch-metadata .yt-spec-button-shape-next--segmented-start,ytd-watch-metadata .yt-spec-button-shape-next--segmented-end{border-radius:6px !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next__icon{margin-right:3px !important}ytd-watch-metadata #top-level-buttons-computed yt-icon,ytd-watch-metadata #top-level-buttons-computed .ytIconWrapperHost{width:16px !important;height:16px !important}dislike-button-view-model .yt-spec-button-shape-next{padding:0 8px !important}button[id^="downloadBtn"]{height:30px !important;min-height:unset !important;padding:0 12px !important;font-size:12px !important;border-radius:6px !important;margin-left:0 !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}button[id^="downloadBtn"]:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}.ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn{height:30px !important;min-height:unset !important;padding:0 10px !important;font-size:12px !important;border-radius:6px !important;margin-left:0 !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;font-family:"Roboto","Arial",sans-serif !important;gap:4px !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}.ytkit-vlc-btn:hover,.ytkit-local-dl-btn:hover,.ytkit-mp3-dl-btn:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}.ytkit-vlc-btn svg,.ytkit-local-dl-btn svg,.ytkit-mp3-dl-btn svg{width:14px !important;height:14px !important}.ytkit-vlc-btn svg path,.ytkit-local-dl-btn svg path,.ytkit-mp3-dl-btn svg path{fill:currentColor !important}.ytkit-pc-wrap{margin-left:0 !important}.ytkit-pc-wrap .ytkit-pc-x{top:-4px !important;right:-4px !important;width:14px !important;height:14px !important;font-size:9px !important}ytd-watch-flexy .ytkit-trigger-btn{width:26px !important;height:26px !important;padding:4px !important;background:transparent !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:6px !important;opacity:0.35 !important;transition:opacity 0.15s,background 0.15s !important}ytd-watch-flexy .ytkit-trigger-btn:hover{opacity:0.9 !important;background:rgba(255,255,255,0.08) !important;border-color:rgba(255,255,255,0.12) !important}ytd-watch-metadata #description.ytd-watch-metadata,ytd-watch-metadata ytd-text-inline-expander{background:rgba(255,255,255,0.02) !important;border:1px solid rgba(255,255,255,0.04) !important;border-left:2px solid rgba(167,139,250,0.25) !important;border-radius:6px !important;padding:10px 14px !important;margin-top:6px !important;transition:border-color 0.2s ease,background 0.2s ease !important}ytd-watch-metadata #description.ytd-watch-metadata:hover,ytd-watch-metadata ytd-text-inline-expander:hover{background:rgba(255,255,255,0.035) !important;border-color:rgba(255,255,255,0.06) !important;border-left-color:rgba(167,139,250,0.4) !important}ytd-watch-metadata #description-inner{margin:0 !important}ytd-watch-metadata #description tp-yt-paper-button#expand,ytd-watch-metadata #description tp-yt-paper-button#collapse,ytd-text-inline-expander #expand,ytd-text-inline-expander #collapse{font-size:12px !important;color:rgba(167,139,250,0.5) !important;text-transform:none !important;margin-top:6px !important;padding:2px 0 !important}ytd-watch-metadata #description-inline-expander #snippet{font-size:13px !important;line-height:1.6 !important;color:rgba(255,255,255,0.55) !important}ytd-watch-metadata #info-container{font-size:12px !important;color:rgba(255,255,255,0.35) !important}ytd-watch-metadata #info span,ytd-watch-metadata #info-text{font-size:12px !important}#bottom-row.ytd-watch-metadata{margin-top:0 !important;margin-right:0 !important;gap:4px !important;padding:4px 0 !important}ytd-engagement-panel-title-header-renderer{padding:8px 16px !important}#below.ytd-watch-flexy{padding-bottom:12px !important}ytd-watch-metadata{min-height:unset !important}ytd-video-description-infocards-section-renderer{padding:8px 0 !important;margin-top:8px !important}ytd-video-description-music-section-renderer,ytd-video-description-transcript-section-renderer{padding:6px 0 !important}ytd-comments-header-renderer{min-height:0 !important;padding:12px 0 8px !important;margin:8px 0 4px 0 !important;border-top:1px solid rgba(255,255,255,0.05) !important}ytd-comments-header-renderer #count{font-size:13px !important;font-weight:600 !important;color:rgba(255,255,255,0.5) !important;letter-spacing:-0.01em !important}ytd-comments-header-renderer #sort-menu{opacity:0.5 !important;transition:opacity 0.2s !important}ytd-comments-header-renderer #sort-menu:hover{opacity:1 !important}ytd-comments-header-renderer #comments-panel-button,ytd-comments-header-renderer #leading-section,ytd-comments-header-renderer #title{display:none !important}ytd-comments-header-renderer #additional-section{display:none !important}ytd-comments-header-renderer ytd-comment-simplebox-renderer{margin:0 0 8px 0 !important;padding:0 !important}ytd-comment-simplebox-renderer #placeholder-area{background:rgba(255,255,255,0.03) !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:8px !important;padding:10px 14px !important;font-size:13px !important;color:rgba(255,255,255,0.3) !important;transition:border-color 0.2s !important}ytd-comment-simplebox-renderer #placeholder-area:hover{border-color:rgba(167,139,250,0.25) !important}ytd-comment-simplebox-renderer #avatar{width:28px !important;height:28px !important}ytd-comment-simplebox-renderer #avatar img{width:28px !important;height:28px !important;border-radius:50% !important}h1.style-scope.ytd-watch-metadata{margin-top:20px !important;font-weight:900 !important;font-style:normal !important;text-align:center !important;text-transform:capitalize !important;max-width:100% !important;overflow:hidden !important;text-overflow:ellipsis !important}yt-formatted-string.style-scope.ytd-watch-metadata{margin-bottom:0 !important;word-break:break-word !important;overflow-wrap:break-word !important}#primary.ytd-watch-flexy{max-width:100% !important;overflow:hidden !important}ytd-watch-metadata{max-width:100% !important;overflow:hidden !important}#title.ytd-watch-metadata{max-width:100% !important;overflow:hidden !important}div.yt-spec-touch-feedback-shape__fill{display:none !important}div.yt-spec-touch-feedback-shape__stroke{display:none !important}yt-touch-feedback-shape.yt-spec-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response{display:none !important}ytd-watch-metadata tp-yt-paper-button.dropdown-trigger.style-scope.yt-dropdown-menu{display:none !important}yt-formatted-string.count-text.style-scope.ytd-comments-header-renderer{display:none !important}yt-formatted-string.style-scope.ytd-video-owner-renderer{display:none !important}ytd-watch-flexy button.ytkit-trigger-btn{display:none !important}ytd-watch-flexy yt-icon.style-scope.ytd-logo{display:none !important}div.item.style-scope.ytd-watch-metadata{display:none !important}ytd-watch-metadata #info-container span.style-scope.yt-formatted-string{display:none !important}#actions.ytd-watch-metadata button.yt-spec-button-shape-next.yt-spec-button-shape-next--tonal.yt-spec-button-shape-next--mono.yt-spec-button-shape-next--size-m.yt-spec-button-shape-next--icon-leading.yt-spec-button-shape-next--segmented-start.yt-spec-button-shape-next--enable-backdrop-filter-experiment{text-align:right !important}ytd-comment-view-model span.style-scope.yt-formatted-string,ytd-comment-renderer span.style-scope.yt-formatted-string,ytd-comment-thread-renderer span.style-scope.yt-formatted-string,ytd-comments-header-renderer span.style-scope.yt-formatted-string,ytd-comment-simplebox-renderer span.style-scope.yt-formatted-string{display:inline !important}ytd-comment-view-model yt-formatted-string,ytd-comment-renderer yt-formatted-string{display:inline !important}ytd-comments#comments{display:block !important;visibility:visible !important}ytd-comments#comments ytd-item-section-renderer{display:block !important}div.ytkit-pm-header{display:none !important}button.ytkit-pm-card.on{display:none !important}div.ytkit-pm-footer{display:none !important}div.ytkit-pm-grid{display:none !important}div.thread-hitbox.style-scope.ytd-comment-thread-renderer{display:none !important}`;
+                const css = `ytd-watch-metadata[style*="--yt-saturated"]{--yt-saturated-base-background:transparent !important;--yt-saturated-raised-background:transparent !important;--yt-saturated-additive-background:transparent !important;--yt-saturated-text-primary:rgba(255,255,255,0.95) !important;--yt-saturated-text-secondary:rgba(255,255,255,0.6) !important;--yt-saturated-overlay-background:transparent !important}ytd-watch-metadata h1.ytd-watch-metadata yt-formatted-string{font-size:1.55rem !important;line-height:2rem !important;font-weight:700 !important;letter-spacing:-0.025em !important;color:rgba(255,255,255,0.97) !important;text-shadow:0 1px 2px rgba(0,0,0,0.2) !important}ytd-watch-metadata #title.ytd-watch-metadata{margin-bottom:2px !important}ytd-watch-metadata #top-row{display:flex !important;flex-wrap:nowrap !important;align-items:center !important;gap:0 !important;margin-bottom:6px !important;padding:10px 0 8px !important}ytd-watch-metadata[actions-on-separate-line] #top-row{flex-wrap:wrap !important}#owner.ytd-watch-metadata{display:flex !important;align-items:center !important;gap:8px !important;margin-bottom:0 !important;padding:0 !important;flex-shrink:0 !important;margin-right:auto !important}#owner.ytd-watch-metadata>#ytkit-watch-btn,#owner.ytd-watch-metadata>#ytkit-page-btn-watch{order:99 !important}#owner.ytd-watch-metadata ytd-video-owner-renderer #avatar{width:32px !important;height:32px !important;margin-right:0 !important}#owner.ytd-watch-metadata ytd-video-owner-renderer #avatar img{width:32px !important;height:32px !important;border-radius:50% !important;border:1.5px solid rgba(167,139,250,0.2) !important}#owner.ytd-watch-metadata ytd-video-owner-renderer{display:flex !important;align-items:center !important;gap:8px !important;min-width:0 !important}ytd-video-owner-renderer #upload-info{gap:0 !important}ytd-video-owner-renderer #channel-name{font-size:13px !important;font-weight:600 !important}ytd-video-owner-renderer #owner-sub-count{font-size:11px !important;opacity:0.4 !important;line-height:1.2 !important}ytd-watch-metadata #subscribe-button{margin:0 !important}ytd-watch-metadata #subscribe-button .yt-spec-button-shape-next,#notification-preference-button .yt-spec-button-shape-next{height:28px !important;font-size:11px !important;padding:0 12px !important;border-radius:14px !important;min-height:unset !important}#notification-preference-button .yt-spec-button-shape-next{padding:0 6px !important}yt-animated-action .ytAnimatedActionLottie,yt-animated-action .ytAnimatedActionContentWithBackground .ytAnimatedActionLottie{display:none !important}ytd-watch-metadata #actions.ytd-watch-metadata,#actions.item.style-scope.ytd-watch-metadata{flex:0 0 auto !important;min-width:0 !important;margin-left:auto !important}ytd-watch-metadata #actions-inner{display:flex !important;flex-wrap:wrap !important;gap:5px !important;align-items:center !important;justify-content:flex-end !important}#menu.ytd-watch-metadata{margin:0 !important}#top-level-buttons-computed.style-scope.ytd-menu-renderer{display:flex !important;flex-wrap:wrap !important;gap:5px !important;align-items:center !important}ytd-watch-metadata #actions ytd-menu-renderer>yt-icon-button,ytd-watch-metadata #actions ytd-menu-renderer>yt-button-shape:last-child{display:none !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next{height:30px !important;min-height:unset !important;min-width:unset !important;padding:0 12px !important;font-size:12px !important;border-radius:6px !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}segmented-like-dislike-button-view-model .ytSegmentedLikeDislikeButtonViewModelSegmentedButtonsWrapper{gap:5px !important}ytd-watch-metadata .yt-spec-button-shape-next--segmented-start,ytd-watch-metadata .yt-spec-button-shape-next--segmented-end{border-radius:6px !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next__icon{margin-right:3px !important}ytd-watch-metadata #top-level-buttons-computed yt-icon,ytd-watch-metadata #top-level-buttons-computed .ytIconWrapperHost{width:16px !important;height:16px !important}dislike-button-view-model .yt-spec-button-shape-next{padding:0 8px !important}button[id^="downloadBtn"]{height:30px !important;min-height:unset !important;padding:0 12px !important;font-size:12px !important;border-radius:6px !important;margin-left:0 !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}button[id^="downloadBtn"]:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}.ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn{height:30px !important;min-height:unset !important;padding:0 10px !important;font-size:12px !important;border-radius:6px !important;margin-left:0 !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;font-family:"Roboto","Arial",sans-serif !important;gap:4px !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}.ytkit-vlc-btn:hover,.ytkit-local-dl-btn:hover,.ytkit-mp3-dl-btn:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}.ytkit-vlc-btn svg,.ytkit-local-dl-btn svg,.ytkit-mp3-dl-btn svg{width:14px !important;height:14px !important}.ytkit-vlc-btn svg path,.ytkit-local-dl-btn svg path,.ytkit-mp3-dl-btn svg path{fill:currentColor !important}.ytkit-pc-wrap{margin-left:0 !important}.ytkit-pc-wrap .ytkit-pc-x{top:-4px !important;right:-4px !important;width:14px !important;height:14px !important;font-size:9px !important}ytd-watch-flexy .ytkit-trigger-btn{width:26px !important;height:26px !important;padding:4px !important;background:transparent !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:6px !important;opacity:0.35 !important;transition:opacity 0.15s,background 0.15s !important}ytd-watch-flexy .ytkit-trigger-btn:hover{opacity:0.9 !important;background:rgba(255,255,255,0.08) !important;border-color:rgba(255,255,255,0.12) !important}ytd-watch-metadata #description.ytd-watch-metadata,ytd-watch-metadata ytd-text-inline-expander{background:rgba(255,255,255,0.02) !important;border:1px solid rgba(255,255,255,0.04) !important;border-left:2px solid rgba(167,139,250,0.25) !important;border-radius:6px !important;padding:10px 14px !important;margin-top:6px !important;transition:border-color 0.2s ease,background 0.2s ease !important}ytd-watch-metadata #description.ytd-watch-metadata:hover,ytd-watch-metadata ytd-text-inline-expander:hover{background:rgba(255,255,255,0.035) !important;border-color:rgba(255,255,255,0.06) !important;border-left-color:rgba(167,139,250,0.4) !important}ytd-watch-metadata #description-inner{margin:0 !important}ytd-watch-metadata #description tp-yt-paper-button#expand,ytd-watch-metadata #description tp-yt-paper-button#collapse,ytd-text-inline-expander #expand,ytd-text-inline-expander #collapse{font-size:12px !important;color:rgba(167,139,250,0.5) !important;text-transform:none !important;margin-top:6px !important;padding:2px 0 !important}ytd-watch-metadata #description-inline-expander #snippet{font-size:13px !important;line-height:1.6 !important;color:rgba(255,255,255,0.55) !important}ytd-watch-metadata #info-container{font-size:12px !important;color:rgba(255,255,255,0.35) !important}ytd-watch-metadata #info span,ytd-watch-metadata #info-text{font-size:12px !important}#bottom-row.ytd-watch-metadata{margin-top:0 !important;margin-right:0 !important;gap:4px !important;padding:4px 0 !important}ytd-engagement-panel-title-header-renderer{padding:8px 16px !important}#below.ytd-watch-flexy{padding-bottom:12px !important}ytd-watch-metadata{min-height:unset !important}ytd-video-description-infocards-section-renderer{padding:8px 0 !important;margin-top:8px !important}ytd-video-description-music-section-renderer,ytd-video-description-transcript-section-renderer{padding:6px 0 !important}ytd-comments-header-renderer{min-height:0 !important;padding:12px 0 8px !important;margin:8px 0 4px 0 !important;border-top:1px solid rgba(255,255,255,0.05) !important}ytd-comments-header-renderer #count{font-size:13px !important;font-weight:600 !important;color:rgba(255,255,255,0.5) !important;letter-spacing:-0.01em !important}ytd-comments-header-renderer #sort-menu{opacity:0.5 !important;transition:opacity 0.2s !important}ytd-comments-header-renderer #sort-menu:hover{opacity:1 !important}ytd-comments-header-renderer #comments-panel-button,ytd-comments-header-renderer #leading-section,ytd-comments-header-renderer #title{display:none !important}ytd-comments-header-renderer #additional-section{display:none !important}ytd-comments-header-renderer ytd-comment-simplebox-renderer{margin:0 0 8px 0 !important;padding:0 !important}ytd-comment-simplebox-renderer #placeholder-area{background:rgba(255,255,255,0.03) !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:8px !important;padding:10px 14px !important;font-size:13px !important;color:rgba(255,255,255,0.3) !important;transition:border-color 0.2s !important}ytd-comment-simplebox-renderer #placeholder-area:hover{border-color:rgba(167,139,250,0.25) !important}ytd-comment-simplebox-renderer #avatar{width:28px !important;height:28px !important}ytd-comment-simplebox-renderer #avatar img{width:28px !important;height:28px !important;border-radius:50% !important}h1.style-scope.ytd-watch-metadata{margin-top:20px !important;font-weight:900 !important;font-style:normal !important;text-align:center !important;text-transform:capitalize !important;max-width:100% !important;overflow:hidden !important;text-overflow:ellipsis !important}yt-formatted-string.style-scope.ytd-watch-metadata{margin-bottom:0 !important;word-break:break-word !important;overflow-wrap:break-word !important}#primary.ytd-watch-flexy{max-width:100% !important;overflow:hidden !important}ytd-watch-metadata{max-width:100% !important;overflow:hidden !important}#title.ytd-watch-metadata{max-width:100% !important;overflow:hidden !important}div.yt-spec-touch-feedback-shape__fill{display:none !important}div.yt-spec-touch-feedback-shape__stroke{display:none !important}yt-touch-feedback-shape.yt-spec-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response{display:none !important}ytd-watch-metadata tp-yt-paper-button.dropdown-trigger.style-scope.yt-dropdown-menu{display:none !important}yt-formatted-string.count-text.style-scope.ytd-comments-header-renderer{display:none !important}yt-formatted-string.style-scope.ytd-video-owner-renderer{display:none !important}ytd-watch-flexy button.ytkit-trigger-btn{display:none !important}ytd-watch-flexy yt-icon.style-scope.ytd-logo{display:none !important}div.item.style-scope.ytd-watch-metadata{display:none !important}ytd-watch-metadata #info-container span.style-scope.yt-formatted-string{display:none !important}#actions.ytd-watch-metadata button.yt-spec-button-shape-next.yt-spec-button-shape-next--tonal.yt-spec-button-shape-next--mono.yt-spec-button-shape-next--size-m.yt-spec-button-shape-next--icon-leading.yt-spec-button-shape-next--segmented-start.yt-spec-button-shape-next--enable-backdrop-filter-experiment{text-align:right !important}ytd-comment-view-model span.style-scope.yt-formatted-string,ytd-comment-renderer span.style-scope.yt-formatted-string,ytd-comment-thread-renderer span.style-scope.yt-formatted-string,ytd-comments-header-renderer span.style-scope.yt-formatted-string,ytd-comment-simplebox-renderer span.style-scope.yt-formatted-string{display:inline !important}ytd-comment-view-model yt-formatted-string,ytd-comment-renderer yt-formatted-string{display:inline !important}ytd-comments#comments{display:block !important;visibility:visible !important}ytd-comments#comments ytd-item-section-renderer{display:block !important}div.thread-hitbox.style-scope.ytd-comment-thread-renderer{display:none !important}`;
                 this._styleElement = injectStyle(css, this.id, true);
             },
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
@@ -3319,12 +3561,21 @@
                     return (this._positionedEls || []).some(el => el.contains(target));
                 };
 
-                // Wheel/touch on wrapper → open/close comments panel
+                // Wheel/touch on wrapper → open/close comments panel, or passthrough scroll
                 this._wheelHandler = (e) => {
                     if (!this._isActive) return;
                     if (!this._isSplit && e.deltaY > 0) { this._expandSplit(); return; }
-                    if (this._isSplit && e.deltaY < 0 && !isInRightContent(e.target)) {
-                        this._collapseSplit(false);
+                    if (this._isSplit && !isInRightContent(e.target)) {
+                        // Forward scroll to the right panel
+                        const scrollEl = this._scrollTarget;
+                        if (scrollEl) {
+                            // Collapse only when scrolled to top and scrolling up
+                            if (e.deltaY < 0 && scrollEl.scrollTop <= 0) {
+                                this._collapseSplit(false);
+                                return;
+                            }
+                            scrollEl.scrollTop += e.deltaY;
+                        }
                     }
                 };
                 this._touchStartY = 0;
@@ -3333,8 +3584,17 @@
                     if (!this._isActive) return;
                     const t = e.touches[0]; if (!t) return;
                     if (!this._isSplit && this._touchStartY - t.clientY > 30) { this._expandSplit(); return; }
-                    if (this._isSplit && t.clientY - this._touchStartY > 40 && !isInRightContent(e.target)) {
-                        this._collapseSplit(false);
+                    if (this._isSplit && !isInRightContent(e.target)) {
+                        const delta = this._touchStartY - t.clientY;
+                        const scrollEl = this._scrollTarget;
+                        if (scrollEl) {
+                            if (delta < -40 && scrollEl.scrollTop <= 0) {
+                                this._collapseSplit(false);
+                                return;
+                            }
+                            scrollEl.scrollTop += delta * 0.5;
+                        }
+                        this._touchStartY = t.clientY;
                     }
                 };
                 // Use CAPTURE phase — YouTube's player calls stopPropagation() on wheel
@@ -3434,10 +3694,9 @@
                     if (right) right.removeEventListener('transitionend', onTransEnd);
                     this._entering = false;
                     this._triggerPlayerResize();
-                    // For standard/VOD: scroll to comments to trigger IO
+                    // For standard/VOD: scroll to top to show video title
                     if (type !== 'live' && below) {
-                        const commentsEl = below.querySelector('ytd-comments');
-                        if (commentsEl) below.scrollTop = commentsEl.offsetTop;
+                        below.scrollTop = 0;
                     }
                 };
                 const onTransEnd = (e) => {
@@ -5067,81 +5326,145 @@
             description: 'Automatically recovers video when moving browser between monitors (fixes black screen with audio)',
             group: 'Video Player',
             icon: 'monitor',
-            _resizeHandler: null,
-            _screenHandler: null,
-            _lastScreen: null,
-            _debounceTimer: null,
-            _forceRepaint() {
-                const video = document.querySelector('video.html5-main-video');
-                if (!video || video.paused) return;
-                // Force GPU recomposite by cycling a transform
-                video.style.transform = 'translateZ(0)';
-                requestAnimationFrame(() => {
-                    video.style.transform = '';
-                    // If still black, nudge currentTime by a tiny amount
-                    requestAnimationFrame(() => {
-                        if (video.videoWidth === 0 || (video.getVideoPlaybackQuality && video.getVideoPlaybackQuality().droppedVideoFrames > 0)) {
-                            const t = video.currentTime;
-                            video.currentTime = t + 0.001;
-                        }
-                    });
-                });
-            },
-            _checkScreenChange() {
-                const s = `${window.screen.width}x${window.screen.height}@${window.devicePixelRatio}`;
-                if (this._lastScreen && this._lastScreen !== s) {
-                    // Screen changed — debounce and repaint
-                    clearTimeout(this._debounceTimer);
-                    this._debounceTimer = setTimeout(() => this._forceRepaint(), 300);
+            _healthPoll: null,
+            _recovering: false,
+            _canvas: null,
+            _ctx: null,
+            _lastTime: 0,
+            _blackCount: 0,
+            _stage: 0,
+
+            _isBlackFrame(video) {
+                if (!this._canvas) {
+                    this._canvas = document.createElement('canvas');
+                    this._canvas.width = 16;
+                    this._canvas.height = 16;
+                    this._ctx = this._canvas.getContext('2d', { willReadFrequently: true });
                 }
-                this._lastScreen = s;
-            },
-            init() {
-                this._lastScreen = `${window.screen.width}x${window.screen.height}@${window.devicePixelRatio}`;
-
-                // resize fires when window moves to monitor with different scale/size
-                this._resizeHandler = () => this._checkScreenChange();
-                window.addEventListener('resize', this._resizeHandler, { passive: true });
-
-                // screenchange API (where supported)
-                if (window.screen?.addEventListener) {
-                    this._screenHandler = () => {
-                        clearTimeout(this._debounceTimer);
-                        this._debounceTimer = setTimeout(() => this._forceRepaint(), 300);
-                    };
-                    window.screen.addEventListener('change', this._screenHandler);
-                }
-
-                // Also recover on visibility change (alt-tab back after moving)
-                this._visHandler = () => {
-                    if (!document.hidden) {
-                        clearTimeout(this._debounceTimer);
-                        this._debounceTimer = setTimeout(() => this._forceRepaint(), 200);
+                try {
+                    this._ctx.drawImage(video, 0, 0, 16, 16);
+                    const data = this._ctx.getImageData(0, 0, 16, 16).data;
+                    let totalBrightness = 0;
+                    for (let i = 0; i < data.length; i += 4) {
+                        totalBrightness += data[i] + data[i + 1] + data[i + 2];
                     }
-                };
-                document.addEventListener('visibilitychange', this._visHandler);
+                    return (totalBrightness / (16 * 16)) < 15;
+                } catch (e) {
+                    return false;
+                }
+            },
 
-                // WebGL context loss on the video element
-                this._contextHandler = () => {
-                    clearTimeout(this._debounceTimer);
-                    this._debounceTimer = setTimeout(() => this._forceRepaint(), 500);
-                };
-                const vid = document.querySelector('video.html5-main-video');
-                if (vid) vid.addEventListener('webglcontextlost', this._contextHandler);
+            _recover() {
+                if (this._recovering) return;
+                this._recovering = true;
+                this._stage++;
+                const video = document.querySelector('video.html5-main-video');
+                const player = document.querySelector('#movie_player');
+                if (!video || !player) { this._recovering = false; return; }
+
+                const currentTime = video.currentTime;
+                DebugManager.log('GPU', `Black frame detected — recovery stage ${this._stage}`);
+
+                if (this._stage <= 1) {
+                    // Stage 1: Pause → seekTo (forces keyframe decode) → play
+                    try {
+                        player.pauseVideo();
+                        setTimeout(() => {
+                            player.seekTo(currentTime, true);
+                            setTimeout(() => {
+                                player.playVideo();
+                                this._recovering = false;
+                            }, 200);
+                        }, 100);
+                    } catch(e) { this._recovering = false; }
+
+                } else if (this._stage <= 2) {
+                    // Stage 2: Remove video src, force reload via loadVideoById
+                    try {
+                        const videoId = new URLSearchParams(window.location.search).get('v');
+                        if (videoId && typeof player.loadVideoById === 'function') {
+                            player.loadVideoById({ videoId, startSeconds: currentTime });
+                            // loadVideoById auto-plays, give it time to reinit
+                            setTimeout(() => {
+                                this._recovering = false;
+                            }, 1000);
+                        } else {
+                            // Fallback: nuke the video element's rendering
+                            video.srcObject = video.srcObject;
+                            this._recovering = false;
+                        }
+                    } catch(e) { this._recovering = false; }
+
+                } else if (this._stage <= 3) {
+                    // Stage 3: Toggle hardware acceleration by forcing software rendering path
+                    try {
+                        // Remove will-change and transform hints to force software fallback
+                        video.style.willChange = 'auto';
+                        video.style.transform = 'none';
+                        video.style.backfaceVisibility = 'hidden';
+                        // Force layout
+                        void video.offsetHeight;
+                        // Re-seek to force new frame
+                        player.seekTo(currentTime + 0.1, true);
+                        setTimeout(() => {
+                            // Restore
+                            video.style.willChange = '';
+                            video.style.transform = '';
+                            video.style.backfaceVisibility = '';
+                            this._recovering = false;
+                        }, 500);
+                    } catch(e) { this._recovering = false; }
+
+                } else {
+                    // Stage 4: Full page-level reload as absolute last resort
+                    DebugManager.log('GPU', 'All recovery stages failed — reloading player');
+                    try {
+                        // Use YouTube's navigation to "reload" without full page refresh
+                        const url = window.location.href;
+                        if (typeof player.loadVideoByUrl === 'function') {
+                            player.loadVideoByUrl({ mediaContentUrl: `https://www.youtube.com/v/${new URLSearchParams(window.location.search).get('v')}`, startSeconds: currentTime });
+                        } else {
+                            window.location.replace(url);
+                        }
+                    } catch(e) {}
+                    this._recovering = false;
+                    this._stage = 0;
+                    this._blackCount = 0;
+                }
+            },
+
+            init() {
+                this._healthPoll = setInterval(() => {
+                    if (this._recovering) return;
+                    const video = document.querySelector('video.html5-main-video');
+                    if (!video || video.paused || video.ended || video.readyState < 3) {
+                        this._blackCount = 0;
+                        return;
+                    }
+                    const ct = video.currentTime;
+                    if (ct === this._lastTime) return;
+                    this._lastTime = ct;
+
+                    if (this._isBlackFrame(video)) {
+                        this._blackCount++;
+                        if (this._blackCount >= 2) {
+                            this._recover();
+                        }
+                    } else {
+                        // Video is rendering — reset stages
+                        this._blackCount = 0;
+                        this._stage = 0;
+                    }
+                }, 1500);
             },
             destroy() {
-                window.removeEventListener('resize', this._resizeHandler);
-                if (this._screenHandler && window.screen?.removeEventListener) {
-                    window.screen.removeEventListener('change', this._screenHandler);
-                }
-                document.removeEventListener('visibilitychange', this._visHandler);
-                const vid = document.querySelector('video.html5-main-video');
-                if (vid) vid.removeEventListener('webglcontextlost', this._contextHandler);
-                clearTimeout(this._debounceTimer);
-                this._resizeHandler = null;
-                this._screenHandler = null;
-                this._visHandler = null;
-                this._contextHandler = null;
+                clearInterval(this._healthPoll);
+                this._healthPoll = null;
+                this._canvas = null;
+                this._ctx = null;
+                this._blackCount = 0;
+                this._recovering = false;
+                this._stage = 0;
             }
         },
 
@@ -6544,18 +6867,18 @@ pause
 
         const versionSpan = document.createElement('span');
         versionSpan.className = 'ytkit-version';
-        versionSpan.textContent = 'v1.0.4';
+        versionSpan.textContent = 'v1.1.0';
         versionSpan.style.position = 'relative';
         versionSpan.style.cursor = 'pointer';
         // What's New badge
-        const CURRENT_VER = '1.0.4';
+        const CURRENT_VER = '1.1.0';
         const lastSeenVer = GM_getValue('ytkit_last_seen_version', '');
         if (lastSeenVer !== CURRENT_VER) {
             const badge = document.createElement('span');
             badge.id = 'ytkit-whats-new-badge';
             badge.style.cssText = 'position:absolute;top:-3px;right:-8px;width:8px;height:8px;background:#ef4444;border-radius:50%;animation:ytkit-badge-pulse 2s infinite;';
             versionSpan.appendChild(badge);
-            versionSpan.title = 'New in v1.0.4: Watch page alignment fixes, ad-block stats display, configurable Cobalt URL, performance optimizations';
+            versionSpan.title = 'New in v1.1.0: Watch page alignment fixes, ad-block stats display, configurable Cobalt URL, performance optimizations';
             versionSpan.onclick = () => {
                 GM_setValue('ytkit_last_seen_version', CURRENT_VER);
                 badge.remove();
