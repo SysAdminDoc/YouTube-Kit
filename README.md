@@ -1,279 +1,267 @@
-# YTKit: YouTube Customization Suite
+<p align="center">
+  <img src="assets/ytlogo.png" alt="YTKit Logo" width="80">
+</p>
 
-![Version](https://img.shields.io/badge/version-25.11-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Platform](https://img.shields.io/badge/platform-Chrome%20%7C%20Firefox%20%7C%20Edge-4285F4)
-![Tampermonkey](https://img.shields.io/badge/Tampermonkey-compatible-00485B?logo=tampermonkey&logoColor=white)
-![Status](https://img.shields.io/badge/status-active-success)
+<h1 align="center">YTKit: YouTube Customization Suite</h1>
 
-> A comprehensive Tampermonkey userscript that transforms YouTube into a distraction-free, privacy-respecting experience — with built-in ad blocking, AI-powered chapters, SponsorBlock, DeArrow, media player integration, and over 100 individually configurable features.
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.0.4-ff4e45?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/platform-Tampermonkey%20%7C%20Violentmonkey-blue?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/YouTube-Desktop-ff0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube">
+</p>
 
-<img width="2065" height="1050" alt="image" src="https://github.com/user-attachments/assets/2ba9c62f-e64b-44db-acb6-5062f7ccd61b" />
+<p align="center">
+  A single userscript that transforms YouTube into a clean, ad-free, distraction-free experience with a premium dark interface — no extensions to manage, no bloat, just one file.
+</p>
 
+<p align="center">
+  <a href="https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js"><strong>⬇ Install YTKit</strong></a>
+</p>
 
 ---
 
 ## Installation
 
-1. Install [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/) for your browser
-2. [**Click here to install YTKit**](https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js)
-3. Confirm the installation prompt
-4. Navigate to YouTube — the settings panel opens via the **⚙ YTKit** button in the top bar
+1. Install [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/)
+2. **[Click here to install YTKit](https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js)**
+3. Confirm installation when prompted
+4. Open YouTube — everything works immediately with zero configuration
+
+YTKit auto-updates through your userscript manager. Every feature is enabled by default and fully configurable through the built-in settings panel.
+
+---
+
+## What It Does
+
+YTKit replaces the need for multiple browser extensions by combining ad blocking, SponsorBlock, UI customization, download integration, and playback enhancements into a single userscript. Every feature runs at `document-start` for instant ad prevention, and the entire settings panel is built in — no external dashboards or config files.
 
 ---
 
 ## Features
 
-### Ad Blocker
-A split-architecture ad blocker that operates at the network, JSON, and DOM levels simultaneously. The proxy engine runs in the real page context to intercept YouTube's internal API calls before they reach the player, while a separate DOM observer removes any ad elements that slip through.
+### Ad Blocking
 
-| Component | Description |
-|-----------|-------------|
-| JSON Pruner | Strips ad placements and slots from all YouTube API responses via a `JSON.parse` proxy |
-| Fetch / XHR Proxy | Intercepts `/youtubei/v1/player` and related endpoints to remove ad data before delivery |
-| DOM Cleaner | MutationObserver-based removal of ad renderer elements as they appear |
-| SSAP Auto-Skip | Detects in-stream video ads and clicks skip buttons automatically |
-| Anti-Detection | Neutralizes YouTube's ad blocker detection callbacks |
-| Cosmetic Hiding | CSS-level suppression of masthead, shelf, and overlay ads |
-| Remote Filter List | Loads and applies a remote EasyList-format filter list with auto-update |
+| Feature | Description | Default |
+|---------|-------------|---------|
+| YouTube Ad Blocker | Block video ads via API proxy interception, JSON response pruning, and cosmetic hiding | Off |
+| Cosmetic Element Hiding | Hide ad slots, banners, merch shelves, and promoted content via CSS filter lists | On |
+| SSAP Auto-Skip | Detect and auto-skip server-side ad stitching in videos | On |
+| Anti-Detection Bypass | Block YouTube's ad-blocker detection and countermeasure scripts | On |
+
+The ad blocker uses a split architecture: Phase 1 injects a proxy engine into the real page context (bypassing the userscript sandbox) to intercept `fetch`/`XMLHttpRequest` and prune ad payloads from YouTube's API responses. Phase 2 runs CSS cosmetic filters and a DOM mutation observer to remove ad elements that slip through. Supports remote filter lists with auto-update.
 
 ### SponsorBlock
-Native integration with the [SponsorBlock](https://sponsor.ajay.app) API. Skips user-submitted segments with per-category control.
 
-| Category | Default |
-|----------|---------|
-| Sponsor | Enabled |
-| Self Promotion | Enabled |
-| Interaction Reminder | Enabled |
-| Intro / Outro | Enabled |
-| Off-Topic Music | Enabled |
-| Preview / Recap | Enabled |
-| Filler | Enabled |
+| Feature | Description | Default |
+|---------|-------------|---------|
+| Skip Sponsors | Auto-skip sponsored segments, intros, outros, self-promo, interaction reminders, and filler using the SponsorBlock API | On |
+| Hide SponsorBlock Labels | Hide the colored category labels on the seek bar | On |
 
-### ChapterForge — AI Chapter Generation
-Automatically generates chapters and points of interest for any video using its transcript. Supports multiple AI providers and transcript sources.
+### Interface
 
-**AI Providers:** Built-in heuristic · Browser AI (local, via Transformers.js) · OpenAI · Ollama · OpenRouter · Custom endpoint
+| Feature | Description | Default |
+|---------|-------------|---------|
+| Logo → Subscriptions | Clicking the YouTube logo navigates to subscriptions instead of home | On |
+| Logo Quick Links | Hover over the YouTube logo to reveal a customizable dropdown with quick navigation links (History, Watch Later, Playlists, Liked Videos, Subscriptions, For You Page) | On |
+| Edit Quick Links | Customize dropdown items via the settings panel — one link per line in `Label \| URL` format | — |
+| Hide Create Button | Remove the "Create" button from the header toolbar | On |
+| Hide Voice Search | Remove the microphone icon from the search bar | On |
+| Widen Search Bar | Expand the search bar to use more available space | On |
+| Subscriptions Grid | Use a denser grid layout on the subscriptions page | On |
+| Homepage Grid Align | Force uniform thumbnail grid — prevents misaligned rows from variable title heights | On |
+| Styled Filter Chips | Polished filter chips on the homepage with glassmorphism and hover effects | On |
+| Hide Sidebar | Remove the left navigation sidebar | On |
+| Videos Per Row | Set thumbnail columns per row (0 = dynamic, 3–8 = fixed) | Dynamic |
 
-**Transcript Sources:** YouTube captions · Whisper (in-browser) · WhisperServer (local GPU via whisper.cpp)
+### Appearance
 
-**Features:**
-- Auto mode processes videos on load; Manual mode adds a player button
-- Filler word detection (`um`, `uh`, `you know`, etc.) with progress bar markers
-- AI-powered video summarization (paragraph or timestamped format) with brief/standard/detailed length options
-- SEO-optimized chapter title mode
-- AI translation to any language
-- AutoSkip modes (Gentle / Normal / Aggressive) to skip pauses and filler speech
-- Chapter HUD overlay on the player (configurable position)
-- Batch chapter generation for entire subscription feeds
-- Points of interest (POI) markers on the progress bar
-- Chapter-aware speed control
-- Custom system prompts for both summaries and chapter generation
+| Feature | Description | Default |
+|---------|-------------|---------|
+| UI Style | Choose rounded or square UI elements | Square |
+| Watch Page Restyle | Polished watch page layout with glassmorphism accents, refined title/metadata/description styling | On |
+| Refined Comments | Card-based comment layout with avatars and clean thread lines | On |
+| Disable Ambient Mode | Turn off the glowing background effect that matches video colors | On |
+| Compact Layout | Reduce spacing and padding for a denser interface | On |
+| Thin Scrollbar | Slim, unobtrusive scrollbar | On |
 
-### DeArrow — Clickbait Removal
-Integrates with the [DeArrow](https://dearrow.ajay.app) crowdsourced database to replace clickbait thumbnails and titles.
+### Content Filtering
 
-- Replace thumbnails with auto-generated video screenshots
-- Replace titles in sentence case, title case, or original case
-- Format original titles when no crowdsourced submission exists
-- Hover over titles/thumbnails to preview the original
-- Configurable cache TTL for branding data
+| Feature | Description | Default |
+|---------|-------------|---------|
+| Remove Shorts | Hide all Shorts from feeds and recommendations | On |
+| Redirect Shorts | Open Shorts URLs in the standard video player | On |
+| Channels → Videos Tab | Open channel pages directly on the Videos tab | On |
+| Hide Collaborations | Hide videos from channels you're not subscribed to in your subscriptions feed | On |
+| Hide News Section | Remove news sections from the homepage | On |
+| Hide Playlist Shelves | Remove playlist sections from the homepage | On |
+| Hide Playables | Hide YouTube Playables gaming content | On |
+| Hide Members Only | Hide members-only content from channels | On |
+| Full-Width Subscriptions | Expand the subscription grid to fill the page | On |
+| Hide Layout Options | Remove the "Latest" header and view toggles on subscriptions | On |
+| Disable Hover Preview | Stop videos from auto-playing on thumbnail hover | On |
+| Hide Promotion Badges | Remove "Includes paid promotion" overlays | On |
+| Hide Info Panels | Remove Wikipedia/context info boxes (FEMA, COVID, etc.) | On |
+| Clean Share URLs | Strip tracking params (`si`, `pp`, `feature`) from copied/shared YouTube links | On |
 
-### Video Hider
-Persistent per-video and per-channel filtering across the homepage and subscription feeds.
+### Video Player
 
-- Right-click any video thumbnail to hide it or block its channel
-- Keyword filter (plain text or `/regex/` format auto-detected)
-- Minimum duration filter
-- Subscription feed load limiting (reduces cluttered feeds)
-- Bulk hide and export/import support
+| Feature | Description | Default |
+|---------|-------------|---------|
+| Theater Split | Fullscreen video on watch pages — scroll down to reveal comments side-by-side, scroll back up to return to fullscreen | On |
+| Fit to Window | Make the player fill your entire browser window | On |
+| Expand Video Width | Stretch the video to fill available space when sidebar is hidden | On |
+| YTKit Player Controls | Replace native player right-controls with YouTube logo (quick links dropdown) and settings gear | On |
+| Auto-Resume Position | Resume videos from where you left off | On |
+| Resume Threshold | Seconds into a video before saving resume position | 15s |
+| Monitor Switch Fix | Auto-recover video when moving browser between monitors (fixes black screen with audio) | On |
+| Auto Quality | Automatically select preferred video quality (max, 4K, 1440p, 1080p, 720p, 480p) | Max |
+| Enhanced Bitrate | Request higher bitrate streams when available | On |
+| Hide Quality Popup | Suppress the quality selection popup during auto-selection | On |
+| Hide Description | Remove the video description panel | On |
+| Hide Related Videos | Remove the related videos panel | On |
+| Hide Video End Content | Remove end cards, end screen, and video grid when videos finish | On |
 
-### Themes & Appearance
-| Option | Values |
-|--------|--------|
-| Theme | System · Native Dark · Better Dark · Catppuccin Mocha |
-| UI Style | Rounded · Square |
-| Accent Color | Any hex color, or theme default |
-| Compact Layout | Removes padding/margins for a denser layout |
-| Thin Scrollbar | Minimal scrollbar styling |
-| No Ambient Mode | Disables the glow/bloom behind the player |
-| No Frosted Glass | Removes blur effects from overlays |
+### Clutter Removal
 
-### Playback Enhancements
-- **Speed Presets** — click-accessible speed buttons (0.5×–3×) with per-channel memory
-- **Remember Speed** — persist playback speed across sessions
-- **Watch Progress Bar** — visual read/unread progress overlay on thumbnails
-- **Timestamp Bookmarks** — save named timestamps per video, with import/export
-- **Auto-Resume** — remembers position per video and resumes from where you left off
-- **Playback Speed OSD** — on-screen speed indicator during playback
-- **Speed Indicator Badge** — badge on thumbnails showing saved per-channel speed
-- **Auto Max Quality** — forces highest available resolution (up to 8K) with enhanced bitrate
-- **Auto-Skip Intro/Outro** — skips intros and outros using video metadata
-- **Auto-Skip "Still Watching?"** — dismisses the pause interruption prompt automatically
-- **Sort Comments Newest First** — overrides YouTube's default comment sort
-- **Preload Comments** — loads comments before scrolling to them
-- **Clean Share URLs** — strips tracking parameters from copied links
-- **Reverse Playlist** — plays playlists in reverse order
-- **Per-Channel Settings** — override playback speed on a per-channel basis
+| Feature | Description | Default |
+|---------|-------------|---------|
+| Hide Merch Shelf | Remove merchandise promotions below videos | On |
+| Hide AI Summary | Remove AI-generated summaries and Ask AI buttons | On |
+| Hide Description Extras | Remove extra elements in the description area | On |
+| Hide Hashtags | Remove hashtag links above video titles | On |
+| Hide Pinned Comments | Remove pinned comments from the comments section | On |
+| Hide Comment Actions | Remove action menu from individual comments | On |
+| Condense Comments | Reduce spacing between comments | On |
+| Hide Comment Teaser | Remove the "Scroll for comments" prompt | On |
+| Hide Chat Engagement | Remove engagement prompts in live chat | On |
+| Hide Paid Promotion | Remove "paid promotion" labels on watch pages | On |
+| Hide Channel Join Button | Remove the Join/membership button | On |
+| Hide Fundraisers | Remove fundraiser and donation badges | On |
 
-### Media Player Integration
-Action buttons are injected directly into the video watch page toolbar.
+### Configurable Element Managers
 
-| Button | Function |
-|--------|----------|
-| VLC | Streams the current video in VLC |
-| VLC Queue | Adds video to an existing VLC instance queue |
-| Local Download (MP4) | Downloads video via Cobalt or direct |
-| MP3 Download | Downloads audio only |
-| Summarize | Triggers ChapterForge AI summary |
-| Embed Player | Switches to the YouTube embed player |
-| MPV | Streams in MPV |
-| Download + Play | Downloads and immediately opens in player |
+These features provide granular toggle controls through the settings panel:
 
-**Right-click context menu** on any video: stream in VLC/MPV, download MP4/MP3/transcript, copy URL/ID, use embed player.
+| Manager | Controls |
+|---------|----------|
+| **Hide Action Buttons** | Like, Dislike, Share, Ask/AI, Clip, Thanks, Save, Join/Sponsor, More Actions |
+| **Hide Player Controls** | SponsorBlock, Next, Autoplay, Subtitles, Captions, Miniplayer, PiP, Theater, Fullscreen |
+| **Hide Watch Elements** | Join Button, Ask Button, Save Button, More Actions, Ask AI Section, Podcast Section, Transcript Section, Channel Info Cards |
+| **Hide Chat Elements** | Header, Menu, Popout, Reactions, Timestamps, Polls, Ticker, Leaderboard, Support, Banner, Emoji, Top Fan, Super Chats, Level Up, Bots |
+| **Chat Keyword Filter** | Comma-separated list of words to hide from live chat |
 
-**Subscriptions VLC Playlist** — generates an M3U playlist of your subscription feed for VLC.
+### Downloads & Streaming
 
-**Download Providers:** Cobalt · Direct (yt-dlp compatible)
+| Feature | Description | Default |
+|---------|-------------|---------|
+| Video Context Menu | Right-click on video player for download options, VLC/MPV streaming, transcript download, embed player, copy URL/ID | On |
+| Web Download Button | Add a Cobalt-based web download button below videos | Off |
+| VLC Player Button | Stream video directly in VLC media player | Off |
+| Local Download Button | Download video locally via `yt-dlp` | On |
+| MP3 Download Button | Download audio as MP3 via `yt-dlp` | On |
+| Configurable Cobalt URL | Set custom Cobalt instance URL | `cobalt.meowing.de` |
 
-### Interface Cleanup
-| Feature | Default |
-|---------|---------|
-| Hide Sidebar | On |
-| Hide Create Button | On |
-| Hide Voice Search | On |
-| Logo → Subscriptions | On |
-| Widen Search Bar | On |
-| Subscriptions Grid Layout | On |
-| 5 Videos Per Row | On |
-| Hide Shorts | On |
-| Redirect Shorts to Watch | On |
-| Disable Hover Autoplay | On |
-| Hide Paid Content Overlay | On |
-| Redirect Channel → Videos Tab | On |
-| Hide Playables | On |
-| Hide Members-Only Content | On |
-| Hide News on Homepage | On |
-| Hide Playlist Shelves | On |
-| Hide Merch Shelf | On |
-| Hide AI Summary Section | On |
-| Hide Collaborations | On |
-| Hide Info Panels | On |
-
-### Watch Page Element Control
-Individual toggles for hiding any element on the video watch page:
-
-Video title · View count · Upload date · Channel avatar · Channel name · Subscriber count · Subscribe button · Join button · Like/Dislike buttons · Share button · Ask button · Save button · More actions · Description box · Ask AI section · Podcast/Course section · Transcript section · Channel info cards
-
-### Action Button Manager
-Per-button hide toggles for the action bar below videos:
-Like · Dislike · Share · Ask/AI · Clip · Thanks · Save · Join/Sponsor · More Actions
-
-Also includes **Auto-like Videos** and **Replace Share with Cobalt Downloader**.
-
-### Player Controls Manager
-Per-control hide toggles for the video player bar:
-SponsorBlock · Next Video · Autoplay Toggle · Subtitles · Captions · Miniplayer · Picture-in-Picture · Theater Mode · Fullscreen
-
-### Live Chat Manager
-Per-element toggles for live stream chat:
-Header · Menu · Popout · Reactions · Timestamps · Polls · Ticker · Leaderboard · Support Buttons · Banner · Emoji · Fan Badges · Super Chats · Level Up · Bot Messages
-
-Includes a **keyword filter** to hide messages containing specific words.
-
-### Sticky Video Player
-Floats the video player as a pip-style overlay when scrolling down the page. Supports drag repositioning and resize handles.
+> **Note:** VLC/MPV streaming and local downloads require [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) installed locally with a URI handler configured. The web download button uses [Cobalt](https://github.com/imputnet/cobalt) and works without any local tools.
 
 ---
 
-## Console API
+## Settings Panel
 
-YTKit exposes a `window.ytkit` object for debugging:
+Access the settings panel by clicking the gear icon in the YouTube masthead or in the player controls. The panel features:
 
-```javascript
-ytkit.safe()           // Enable safe mode (all features disabled) and reload
-ytkit.unsafe()         // Exit safe mode and reload
-ytkit.diagCSS()        // Remove ad blocker CSS for diagnostics
-ytkit.diagAdblock(false) // Disable the ad blocker and reload
-ytkit.testOnly('featureId') // Enable only one feature and reload
-ytkit.disableAll()     // Disable all features and reload
-ytkit.list()           // Log all enabled/disabled feature IDs
-```
+- **Searchable sidebar** with categorized feature groups
+- **Toggle switches** for every feature with instant apply
+- **Sub-feature controls** for granular element hiding
+- **Textarea editors** for custom filter lists, quick links, and chat keywords
+- **Quick access bar** at the bottom of the panel for frequently used toggles
+- **Export/Import/Reset** for backing up and restoring your configuration
 
-**Safe mode** can also be activated by adding `?ytkit=safe` to any YouTube URL.
+All settings persist across sessions via the userscript manager's storage (`GM_setValue`/`GM_getValue`).
 
 ---
 
-## Architecture
+## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Document Start (run-at: document-start)                            │
-│                                                                     │
-│  ┌─────────────────────────────┐  ┌──────────────────────────────┐ │
-│  │  Phase 1: Page Context      │  │  Phase 2: Sandbox (GM)       │ │
-│  │  (unsafeWindow)             │  │                              │ │
-│  │                             │  │  • Cosmetic CSS injection    │ │
-│  │  • JSON.parse proxy         │  │  • DOM MutationObserver      │ │
-│  │  • fetch() proxy            │  │  • SSAP skip delegation      │ │
-│  │  • XHR proxy                │  │  • Feature init system       │ │
-│  │  • DOM appendChild trap     │  │  • Settings panel UI         │ │
-│  │  • setTimeout neutralizer   │  │  • SPA navigation rules      │ │
-│  │  • Promise.then anti-detect │  │  • Button injection system   │ │
-│  │  • Property traps           │  │                              │ │
-│  └─────────────────────────────┘  └──────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  document-start (before YouTube loads)                          │
+│                                                                 │
+│  ┌──────────────────┐   ┌──────────────────┐                   │
+│  │  Phase 1: Proxy   │   │  Phase 2: CSS    │                   │
+│  │  Engine (page ctx) │   │  + DOM Observer  │                   │
+│  │                    │   │  (sandbox ctx)   │                   │
+│  │  • fetch proxy     │   │                  │                   │
+│  │  • XHR proxy       │   │  • Cosmetic CSS  │                   │
+│  │  • JSON pruning    │   │  • Ad element    │                   │
+│  │  • Response rewrite│   │    removal       │                   │
+│  │  • SSAP neutralizer│   │  • Filter lists  │                   │
+│  └──────────────────┘   └──────────────────┘                   │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Main Script (after DOM ready)                            │   │
+│  │                                                           │   │
+│  │  Features → Settings Manager → Navigate/Mutation Rules    │   │
+│  │                                                           │   │
+│  │  • CSS features: inject/remove <style> elements           │   │
+│  │  • JS features: DOM observers, event listeners, timers    │   │
+│  │  • SPA-aware: re-runs on YouTube's client-side navigation │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-The ad blocker uses a **split architecture**: the proxy engine runs directly on `unsafeWindow` so YouTube's internal code sees the intercepted functions, while all other features operate in Tampermonkey's sandbox with access to GM APIs. This avoids Trusted Types / CSP issues without injecting `<script>` tags.
+Key architectural decisions:
 
----
-
-## Settings Export / Import
-
-All settings, hidden videos, blocked channels, and bookmarks can be exported to a JSON file and imported on another browser or profile via the Settings → Advanced panel.
+- **Split-context ad blocking** — The proxy engine runs in the real page context (not the userscript sandbox) so YouTube's player sees the modified responses. This avoids Trusted Types CSP issues entirely.
+- **SPA navigation handling** — YouTube is a single-page app. YTKit hooks into `yt-navigate-finish` events and uses a centralized navigate/mutation rule system so features re-apply on every page transition.
+- **Lazy feature loading** — Critical features (ad blocking, Theater Split) load immediately. Network-bound features (SponsorBlock) are deferred via `requestIdleCallback`.
+- **Trusted Types compliance** — All innerHTML operations use a `TrustedHTML` wrapper that creates a Trusted Types policy, preventing CSP violations on YouTube's strict pages.
 
 ---
 
 ## Compatibility
 
-| Browser | Extension | Status |
-|---------|-----------|--------|
-| Chrome / Edge | Tampermonkey | Fully supported |
-| Firefox | Tampermonkey / Violentmonkey | Fully supported |
-| Chrome / Edge | Violentmonkey | Supported |
+| Browser | Userscript Manager | Status |
+|---------|-------------------|--------|
+| Chrome / Edge / Brave | Tampermonkey | ✅ Fully supported |
+| Firefox | Tampermonkey / Violentmonkey | ✅ Fully supported |
+| Opera | Tampermonkey | ✅ Fully supported |
+| Safari | Userscripts (App Store) | ⚠️ Limited (no `GM.xmlHttpRequest`) |
 
-**Excluded pages:** `m.youtube.com` (mobile) · `studio.youtube.com`
+**Not supported:** Mobile browsers, YouTube Music, YouTube Studio, embedded players on other sites.
 
 ---
 
 ## FAQ
 
-**Features aren't loading after update.**
-Open the YTKit settings panel and use the Export button to save your settings, then hard-reload the page (`Ctrl+Shift+R`).
+**Q: The ad blocker is off by default?**
+A: Yes. YTKit's ad blocker uses aggressive API proxying that may conflict with other ad-blocking extensions. If you're already running uBlock Origin, you may not need it. Enable it in Settings → Ad Blocker if you want YTKit to handle ads instead.
 
-**The ad blocker isn't working.**
-Open the browser console and run `ytkit.diagAdblock(true)` to re-enable it, or check the Ad Blocker pane in settings to confirm it's toggled on.
+**Q: How do I get VLC/MPV streaming working?**
+A: Install [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and register a `vlc://` or `mpv://` URI protocol handler on your system. The buttons pass the video URL to your local player via URI scheme.
 
-**ChapterForge shows no transcript.**
-Try changing the Transcript Source setting from `auto` to `captions-only`. If captions aren't available, Whisper (in-browser) or a local WhisperServer are required.
+**Q: Can I use this with other YouTube extensions?**
+A: Yes, but avoid running multiple ad blockers simultaneously. YTKit's cosmetic CSS filters and SponsorBlock integration work alongside most extensions without conflict.
 
-**Buttons aren't appearing on the watch page.**
-Run `ytkit.list()` in the console to confirm the relevant button feature is enabled. If it is, the button injection system retries on every navigation — waiting a few seconds usually resolves timing issues.
+**Q: My settings disappeared after an update.**
+A: YTKit stores settings in your userscript manager's storage, which persists across updates. If settings are lost, your userscript manager's data was cleared. Use the Export button in the settings panel to back up your config.
 
-**Something broke and the page is unusable.**
-Add `?ytkit=safe` to the URL, or run `ytkit.safe()` in the console. This disables all features and lets you diagnose which one is causing the problem using `ytkit.testOnly('featureId')`.
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE)
+**Q: Theater Split doesn't show comments.**
+A: Scroll down. Theater Split starts in fullscreen video mode — scrolling reveals the comments panel side-by-side. Scroll back up to return to fullscreen.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. For significant changes, please open an issue first to discuss the approach.
+Issues and PRs welcome. If you find a YouTube layout change that breaks a feature, open an issue with the affected page URL and a screenshot.
 
-**Repository:** [github.com/SysAdminDoc/YTKit](https://github.com/SysAdminDoc/YTKit)
+When submitting a PR:
+- Test on both Chrome + Tampermonkey and Firefox + Violentmonkey
+- Maintain the existing code style (single-file, no build tools, no external dependencies beyond CDN)
+- Scope CSS selectors to avoid global side effects
+
+---
+
+## License
+
+[MIT](LICENSE) — Matthew Parker
