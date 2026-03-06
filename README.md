@@ -5,7 +5,7 @@
 <h1 align="center">YTKit: YouTube Customization Suite</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.1-ff4e45?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.1.0-ff4e45?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/platform-Tampermonkey%20%7C%20Violentmonkey-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/YouTube-Desktop-ff0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube">
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js"><strong>⬇ Install YTKit</strong></a>
+  <a href="https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js"><strong>⬇ Install YTKit</strong></a>
 </p>
 
 ---
@@ -24,7 +24,7 @@
 ## Installation
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/)
-2. **[Click here to install YTKit](https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js)**
+2. **[Click here to install YTKit](https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js)**
 3. Confirm installation when prompted
 4. Open YouTube — everything works immediately with zero configuration
 
