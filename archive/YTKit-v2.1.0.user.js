@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YTKit
-// @version      1.3.1
+// @version      2.1.0
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -20,7 +20,6 @@
 // @connect      raw.githubusercontent.com
 // @connect      cobalt.meowing.de
 // @connect      meowing.de
-// @connect      *
 // @updateURL    https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js
 // @downloadURL  https://github.com/SysAdminDoc/YTKit/raw/refs/heads/main/YTKit.user.js
 // @run-at       document-start
@@ -272,13 +271,21 @@
             xhr.addEventListener('readystatechange', function() {
                 if (xhr.readyState !== 4) return;
                 try {
+                    // Skip non-text response types (arraybuffer, blob, document)
+                    const rType = xhr.responseType;
+                    if (rType === 'arraybuffer' || rType === 'blob' || rType === 'document') return;
                     const text = xhr.responseText;
                     if (!text) return;
                     const obj = origParse(replaceAdKeys(text));
                     pruneObject(obj);
                     const newText = W.JSON.stringify(obj);
                     W.Object.defineProperty(xhr, 'responseText', { value: newText, configurable: true });
-                    W.Object.defineProperty(xhr, 'response', { value: newText, configurable: true });
+                    // For responseType 'json', set response to parsed object; otherwise string
+                    if (rType === 'json') {
+                        W.Object.defineProperty(xhr, 'response', { value: obj, configurable: true });
+                    } else {
+                        W.Object.defineProperty(xhr, 'response', { value: newText, configurable: true });
+                    }
                     stats.blocked++;
                 } catch(e) {}
             });
@@ -314,8 +321,16 @@
         safeOverride(W, 'setTimeout', new W.Proxy(origSetTimeout, {
             apply: function(target, thisArg, args) {
                 const fn = args[0], delay = args[1];
+                // Only intercept timers in the ad-detection delay range (16-18s)
+                // Additional guards: must be a function (not string), and short source
+                // suggests it's a YT-generated callback, not user/extension code
                 if (typeof fn === 'function' && delay >= 16000 && delay <= 18000) {
-                    try { if (fn.toString().indexOf('[native code]') !== -1 || fn.toString().length < 50) args[1] = 1; } catch(e) {}
+                    try {
+                        const src = fn.toString();
+                        if (src.indexOf('[native code]') !== -1 || (src.length < 80 && src.length > 5)) {
+                            args[1] = 1;
+                        }
+                    } catch(e) {}
                 }
                 return W.Reflect.apply(target, thisArg, args);
             }
@@ -325,7 +340,19 @@
             safeOverride(W.Promise.prototype, 'then', new W.Proxy(origThen, {
                 apply: function(target, thisArg, args) {
                     if (typeof args[0] === 'function') {
-                        try { if (args[0].toString().indexOf('onAbnormalityDetected') !== -1) { args[0] = function(){}; stats.blocked++; } } catch(e) {}
+                        try {
+                            // Only inspect non-native functions with enough code to contain detection logic.
+                            // Avoids expensive toString() on short lambdas and native builtins.
+                            const fn = args[0];
+                            if (fn.length <= 3 && typeof fn.name === 'string' && fn.name.length < 30) {
+                                const src = fn.toString();
+                                // Only check medium-length functions (detection callbacks are ~200-2000 chars)
+                                if (src.length > 100 && src.length < 5000 && src.indexOf('onAbnormalityDetected') !== -1) {
+                                    args[0] = function(){};
+                                    stats.blocked++;
+                                }
+                            }
+                        } catch(e) {}
                     }
                     return W.Reflect.apply(target, thisArg, args);
                 }
@@ -637,9 +664,36 @@
 
     const HARDCODED_CSS = COSMETIC_SELECTORS.join(',\n');
 
+    // ── CSS Selector Sanitization ──
+    // Prevents injection of dangerous CSS properties via external filter lists.
+    // Blocks url(), @import, expression(), javascript:, -moz-binding, content:,
+    // behavior:, and other CSS injection vectors.
+    // NOTE: Validates per-line (filter lists are line-delimited), NOT per-comma,
+    // because CSS selectors like :has(a, b) contain legitimate commas.
+    const _CSS_DANGEROUS_PATTERNS = /(?:url\s*\(|@import|expression\s*\(|javascript\s*:|\\00|\\u00|-moz-binding|behavior\s*:|var\s*\(\s*--[^)]*url)/i;
+    const _CSS_BLOCK_INJECTION = /[{}`]/;
+
+    function sanitizeCSSSelectors(selectorStr) {
+        if (!selectorStr || typeof selectorStr !== 'string') return '';
+        // Split on newlines (filter list format), not commas (breaks :has/:is selectors).
+        // Cached selectors are stored as "sel1,\nsel2,\n..." so strip trailing commas.
+        return selectorStr.split('\n')
+            .map(line => line.trim().replace(/^,+|,+$/g, '').trim())
+            .filter(line => {
+                if (!line) return false;
+                // Block dangerous CSS injection patterns
+                if (_CSS_DANGEROUS_PATTERNS.test(line)) return false;
+                // Block curly braces and backticks (property block injection)
+                if (_CSS_BLOCK_INJECTION.test(line)) return false;
+                return true;
+            })
+            .join(',\n');
+    }
+
     let cosmeticEl = null;
     function updateCSS(extraSelectors) {
-        const allCSS = HARDCODED_CSS + (extraSelectors ? ',\n' + extraSelectors : '');
+        const sanitizedExtra = sanitizeCSSSelectors(extraSelectors);
+        const allCSS = HARDCODED_CSS + (sanitizedExtra ? ',\n' + sanitizedExtra : '');
         const css = allCSS + ' { display: none !important; visibility: hidden !important; height: 0 !important; max-height: 0 !important; overflow: hidden !important; padding: 0 !important; margin: 0 !important; }';
         if (cosmeticEl && cosmeticEl.parentNode) {
             cosmeticEl.textContent = css;
@@ -789,6 +843,15 @@
         // addMutationRule lives in the main IIFE and isn't available at document-start.
         let _rafId = null;
         let _pendingRoots = [];
+        const processBatch = () => {
+            _rafId = null;
+            const roots = _pendingRoots.splice(0, 50);
+            for (const root of roots) scanForAds(root);
+            // If more remain (or new ones arrived during processing), schedule another frame
+            if (_pendingRoots.length) {
+                _rafId = requestAnimationFrame(processBatch);
+            }
+        };
         const obs = new MutationObserver((mutations) => {
             for (const m of mutations) {
                 for (const node of m.addedNodes) {
@@ -796,20 +859,7 @@
                 }
             }
             if (_pendingRoots.length && !_rafId) {
-                _rafId = requestAnimationFrame(() => {
-                    _rafId = null;
-                    // Process in batches to avoid blocking main thread on heavy DOM mutations
-                    const roots = _pendingRoots.splice(0, 50);
-                    for (const root of roots) scanForAds(root);
-                    // If more remain, schedule another frame
-                    if (_pendingRoots.length) {
-                        _rafId = requestAnimationFrame(() => {
-                            _rafId = null;
-                            const more = _pendingRoots.splice(0);
-                            for (const r of more) scanForAds(r);
-                        });
-                    }
-                });
+                _rafId = requestAnimationFrame(processBatch);
             }
         });
         obs.observe(document.documentElement, { childList: true, subtree: true });
@@ -849,12 +899,6 @@
 
     //  SECTION 0A: CORE UTILITIES & UNIFIED STORAGE
 
-    const YTKIT_VERSION = '1.3.1';
-
-    // Shared selectors
-    const VIDEO_RENDERERS = 'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer';
-    const BUTTON_CONTAINER = '#top-level-buttons-computed';
-
     // Settings version for migrations
 
     // Page type detection for lazy-loading features
@@ -893,7 +937,11 @@
     };
 
     //  Trusted Types Safe HTML Helper
-    // YouTube enforces Trusted Types which blocks direct innerHTML assignments
+    // YouTube enforces Trusted Types which blocks direct innerHTML assignments.
+    // Policy is pass-through by design: all TrustedHTML input comes from YTKit's
+    // own code (SVG icons, badges), not untrusted user input. The policy exists
+    // only to satisfy YouTube's CSP requirement — sanitization is unnecessary
+    // and actively harmful (breaks SVG data URIs, attribute patterns, etc.).
     const TrustedHTML = (() => {
         let policy = null;
         if (typeof window.trustedTypes !== 'undefined' && window.trustedTypes.createPolicy) {
@@ -978,8 +1026,24 @@
             } catch (e) {
                 console.error('[YTKit Storage] Sync save failed:', key, e);
             }
+        },
+
+        // Ensure pending writes are flushed before page unload
+        _initUnloadFlush() {
+            window.addEventListener('beforeunload', () => {
+                if (this._saveTimeout) {
+                    clearTimeout(this._saveTimeout);
+                    this._saveTimeout = null;
+                }
+                if (this._dirty.size > 0) this._flush();
+            });
+            // Also flush on YouTube SPA navigations
+            document.addEventListener('yt-navigate-start', () => {
+                if (this._dirty.size > 0) this._flush();
+            });
         }
     };
+    StorageManager._initUnloadFlush();
 
     //  TRANSCRIPT SERVICE - Multi-Method Extraction with Failover
     const TranscriptService = {
@@ -1954,13 +2018,6 @@
             hideDescriptionRow: true,
             // Consolidated: replaces hideVideoEndCards, hideVideoEndScreen, hideEndVideoStills
             hideVideoEndContent: true,
-            hideVideosFromHome: true,
-            hideVideosBlockChannels: true,
-            hideVideosKeywordFilter: '',
-            hideVideosDurationFilter: 0,
-            hideVideosBlockedChannels: [],
-            hideVideosSubsLoadLimit: true,
-            hideVideosSubsLoadThreshold: 3,
             stickyVideo: true,
             cleanShareUrls: true,
             videosPerRow: 0,                // 0 = dynamic, 3-8 = fixed columns
@@ -1991,6 +2048,7 @@
             hideCommentActionMenu: true,
             condenseComments: true,
             hideCommentTeaser: true,
+            autoExpandComments: true,
             hideLiveChatEngagement: true,
             hidePaidPromotionWatch: true,
             hideChannelJoinButton: true,
@@ -2027,6 +2085,8 @@
             hideCollaborations: true,
             hideInfoPanels: true,
             colorTheme: 'none',
+            commentEnhancements: true,
+            sidebarOrder: null,
 
         },
 
@@ -2066,7 +2126,7 @@
                 bookmarks: bookmarks,
                 exportVersion: 3,
                 exportDate: new Date().toISOString(),
-                ytkitVersion: YTKIT_VERSION
+                ytkitVersion: '1.3.6'
             };
             return JSON.stringify(exportData, null, 2);
         },
@@ -2220,6 +2280,70 @@
         }
     };
 
+    // ─── Conflict Detection Map ───
+    const CONFLICT_MAP = {
+        fitPlayerToWindow: { conflicts: ['stickyVideo'], reason: 'Both control player dimensions' },
+        stickyVideo: { conflicts: ['fitPlayerToWindow'], reason: 'Theater Split overrides Fit Player' },
+        hideRelatedVideos: { conflicts: [], note: 'expandVideoWidth depends on this' },
+        hideSidebar: { conflicts: ['hiddenChatElementsManager'], reason: 'Sidebar hidden removes chat access' },
+        removeAllShorts: { conflicts: ['redirectShorts'], reason: 'Removed shorts cannot be redirected' },
+    };
+
+    // ─── Recently Changed Tracking ───
+    const _recentlyChanged = [];
+    const MAX_RECENT = 6;
+    function trackRecentChange(featureId, enabled) {
+        const idx = _recentlyChanged.findIndex(r => r.id === featureId);
+        if (idx !== -1) _recentlyChanged.splice(idx, 1);
+        _recentlyChanged.unshift({ id: featureId, enabled, time: Date.now() });
+        if (_recentlyChanged.length > MAX_RECENT) _recentlyChanged.length = MAX_RECENT;
+        // Update the recently changed section if panel is open
+        document.dispatchEvent(new CustomEvent('ytkit-recent-changed'));
+    }
+
+    // ─── Feature State Helper ───
+    function getFeatureStatus(f) {
+        if (f._arrayKey) return { status: 'sub', label: '', color: '' };
+        if (f.type === 'select' || f.type === 'color' || f.type === 'range' || f.type === 'textarea' || f.type === 'info') return { status: 'config', label: '', color: '' };
+        const isEnabled = appState.settings[f.id];
+        if (!isEnabled) return { status: 'off', label: 'Off', color: '#71717a' };
+        const crashCount = typeof _featureCrashCounts !== 'undefined' ? (_featureCrashCounts[f.id] || 0) : 0;
+        if (crashCount >= 3) return { status: 'crashed', label: 'Crashed', color: '#ef4444' };
+        if (f.dependsOn && !appState.settings[f.dependsOn]) {
+            const dep = features.find(df => df.id === f.dependsOn);
+            return { status: 'dep', label: 'Needs: ' + (dep?.name || f.dependsOn), color: '#f59e0b' };
+        }
+        if (f.pages && f.pages.length > 0 && !f.pages.includes(appState.currentPage)) {
+            return { status: 'wrong-page', label: 'Wrong page', color: '#f59e0b' };
+        }
+        if (f._initialized) return { status: 'active', label: 'Active', color: '#22c55e' };
+        return { status: 'enabled', label: 'Enabled', color: '#3b82f6' };
+    }
+
+    // ─── Feature Preview Descriptions ───
+    const FEATURE_PREVIEWS = {
+        logoToSubscriptions: 'Logo click goes to /feed/subscriptions instead of homepage',
+        widenSearchBar: 'Search bar expands ~480px wider to fill header space',
+        subscriptionsGrid: 'Subscriptions feed uses CSS grid with 340px min columns',
+        homepageGridAlign: 'Homepage thumbnails snap to uniform grid rows',
+        styledFilterChips: 'Filter chips get glassmorphism, hover lift, uniform sizing',
+        hideSidebar: 'Left nav panel completely removed, page-manager goes full-width',
+        uiStyleManager: 'Applies border-radius:0 globally for square UI look',
+        chatStyleComments: 'Comments get compact card layout with inline vote badges',
+        removeAllShorts: 'All shorts links and shelf renderers hidden site-wide',
+        redirectShorts: 'Shorts URLs rewritten to /watch?v= for standard player',
+        fitPlayerToWindow: 'Player goes position:absolute, 100vw x 100vh, masthead hidden',
+        stickyVideo: 'Full-screen player with scroll-triggered side-by-side comments',
+        hideRelatedVideos: 'Secondary panel hidden, primary stretches to full width',
+        expandVideoWidth: 'Primary column gets max-width:none when sidebar is hidden',
+        ytAdBlock: 'Proxy-based ad blocking: JSON.parse, fetch, XHR interception',
+        skipSponsors: 'SponsorBlock API integration with auto-skip by category',
+        autoMaxResolution: 'Forces highest available resolution on video load',
+        autoExpandComments: 'Removes comment truncation, clicks Read More automatically',
+        autoResumePosition: 'Saves playback position, resumes on revisit (>15s threshold)',
+        commentEnhancements: 'Highlights creator replies, shows like heat, collapse toggle',
+    };
+
     const features = [
         // ─── Interface ───
         cssFeature('hideCreateButton', 'Hide Create Button', 'Remove the "Create" button from the header toolbar', 'Interface', 'plus-circle',
@@ -2357,7 +2481,8 @@
                 'dracula': 'Dracula',
                 'nord': 'Nord',
                 'gruvbox': 'Gruvbox Dark',
-                'tokyo-night': 'Tokyo Night'
+                'tokyo-night': 'Tokyo Night',
+                'nyan-cat': 'Nyan Cat'
             },
             settingKey: 'colorTheme',
             _styleElement: null,
@@ -2417,6 +2542,143 @@
                     blue: '#7dcfff', sapphire: '#2ac3de', peach: '#ff9e64',
                     yellow: '#e0af68', teal: '#73daca', lavender: '#bb9af7'
                 }
+            },
+
+            // Raw CSS themes (decorative/cosmetic themes that bypass the variable system)
+            _rawThemes: {
+                'nyan-cat': `
+/* ── Nyan Cat Theme ── */
+
+/* Rainbow progress bar */
+.html5-play-progress, .ytp-play-progress {
+    background: linear-gradient(to bottom, #FF0000 0%, #FF0000 16.5%, #FF9900 16.5%, #FF9900 33%, #FFFF00 33%, #FFFF00 50%, #33FF00 50%, #33FF00 66%, #0099FF 66%, #0099FF 83.5%, #6633ff 83.5%, #6633ff 100%) !important;
+}
+.html5-load-progress, .ytp-load-progress {
+    background: rgba(255,255,255,0.15) !important;
+}
+
+/* Nyan Cat scrubber */
+.html5-scrubber-button, .ytp-scrubber-button {
+    background: url("https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/refs/heads/main/Themes/cat.gif") !important;
+    width: 34px !important;
+    height: 21px !important;
+    border: none !important;
+    margin-left: -18px !important;
+    margin-top: 0px !important;
+}
+.ytp-progress-bar-container:hover .ytp-scrubber-button,
+.ytp-progress-bar-container:hover .ytp-load-progress {
+    image-rendering: pixelated;
+}
+.html5-progress-bar-container, .ytp-progress-bar-container {
+    height: 12px !important;
+}
+.html5-progress-bar, .ytp-progress-bar {
+    margin-top: 12px !important;
+}
+.html5-progress-list, .ytp-progress-list,
+.video-ads .html5-progress-list.html5-ad-progress-list,
+.video-ads .ytp-progress-list.ytp-ad-progress-list {
+    height: 12px !important;
+}
+
+/* Starfall scrubber pull indicator */
+.ytp-scrubber-pull-indicator::after {
+    display: block;
+    position: inherit;
+    content: '';
+    top: -13px;
+    left: -13px;
+    opacity: 1;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background-image: url(https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/refs/heads/main/Themes/starfall.gif);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 100%;
+    transform: rotate(94deg);
+    border-radius: 81px;
+}
+div.ytp-scrubber-pull-indicator { background-color: transparent; }
+
+/* Volume slider */
+.ytp-volume-slider-track { background: #0C4177 !important; }
+
+/* Cosmic comments box */
+ytd-comments {
+    display: block;
+    background-color: #18042b7d;
+    background-image: linear-gradient(180deg, #520d693d 0%, #ff00b240 100%);
+}
+
+/* Condensed comment spacing */
+span.yt-core-attributed-string.yt-core-attributed-string--white-space-pre-wrap {
+    margin-bottom: 0px; padding-bottom: 9px; padding-top: 0px; margin-top: 0px;
+}
+ytd-comment-view-model.style-scope.ytd-comment-thread-renderer {
+    padding-top: 0px; margin-bottom: -7px;
+}
+yt-comment-filter-context-view-model.ytCommentFilterContextHost { display: none; }
+yt-sub-thread.ytSubThreadHost.ytSubThreadHasButton.ytSubThreadTopLevelThread {
+    padding-top: 0px; padding-bottom: 0px; margin-top: 0px; margin-bottom: -19px; border-style: none;
+}
+
+/* Condensed buttons */
+div.yt-spec-button-shape-next__button-text-content {
+    padding: 0; margin: 0;
+}
+.yt-spec-button-shape-next--enable-backdrop-filter-experiment.yt-spec-button-shape-next--icon-trailing.yt-spec-button-shape-next--size-m.yt-spec-button-shape-next--mono.yt-spec-button-shape-next--text.yt-spec-button-shape-next {
+    padding: 0; margin: 0;
+}
+
+/* Commentbox border cleanup */
+.style-scope.ytd-commentbox {
+    border: none; margin: 0; padding: 0;
+}
+div.unfocused-line.style-scope.tp-yt-paper-input-container { display: none; }
+yt-formatted-string.style-scope.ytd-commentbox { padding: 0; margin: 0; }
+
+/* Hide miniplayer */
+ytd-miniplayer.ytdMiniplayerComponentHost.ytdMiniplayerComponentVisible { display: none; }
+
+/* Quick links condensed styling */
+#ytkit-po-drop {
+    padding: 0 !important; margin: 0 !important;
+    display: flex; flex-direction: column;
+    min-width: fit-content;
+    background: #0f0f0f;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+.ytkit-ql-item {
+    display: flex; align-items: center;
+    padding: 2px 4px !important; margin: 0 !important;
+    min-height: 0 !important; line-height: 1 !important;
+    text-decoration: none; color: #f1f1f1;
+}
+.ytkit-ql-icon { width: 16px !important; height: 16px !important; margin: 0 !important; flex-shrink: 0; }
+.ytkit-ql-item span { font-size: 11px !important; margin-left: 4px !important; padding: 0 !important; }
+.ytkit-ql-settings { justify-content: center; padding: 4px 0 !important; }
+.ytkit-ql-settings span { display: none !important; }
+#ytkit-po-drop div[style*="height: 1px"],
+#ytkit-po-drop hr {
+    height: 1px !important; border: 0 !important;
+    background: rgba(255,255,255,0.1) !important;
+    margin: 0 !important; padding: 0 !important;
+    width: 100% !important; display: block !important;
+}
+.ytkit-ql-item:hover { background: rgba(255,255,255,0.1); }
+
+/* Transparent player controls */
+div.ytp-right-controls { background-color: transparent; }
+button.ytp-button.ytkit-po-btn.ytkit-po-gear {
+    padding: 0; margin: 0; height: 35px; width: 40px;
+    text-align: center; background-color: transparent;
+}
+div.ytp-time-wrapper.ytp-time-wrapper-delhi { background-color: transparent; }
+button.ytp-volume-icon.ytp-button { background-color: transparent; }
+button.ytp-play-button.ytp-button { background-color: transparent; }
+`
             },
 
             _buildCSS(t) {
@@ -2577,7 +2839,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 const theme = appState.settings.colorTheme || 'none';
-                if (theme === 'none' || !this._themes[theme]) return;
+                if (theme === 'none') return;
+                // Raw CSS themes (decorative/cosmetic)
+                if (this._rawThemes[theme]) {
+                    this._styleElement = injectStyle(this._rawThemes[theme], this.id, true);
+                    return;
+                }
+                // Variable-based color themes
+                if (!this._themes[theme]) return;
                 const css = this._buildCSS(this._themes[theme]);
                 this._styleElement = injectStyle(css, this.id, true);
             },
@@ -2610,7 +2879,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             init() {
                 // CSS selectors are scoped to ytd-watch-metadata — safe to inject globally
                 // (removing path guard so styles persist across SPA navigations)
-                const css = `ytd-watch-metadata[style*="--yt-saturated"]{--yt-saturated-base-background:transparent !important;--yt-saturated-raised-background:transparent !important;--yt-saturated-additive-background:transparent !important;--yt-saturated-text-primary:rgba(255,255,255,0.95) !important;--yt-saturated-text-secondary:rgba(255,255,255,0.6) !important;--yt-saturated-overlay-background:transparent !important}ytd-watch-metadata h1.ytd-watch-metadata yt-formatted-string{font-size:1.55rem !important;line-height:2rem !important;font-weight:700 !important;letter-spacing:-0.025em !important;color:rgba(255,255,255,0.97) !important;text-shadow:0 1px 2px rgba(0,0,0,0.2) !important}ytd-watch-metadata #title.ytd-watch-metadata{margin-bottom:2px !important}ytd-watch-metadata #top-row{display:flex !important;flex-wrap:nowrap !important;align-items:center !important;gap:0 !important;margin-bottom:6px !important;padding:10px 0 8px !important}ytd-watch-metadata[actions-on-separate-line] #top-row{flex-wrap:wrap !important}#owner.ytd-watch-metadata{display:flex !important;align-items:center !important;gap:8px !important;margin-bottom:0 !important;padding:0 !important;flex-shrink:0 !important;margin-right:auto !important}#owner.ytd-watch-metadata>#ytkit-watch-btn,#owner.ytd-watch-metadata>#ytkit-page-btn-watch{order:99 !important}#owner.ytd-watch-metadata ytd-video-owner-renderer #avatar{width:32px !important;height:32px !important;margin-right:0 !important}#owner.ytd-watch-metadata ytd-video-owner-renderer #avatar img{width:32px !important;height:32px !important;border-radius:50% !important;border:1.5px solid rgba(167,139,250,0.2) !important}#owner.ytd-watch-metadata ytd-video-owner-renderer{display:flex !important;align-items:center !important;gap:8px !important;min-width:0 !important}ytd-video-owner-renderer #upload-info{gap:0 !important}ytd-video-owner-renderer #channel-name{font-size:13px !important;font-weight:600 !important}ytd-video-owner-renderer #owner-sub-count{font-size:11px !important;opacity:0.4 !important;line-height:1.2 !important}ytd-watch-metadata #subscribe-button{margin:0 !important}ytd-watch-metadata #subscribe-button .yt-spec-button-shape-next,#notification-preference-button .yt-spec-button-shape-next{height:28px !important;font-size:11px !important;padding:0 12px !important;border-radius:14px !important;min-height:unset !important}#notification-preference-button .yt-spec-button-shape-next{padding:0 6px !important}yt-animated-action .ytAnimatedActionLottie,yt-animated-action .ytAnimatedActionContentWithBackground .ytAnimatedActionLottie{display:none !important}ytd-watch-metadata #actions.ytd-watch-metadata,#actions.item.style-scope.ytd-watch-metadata{flex:0 0 auto !important;min-width:0 !important;margin-left:auto !important}ytd-watch-metadata #actions-inner{display:flex !important;flex-wrap:wrap !important;gap:5px !important;align-items:center !important;justify-content:flex-end !important}#menu.ytd-watch-metadata{margin:0 !important}#top-level-buttons-computed.style-scope.ytd-menu-renderer{display:flex !important;flex-wrap:wrap !important;gap:5px !important;align-items:center !important}ytd-watch-metadata #actions ytd-menu-renderer>yt-icon-button,ytd-watch-metadata #actions ytd-menu-renderer>yt-button-shape:last-child{display:none !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next{height:30px !important;min-height:unset !important;min-width:unset !important;padding:0 12px !important;font-size:12px !important;border-radius:6px !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}segmented-like-dislike-button-view-model .ytSegmentedLikeDislikeButtonViewModelSegmentedButtonsWrapper{gap:5px !important}ytd-watch-metadata .yt-spec-button-shape-next--segmented-start,ytd-watch-metadata .yt-spec-button-shape-next--segmented-end{border-radius:6px !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next__icon{margin-right:3px !important}ytd-watch-metadata #top-level-buttons-computed yt-icon,ytd-watch-metadata #top-level-buttons-computed .ytIconWrapperHost{width:16px !important;height:16px !important}dislike-button-view-model .yt-spec-button-shape-next{padding:0 8px !important}button[id^="downloadBtn"]{height:30px !important;min-height:unset !important;padding:0 12px !important;font-size:12px !important;border-radius:6px !important;margin-left:0 !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}button[id^="downloadBtn"]:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}.ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn{height:30px !important;min-height:unset !important;padding:0 10px !important;font-size:12px !important;border-radius:6px !important;margin-left:0 !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;font-family:"Roboto","Arial",sans-serif !important;gap:4px !important;backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;transition:all 0.2s ease !important}.ytkit-vlc-btn:hover,.ytkit-local-dl-btn:hover,.ytkit-mp3-dl-btn:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}.ytkit-vlc-btn svg,.ytkit-local-dl-btn svg,.ytkit-mp3-dl-btn svg{width:14px !important;height:14px !important}.ytkit-vlc-btn svg path,.ytkit-local-dl-btn svg path,.ytkit-mp3-dl-btn svg path{fill:currentColor !important}.ytkit-pc-wrap{margin-left:0 !important}.ytkit-pc-wrap .ytkit-pc-x{top:-4px !important;right:-4px !important;width:14px !important;height:14px !important;font-size:9px !important}ytd-watch-flexy .ytkit-trigger-btn{width:26px !important;height:26px !important;padding:4px !important;background:transparent !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:6px !important;opacity:0.35 !important;transition:opacity 0.15s,background 0.15s !important}ytd-watch-flexy .ytkit-trigger-btn:hover{opacity:0.9 !important;background:rgba(255,255,255,0.08) !important;border-color:rgba(255,255,255,0.12) !important}ytd-watch-metadata #description.ytd-watch-metadata,ytd-watch-metadata ytd-text-inline-expander{background:rgba(255,255,255,0.02) !important;border:1px solid rgba(255,255,255,0.04) !important;border-left:2px solid rgba(167,139,250,0.25) !important;border-radius:6px !important;padding:10px 14px !important;margin-top:6px !important;transition:border-color 0.2s ease,background 0.2s ease !important}ytd-watch-metadata #description.ytd-watch-metadata:hover,ytd-watch-metadata ytd-text-inline-expander:hover{background:rgba(255,255,255,0.035) !important;border-color:rgba(255,255,255,0.06) !important;border-left-color:rgba(167,139,250,0.4) !important}ytd-watch-metadata #description-inner{margin:0 !important}ytd-watch-metadata #description tp-yt-paper-button#expand,ytd-watch-metadata #description tp-yt-paper-button#collapse,ytd-text-inline-expander #expand,ytd-text-inline-expander #collapse{font-size:12px !important;color:rgba(167,139,250,0.5) !important;text-transform:none !important;margin-top:6px !important;padding:2px 0 !important}ytd-watch-metadata #description-inline-expander #snippet{font-size:13px !important;line-height:1.6 !important;color:rgba(255,255,255,0.55) !important}ytd-watch-metadata #info-container{font-size:12px !important;color:rgba(255,255,255,0.35) !important}ytd-watch-metadata #info span,ytd-watch-metadata #info-text{font-size:12px !important}#bottom-row.ytd-watch-metadata{margin-top:0 !important;margin-right:0 !important;gap:4px !important;padding:4px 0 !important}ytd-engagement-panel-title-header-renderer{padding:8px 16px !important}#below.ytd-watch-flexy{padding-bottom:12px !important}ytd-watch-metadata{min-height:unset !important}ytd-video-description-infocards-section-renderer{padding:8px 0 !important;margin-top:8px !important}ytd-video-description-music-section-renderer,ytd-video-description-transcript-section-renderer{padding:6px 0 !important}ytd-comments-header-renderer{min-height:0 !important;padding:12px 0 8px !important;margin:8px 0 4px 0 !important;border-top:1px solid rgba(255,255,255,0.05) !important}ytd-comments-header-renderer #count{font-size:13px !important;font-weight:600 !important;color:rgba(255,255,255,0.5) !important;letter-spacing:-0.01em !important}ytd-comments-header-renderer #sort-menu{opacity:0.5 !important;transition:opacity 0.2s !important}ytd-comments-header-renderer #sort-menu:hover{opacity:1 !important}ytd-comments-header-renderer #comments-panel-button,ytd-comments-header-renderer #leading-section,ytd-comments-header-renderer #title{display:none !important}ytd-comments-header-renderer #additional-section{display:none !important}ytd-comments-header-renderer ytd-comment-simplebox-renderer{margin:0 0 8px 0 !important;padding:0 !important}ytd-comment-simplebox-renderer #placeholder-area{background:rgba(255,255,255,0.03) !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:8px !important;padding:10px 14px !important;font-size:13px !important;color:rgba(255,255,255,0.3) !important;transition:border-color 0.2s !important}ytd-comment-simplebox-renderer #placeholder-area:hover{border-color:rgba(167,139,250,0.25) !important}ytd-comment-simplebox-renderer #avatar{width:28px !important;height:28px !important}ytd-comment-simplebox-renderer #avatar img{width:28px !important;height:28px !important;border-radius:50% !important}h1.style-scope.ytd-watch-metadata{margin-top:20px !important;font-weight:900 !important;font-style:normal !important;text-align:center !important;text-transform:capitalize !important;max-width:100% !important;overflow:hidden !important;text-overflow:ellipsis !important}yt-formatted-string.style-scope.ytd-watch-metadata{margin-bottom:0 !important;word-break:break-word !important;overflow-wrap:break-word !important}#primary.ytd-watch-flexy{max-width:100% !important;overflow:hidden !important}ytd-watch-metadata{max-width:100% !important;overflow:hidden !important}#title.ytd-watch-metadata{max-width:100% !important;overflow:hidden !important}div.yt-spec-touch-feedback-shape__fill{display:none !important}div.yt-spec-touch-feedback-shape__stroke{display:none !important}yt-touch-feedback-shape.yt-spec-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response{display:none !important}ytd-watch-metadata tp-yt-paper-button.dropdown-trigger.style-scope.yt-dropdown-menu{display:none !important}yt-formatted-string.count-text.style-scope.ytd-comments-header-renderer{display:none !important}yt-formatted-string.style-scope.ytd-video-owner-renderer{display:none !important}ytd-watch-flexy button.ytkit-trigger-btn{display:none !important}ytd-watch-flexy yt-icon.style-scope.ytd-logo{display:none !important}div.item.style-scope.ytd-watch-metadata{display:none !important}ytd-watch-metadata #info-container span.style-scope.yt-formatted-string{display:none !important}#actions.ytd-watch-metadata button.yt-spec-button-shape-next.yt-spec-button-shape-next--tonal.yt-spec-button-shape-next--mono.yt-spec-button-shape-next--size-m.yt-spec-button-shape-next--icon-leading.yt-spec-button-shape-next--segmented-start.yt-spec-button-shape-next--enable-backdrop-filter-experiment{text-align:right !important}ytd-comment-view-model span.style-scope.yt-formatted-string,ytd-comment-renderer span.style-scope.yt-formatted-string,ytd-comment-thread-renderer span.style-scope.yt-formatted-string,ytd-comments-header-renderer span.style-scope.yt-formatted-string,ytd-comment-simplebox-renderer span.style-scope.yt-formatted-string{display:inline !important}ytd-comment-view-model yt-formatted-string,ytd-comment-renderer yt-formatted-string{display:inline !important}ytd-comments#comments{display:block !important;visibility:visible !important}ytd-comments#comments ytd-item-section-renderer{display:block !important}div.thread-hitbox.style-scope.ytd-comment-thread-renderer{display:none !important}`;
+                const css = `ytd-watch-metadata[style*="--yt-saturated"]{--yt-saturated-base-background:transparent !important;--yt-saturated-raised-background:transparent !important;--yt-saturated-additive-background:transparent !important;--yt-saturated-text-primary:rgba(255,255,255,0.95) !important;--yt-saturated-text-secondary:rgba(255,255,255,0.6) !important;--yt-saturated-overlay-background:transparent !important}ytd-watch-metadata h1.ytd-watch-metadata yt-formatted-string{font-size:1.55rem !important;line-height:2rem !important;font-weight:700 !important;letter-spacing:-0.025em !important;color:rgba(255,255,255,0.97) !important;text-shadow:0 1px 2px rgba(0,0,0,0.2) !important}ytd-watch-metadata #title.ytd-watch-metadata{margin-bottom:2px !important}ytd-watch-metadata #top-row{display:flex !important;flex-wrap:nowrap !important;align-items:center !important;gap:0 !important;margin-bottom:6px !important;padding:10px 0 8px !important}ytd-watch-metadata[actions-on-separate-line] #top-row{flex-wrap:wrap !important}#owner.ytd-watch-metadata{display:flex !important;align-items:center !important;gap:8px !important;margin-bottom:0 !important;padding:0 !important;flex-shrink:0 !important;margin-right:auto !important}#owner.ytd-watch-metadata>#ytkit-watch-btn,#owner.ytd-watch-metadata>#ytkit-page-btn-watch{order:99 !important}#owner.ytd-watch-metadata ytd-video-owner-renderer #avatar{width:32px !important;height:32px !important;margin-right:0 !important}#owner.ytd-watch-metadata ytd-video-owner-renderer #avatar img{width:32px !important;height:32px !important;border-radius:50% !important;border:1.5px solid rgba(167,139,250,0.2) !important}#owner.ytd-watch-metadata ytd-video-owner-renderer{display:flex !important;align-items:center !important;gap:8px !important;min-width:0 !important}ytd-video-owner-renderer #upload-info{gap:0 !important}ytd-video-owner-renderer #channel-name{font-size:13px !important;font-weight:600 !important}ytd-video-owner-renderer #owner-sub-count{font-size:11px !important;opacity:0.4 !important;line-height:1.2 !important}ytd-watch-metadata #subscribe-button{margin:0 !important}ytd-watch-metadata #subscribe-button .yt-spec-button-shape-next,#notification-preference-button .yt-spec-button-shape-next{height:28px !important;font-size:11px !important;padding:0 12px !important;border-radius:14px !important;min-height:unset !important}#notification-preference-button .yt-spec-button-shape-next{padding:0 6px !important}yt-animated-action .ytAnimatedActionLottie,yt-animated-action .ytAnimatedActionContentWithBackground .ytAnimatedActionLottie{display:none !important}ytd-watch-metadata #actions.ytd-watch-metadata,#actions.item.style-scope.ytd-watch-metadata{flex:0 0 auto !important;min-width:0 !important;margin-left:auto !important}ytd-watch-metadata #actions-inner{display:flex !important;flex-wrap:wrap !important;gap:5px !important;align-items:center !important;justify-content:flex-end !important}#menu.ytd-watch-metadata{margin:0 !important}#top-level-buttons-computed.style-scope.ytd-menu-renderer{display:flex !important;flex-wrap:wrap !important;gap:5px !important;align-items:center !important}ytd-watch-metadata #actions ytd-menu-renderer>yt-icon-button,ytd-watch-metadata #actions ytd-menu-renderer>yt-button-shape:last-child{display:none !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next{height:30px !important;min-height:unset !important;min-width:unset !important;padding:0 12px !important;font-size:12px !important;border-radius:6px !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;transition:all 0.2s ease !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}segmented-like-dislike-button-view-model .ytSegmentedLikeDislikeButtonViewModelSegmentedButtonsWrapper{gap:5px !important}ytd-watch-metadata .yt-spec-button-shape-next--segmented-start,ytd-watch-metadata .yt-spec-button-shape-next--segmented-end{border-radius:6px !important}ytd-watch-metadata #top-level-buttons-computed .yt-spec-button-shape-next__icon{margin-right:3px !important}ytd-watch-metadata #top-level-buttons-computed yt-icon,ytd-watch-metadata #top-level-buttons-computed .ytIconWrapperHost{width:16px !important;height:16px !important}dislike-button-view-model .yt-spec-button-shape-next{padding:0 8px !important}button[id^="downloadBtn"]{height:30px !important;min-height:unset !important;padding:0 12px !important;font-size:12px !important;border-radius:6px !important;margin-left:0 !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;transition:all 0.2s ease !important}button[id^="downloadBtn"]:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}.ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn{height:30px !important;min-height:unset !important;padding:0 10px !important;font-size:12px !important;border-radius:6px !important;margin-left:0 !important;background:rgba(255,255,255,0.05) !important;border:1px solid rgba(255,255,255,0.07) !important;color:rgba(255,255,255,0.7) !important;font-weight:500 !important;font-family:"Roboto","Arial",sans-serif !important;gap:4px !important;transition:all 0.2s ease !important}.ytkit-vlc-btn:hover,.ytkit-local-dl-btn:hover,.ytkit-mp3-dl-btn:hover{background:rgba(167,139,250,0.1) !important;border-color:rgba(167,139,250,0.2) !important;color:rgba(255,255,255,0.95) !important}.ytkit-vlc-btn svg,.ytkit-local-dl-btn svg,.ytkit-mp3-dl-btn svg{width:14px !important;height:14px !important}.ytkit-vlc-btn svg path,.ytkit-local-dl-btn svg path,.ytkit-mp3-dl-btn svg path{fill:currentColor !important}.ytkit-pc-wrap{margin-left:0 !important}.ytkit-pc-wrap .ytkit-pc-x{top:-4px !important;right:-4px !important;width:14px !important;height:14px !important;font-size:9px !important}ytd-watch-flexy .ytkit-trigger-btn{width:26px !important;height:26px !important;padding:4px !important;background:transparent !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:6px !important;opacity:0.35 !important;transition:opacity 0.15s,background 0.15s !important}ytd-watch-flexy .ytkit-trigger-btn:hover{opacity:0.9 !important;background:rgba(255,255,255,0.08) !important;border-color:rgba(255,255,255,0.12) !important}ytd-watch-metadata #description.ytd-watch-metadata,ytd-watch-metadata ytd-text-inline-expander{background:rgba(255,255,255,0.02) !important;border:1px solid rgba(255,255,255,0.04) !important;border-left:2px solid rgba(167,139,250,0.25) !important;border-radius:6px !important;padding:10px 14px !important;margin-top:6px !important;transition:border-color 0.2s ease,background 0.2s ease !important}ytd-watch-metadata #description.ytd-watch-metadata:hover,ytd-watch-metadata ytd-text-inline-expander:hover{background:rgba(255,255,255,0.035) !important;border-color:rgba(255,255,255,0.06) !important;border-left-color:rgba(167,139,250,0.4) !important}ytd-watch-metadata #description-inner{margin:0 !important}ytd-watch-metadata #description tp-yt-paper-button#expand,ytd-watch-metadata #description tp-yt-paper-button#collapse,ytd-text-inline-expander #expand,ytd-text-inline-expander #collapse{font-size:12px !important;color:rgba(167,139,250,0.5) !important;text-transform:none !important;margin-top:6px !important;padding:2px 0 !important}ytd-watch-metadata #description-inline-expander #snippet{font-size:13px !important;line-height:1.6 !important;color:rgba(255,255,255,0.55) !important}ytd-watch-metadata #info-container{font-size:12px !important;color:rgba(255,255,255,0.35) !important}ytd-watch-metadata #info span,ytd-watch-metadata #info-text{font-size:12px !important}#bottom-row.ytd-watch-metadata{margin-top:0 !important;margin-right:0 !important;gap:4px !important;padding:4px 0 !important}ytd-engagement-panel-title-header-renderer{padding:8px 16px !important}#below.ytd-watch-flexy{padding-bottom:12px !important}ytd-watch-metadata{min-height:unset !important}ytd-video-description-infocards-section-renderer{padding:8px 0 !important;margin-top:8px !important}ytd-video-description-music-section-renderer,ytd-video-description-transcript-section-renderer{padding:6px 0 !important}ytd-comments-header-renderer{min-height:0 !important;padding:12px 0 8px !important;margin:8px 0 4px 0 !important;border-top:1px solid rgba(255,255,255,0.05) !important}ytd-comments-header-renderer #count{font-size:13px !important;font-weight:600 !important;color:rgba(255,255,255,0.5) !important;letter-spacing:-0.01em !important}ytd-comments-header-renderer #sort-menu{opacity:0.5 !important;transition:opacity 0.2s !important}ytd-comments-header-renderer #sort-menu:hover{opacity:1 !important}ytd-comments-header-renderer #comments-panel-button,ytd-comments-header-renderer #leading-section,ytd-comments-header-renderer #title{display:none !important}ytd-comments-header-renderer #additional-section{display:none !important}ytd-comments-header-renderer ytd-comment-simplebox-renderer{margin:0 0 8px 0 !important;padding:0 !important}ytd-comments-header-renderer ytd-comment-simplebox-renderer #placeholder-area{background:rgba(255,255,255,0.03) !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:8px !important;padding:10px 14px !important;font-size:13px !important;color:rgba(255,255,255,0.3) !important;transition:border-color 0.2s !important}ytd-comments-header-renderer ytd-comment-simplebox-renderer #placeholder-area:hover{border-color:rgba(167,139,250,0.25) !important}ytd-comments-header-renderer ytd-comment-simplebox-renderer #avatar{width:28px !important;height:28px !important}ytd-comments-header-renderer ytd-comment-simplebox-renderer #avatar img{width:28px !important;height:28px !important;border-radius:50% !important}h1.style-scope.ytd-watch-metadata{margin-top:20px !important;font-weight:900 !important;font-style:normal !important;text-align:center !important;text-transform:capitalize !important;max-width:100% !important;overflow:hidden !important;text-overflow:ellipsis !important}yt-formatted-string.style-scope.ytd-watch-metadata{margin-bottom:0 !important;word-break:break-word !important;overflow-wrap:break-word !important}#primary.ytd-watch-flexy{max-width:100% !important}ytd-watch-metadata{max-width:100% !important;overflow:hidden !important}#title.ytd-watch-metadata{max-width:100% !important;overflow:hidden !important}div.yt-spec-touch-feedback-shape__fill{display:none !important}div.yt-spec-touch-feedback-shape__stroke{display:none !important}yt-touch-feedback-shape.yt-spec-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response{display:none !important}ytd-watch-metadata tp-yt-paper-button.dropdown-trigger.style-scope.yt-dropdown-menu{display:none !important}yt-formatted-string.count-text.style-scope.ytd-comments-header-renderer{display:none !important}yt-formatted-string.style-scope.ytd-video-owner-renderer{display:none !important}ytd-watch-flexy button.ytkit-trigger-btn{display:none !important}ytd-watch-flexy yt-icon.style-scope.ytd-logo{display:none !important}div.item.style-scope.ytd-watch-metadata{display:none !important}ytd-watch-metadata #info-container span.style-scope.yt-formatted-string{display:none !important}#actions.ytd-watch-metadata button.yt-spec-button-shape-next.yt-spec-button-shape-next--tonal.yt-spec-button-shape-next--mono.yt-spec-button-shape-next--size-m.yt-spec-button-shape-next--icon-leading.yt-spec-button-shape-next--segmented-start.yt-spec-button-shape-next--enable-backdrop-filter-experiment{text-align:right !important}ytd-comment-view-model span.style-scope.yt-formatted-string,ytd-comment-renderer span.style-scope.yt-formatted-string,ytd-comment-thread-renderer span.style-scope.yt-formatted-string,ytd-comments-header-renderer span.style-scope.yt-formatted-string,ytd-comment-simplebox-renderer span.style-scope.yt-formatted-string{display:inline !important}ytd-comment-view-model yt-formatted-string,ytd-comment-renderer yt-formatted-string{display:inline !important}ytd-comments#comments{display:block !important;visibility:visible !important}ytd-comments#comments ytd-item-section-renderer{display:block !important}div.thread-hitbox.style-scope.ytd-comment-thread-renderer{display:none !important}`;
                 this._styleElement = injectStyle(css, this.id, true);
             },
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
@@ -2626,7 +2895,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             init() {
                 // CSS selectors are scoped to comment elements — safe to inject globally
                 // (removing path guard so styles persist across SPA navigations)
-                const css = `ytd-comment-thread-renderer{margin:0 !important;padding:0 !important;border:none !important;background:none !important}ytd-comment-thread-renderer[is-pinned]{background:none !important;border-radius:0 !important;padding:0 !important;margin:0 !important}#contents.ytd-item-section-renderer{margin:0 !important;padding:0 !important}ytd-comment-view-model,ytd-comment-renderer{position:relative !important;padding:8px 4px 6px !important;margin:0 !important;display:block !important;border-bottom:1px solid rgba(255,255,255,0.035) !important;transition:background 0.15s ease !important}ytd-comment-view-model:last-child,ytd-comment-renderer:last-child{border-bottom:none !important}ytd-comment-view-model:hover,ytd-comment-renderer:hover{background:rgba(167,139,250,0.03) !important}ytd-comment-view-model>#body,ytd-comment-renderer>#body{display:flex !important;flex-direction:row !important;gap:10px !important;align-items:flex-start !important}ytd-comment-view-model #author-thumbnail,ytd-comment-renderer #author-thumbnail{display:block !important;flex-shrink:0 !important;width:28px !important;height:28px !important;margin-top:2px !important}ytd-comment-view-model #author-thumbnail img,ytd-comment-renderer #author-thumbnail img,ytd-comment-view-model #author-thumbnail yt-img-shadow,ytd-comment-renderer #author-thumbnail yt-img-shadow{width:28px !important;height:28px !important;border-radius:50% !important}ytd-comment-view-model>#body>#main,ytd-comment-renderer>#body>#main{flex:1 !important;min-width:0 !important;display:block !important}ytd-comment-view-model>#body>#main>#header,ytd-comment-renderer>#body>#main>#header{display:block !important;margin-bottom:3px !important}ytd-comment-view-model>#body>#main>#header>#header-author,ytd-comment-renderer>#body>#main>#header>#header-author{display:flex !important;flex-wrap:wrap !important;align-items:baseline !important;gap:0 6px !important}ytd-comment-view-model>#body>#main>#header>#header-author>h3,ytd-comment-renderer>#body>#main>#header>#header-author>h3{display:contents !important}ytd-comment-view-model #author-text,ytd-comment-renderer #author-text{display:inline !important;font-size:12.5px !important;font-weight:600 !important;color:#a78bfa !important;line-height:1.4 !important;text-decoration:none !important;transition:color 0.15s !important}ytd-comment-view-model #author-text:hover,ytd-comment-renderer #author-text:hover{color:#c4b5fd !important}ytd-comment-view-model #author-text span,ytd-comment-renderer #author-text span{font-size:12.5px !important}ytd-comment-view-model ytd-author-comment-badge-renderer,ytd-comment-renderer ytd-author-comment-badge-renderer{display:inline-flex !important;vertical-align:baseline !important;margin-left:2px !important}.ytkit-vote-badge{display:inline-flex !important;align-items:center !important;font-size:10.5px !important;color:rgba(255,255,255,0.3) !important;cursor:pointer !important;vertical-align:baseline !important;gap:2px !important;padding:1px 4px !important;border-radius:3px !important;transition:all 0.15s ease !important}.ytkit-vote-badge:hover{color:rgba(167,139,250,0.9) !important;background:rgba(167,139,250,0.08) !important}.ytkit-vote-badge svg{width:11px !important;height:11px !important;fill:currentColor !important;vertical-align:-1px !important}.ytkit-vote-badge.ytkit-liked{color:rgba(167,139,250,0.9) !important}ytd-comment-view-model #published-time-text,ytd-comment-renderer #published-time-text,ytd-comment-view-model .published-time-text,ytd-comment-renderer .published-time-text{display:inline !important;font-size:11px !important;color:rgba(255,255,255,0.25) !important;line-height:1.4 !important}ytd-comment-view-model #published-time-text a,ytd-comment-renderer #published-time-text a,ytd-comment-view-model .published-time-text a,ytd-comment-renderer .published-time-text a{color:rgba(255,255,255,0.25) !important;text-decoration:none !important}ytd-comment-view-model #pinned-comment-badge,ytd-comment-renderer #pinned-comment-badge,ytd-comment-view-model #linked-comment-badge,ytd-comment-view-model #paid-comment-background,ytd-comment-view-model #creator-heart-button,ytd-comment-renderer #creator-heart-button,ytd-comment-view-model #inline-action-menu,ytd-comment-renderer #inline-action-menu,ytd-comment-view-model #action-menu,ytd-comment-renderer #action-menu,ytd-comment-view-model #more,ytd-comment-view-model [slot="more"],ytd-comment-view-model #less,ytd-comment-view-model [slot="less"],ytd-comment-renderer tp-yt-paper-button.ytd-expander,ytd-comment-view-model #sponsor-comment-badge,ytd-comment-renderer #sponsor-comment-badge,ytd-comment-engagement-bar #dislike-button{display:none !important}ytd-comment-view-model #content-text,ytd-comment-renderer #content-text{display:block !important;font-size:13px !important;line-height:1.55 !important;color:rgba(255,255,255,0.78) !important;margin:0 !important;padding:0 !important;word-break:break-word !important}ytd-comment-view-model #content-text *,ytd-comment-renderer #content-text *{font-size:13px !important;line-height:1.55 !important}ytd-comment-view-model #content-text a,ytd-comment-renderer #content-text a{color:rgba(167,139,250,0.75) !important;text-decoration:none !important}ytd-comment-view-model #content-text a:hover,ytd-comment-renderer #content-text a:hover{color:#c4b5fd !important;text-decoration:underline !important}ytd-comment-view-model #error-text{display:none !important}ytd-comment-view-model ytd-comment-engagement-bar,ytd-comment-renderer ytd-comment-engagement-bar{position:absolute !important;top:6px !important;right:4px !important;margin:0 !important;padding:0 !important;z-index:2 !important;pointer-events:none !important}ytd-comment-view-model:hover ytd-comment-engagement-bar,ytd-comment-renderer:hover ytd-comment-engagement-bar{pointer-events:auto !important}ytd-comment-engagement-bar #toolbar{display:none !important;position:static !important;align-items:center !important;gap:4px !important;margin:0 !important}ytd-comment-view-model:hover>* ytd-comment-engagement-bar #toolbar,ytd-comment-view-model:hover ytd-comment-engagement-bar #toolbar,ytd-comment-renderer:hover ytd-comment-engagement-bar #toolbar{display:inline-flex !important}ytd-comment-engagement-bar #like-button,ytd-comment-engagement-bar #dislike-button,ytd-comment-engagement-bar #vote-count-middle,ytd-comment-engagement-bar #vote-count-left,ytd-comment-engagement-bar #vote-count-right,ytd-comment-engagement-bar #creator-heart-button{display:none !important}ytd-comment-engagement-bar #reply-button-end .yt-spec-button-shape-next{height:24px !important;min-height:unset !important;padding:0 10px !important;font-size:11px !important;min-width:unset !important;color:rgba(167,139,250,0.6) !important;background:rgba(167,139,250,0.06) !important;border-radius:4px !important;transition:all 0.15s !important}ytd-comment-engagement-bar #reply-button-end .yt-spec-button-shape-next:hover{color:rgba(167,139,250,0.9) !important;background:rgba(167,139,250,0.12) !important}ytd-comment-engagement-bar #reply-button-end yt-icon{display:none !important}ytd-comment-engagement-bar #reply-dialog{padding:10px 0 4px !important;margin:0 !important;position:relative !important;width:100% !important;box-sizing:border-box !important;overflow:visible !important;border:none !important;outline:none !important;background:transparent !important}ytd-comment-engagement-bar #reply-dialog:empty{display:none !important;padding:0 !important}#reply-dialog ytd-commentbox:not([hidden]),ytd-comment-engagement-bar ytd-comment-reply-dialog-renderer:not([hidden]){padding:0 !important;margin:0 !important;width:100% !important;border:none !important;outline:none !important;background:transparent !important;box-shadow:none !important;box-sizing:border-box !important;overflow:visible !important}#reply-dialog ytd-commentbox #creation-box,#reply-dialog ytd-commentbox #commentbox-background,#reply-dialog ytd-commentbox #main,#reply-dialog ytd-commentbox #header,#reply-dialog ytd-commentbox #container,#reply-dialog ytd-commentbox #commentbox{width:100% !important;border:none !important;outline:none !important;background:transparent !important;box-shadow:none !important;padding:0 !important;margin:0 !important;box-sizing:border-box !important}#reply-dialog ytd-commentbox,#reply-dialog ytd-comment-reply-dialog-renderer{border:none !important;outline:none !important;background:transparent !important;box-shadow:none !important;overflow:visible !important;width:100% !important;box-sizing:border-box !important}#reply-dialog #contenteditable-textarea,#reply-dialog #contenteditable-root,#reply-dialog yt-formatted-string[contenteditable],#reply-dialog [contenteditable="true"],ytd-comment-engagement-bar ytd-commentbox #contenteditable-textarea,ytd-comment-engagement-bar ytd-commentbox yt-formatted-string[contenteditable],ytd-commentbox yt-formatted-string.ytd-commentbox{font-size:13px !important;padding:10px 12px !important;background:rgba(255,255,255,0.04) !important;border:1px solid rgba(167,139,250,0.2) !important;border-radius:8px !important;min-height:60px !important;height:auto !important;color:rgba(255,255,255,0.85) !important;line-height:1.5 !important;outline:none !important;width:100% !important;box-sizing:border-box !important;transition:border-color 0.2s,background 0.2s !important}#reply-dialog #contenteditable-textarea:focus,#reply-dialog #contenteditable-root:focus,#reply-dialog yt-formatted-string[contenteditable]:focus,#reply-dialog [contenteditable="true"]:focus,ytd-commentbox yt-formatted-string.ytd-commentbox:focus{border-color:rgba(167,139,250,0.45) !important;background:rgba(255,255,255,0.06) !important}#reply-dialog #placeholder-area,#reply-dialog #contenteditable-textarea[aria-label]:empty::before{font-size:13px !important;color:rgba(255,255,255,0.25) !important}#reply-dialog #author-thumbnail,ytd-comment-engagement-bar ytd-commentbox #author-thumbnail{display:none !important}#reply-dialog #emoji-picker-button,#reply-dialog yt-emoji-picker-renderer{display:none !important}#reply-dialog #footer,#reply-dialog ytd-commentbox #footer{margin-top:8px !important;gap:6px !important;display:flex !important;justify-content:flex-end !important}#reply-dialog #footer .yt-spec-button-shape-next,#reply-dialog #footer button,#reply-dialog #cancel-button .yt-spec-button-shape-next,#reply-dialog #submit-button .yt-spec-button-shape-next{height:28px !important;font-size:11px !important;padding:0 14px !important;min-height:unset !important;border-radius:6px !important}.ytkit-replying ytd-comment-engagement-bar{position:relative !important;top:auto !important;right:auto !important;pointer-events:auto !important;margin:4px 0 0 !important}.ytkit-replying ytd-comment-engagement-bar #toolbar{display:none !important}.ytkit-replying:hover ytd-comment-engagement-bar #toolbar{display:none !important}ytd-comment-replies-renderer{margin:0 !important;padding:4px 0 4px 20px !important;border:none !important;display:block !important}.ytSubThreadThreadline,.ytSubThreadConnection,.ytSubThreadContinuation,.ytSubThreadShadow{display:none !important}yt-sub-thread{padding:0 !important;margin:0 !important}.ytSubThreadSubThreadContent{padding:0 !important}ytd-comment-replies-renderer #expanded-threads ytd-comment-view-model,ytd-comment-replies-renderer #expanded-threads ytd-comment-renderer,ytd-comment-replies-renderer #expander-contents ytd-comment-view-model,ytd-comment-replies-renderer #expander-contents ytd-comment-renderer{padding:8px 4px 8px 12px !important;border-bottom:none !important;border-left:2px solid rgba(167,139,250,0.12) !important;border-radius:0 !important;margin:0 !important}ytd-comment-replies-renderer #expanded-threads ytd-comment-view-model:hover,ytd-comment-replies-renderer #expanded-threads ytd-comment-renderer:hover,ytd-comment-replies-renderer #expander-contents ytd-comment-view-model:hover,ytd-comment-replies-renderer #expander-contents ytd-comment-renderer:hover{border-left-color:rgba(167,139,250,0.3) !important;background:rgba(167,139,250,0.025) !important}ytd-comment-replies-renderer ytd-comment-view-model #author-thumbnail,ytd-comment-replies-renderer ytd-comment-renderer #author-thumbnail{width:22px !important;height:22px !important}ytd-comment-replies-renderer ytd-comment-view-model #author-thumbnail img,ytd-comment-replies-renderer ytd-comment-renderer #author-thumbnail img,ytd-comment-replies-renderer ytd-comment-view-model #author-thumbnail yt-img-shadow,ytd-comment-replies-renderer ytd-comment-renderer #author-thumbnail yt-img-shadow{width:22px !important;height:22px !important}.show-replies-button,ytd-comment-replies-renderer #more-replies,ytd-comment-replies-renderer #more-replies-sub-thread{margin:2px 0 !important;padding:0 !important}ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next,ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next{font-size:11px !important;height:24px !important;padding:0 10px !important;color:rgba(167,139,250,0.6) !important;min-height:unset !important;min-width:unset !important;background:rgba(167,139,250,0.06) !important;border-radius:4px !important;transition:all 0.15s !important}ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next:hover,ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next:hover{background:rgba(167,139,250,0.12) !important;color:rgba(167,139,250,0.9) !important}ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next yt-icon,ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next yt-icon,ytd-comment-replies-renderer #more-replies svg,ytd-comment-replies-renderer #more-replies-sub-thread svg,ytd-comment-replies-renderer #more-replies yt-icon,ytd-comment-replies-renderer #more-replies-sub-thread yt-icon,ytd-comment-replies-renderer .show-replies-button yt-icon,ytd-comment-replies-renderer .show-replies-button svg{display:none !important}ytd-comment-replies-renderer #expanded-threads,ytd-comment-replies-renderer #expander-contents,#collapsed-threads.ytd-comment-replies-renderer{padding:0 !important;margin:0 !important}ytd-comment-replies-renderer #less-replies,ytd-comment-replies-renderer #less-replies-sub-thread{margin:2px 0 !important;padding:0 !important}ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next,ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next{font-size:11px !important;height:24px !important;padding:0 10px !important;color:rgba(167,139,250,0.35) !important;min-height:unset !important;background:rgba(167,139,250,0.04) !important;border-radius:4px !important}ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next yt-icon,ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next yt-icon,ytd-comment-replies-renderer #less-replies svg,ytd-comment-replies-renderer #less-replies-sub-thread svg,ytd-comment-replies-renderer #less-replies yt-icon,ytd-comment-replies-renderer #less-replies-sub-thread yt-icon{display:none !important}ytd-comments-header-renderer{margin:0 0 4px 0 !important;padding:0 !important}ytd-comments-entry-point-header-renderer,ytd-comments-entry-point-teaser-renderer{display:none !important}ytd-continuation-item-renderer{padding:4px 0 !important}`;
+                const css = `ytd-comment-thread-renderer{margin:0 !important;padding:0 !important;border:none !important;background:none !important}ytd-comment-thread-renderer[is-pinned]{background:none !important;border-radius:0 !important;padding:0 !important;margin:0 !important}#contents.ytd-item-section-renderer{margin:0 !important;padding:0 !important}ytd-comment-view-model,ytd-comment-renderer{position:relative !important;padding:8px 4px 6px !important;margin:0 !important;display:block !important;border-bottom:1px solid rgba(255,255,255,0.035) !important;transition:background 0.15s ease !important}ytd-comment-view-model:last-child,ytd-comment-renderer:last-child{border-bottom:none !important}ytd-comment-view-model:hover,ytd-comment-renderer:hover{background:rgba(167,139,250,0.03) !important}ytd-comment-view-model>#body,ytd-comment-renderer>#body{display:flex !important;flex-direction:row !important;gap:10px !important;align-items:flex-start !important}ytd-comment-view-model #author-thumbnail,ytd-comment-renderer #author-thumbnail{display:block !important;flex-shrink:0 !important;width:28px !important;height:28px !important;margin-top:2px !important}ytd-comment-view-model #author-thumbnail img,ytd-comment-renderer #author-thumbnail img,ytd-comment-view-model #author-thumbnail yt-img-shadow,ytd-comment-renderer #author-thumbnail yt-img-shadow{width:28px !important;height:28px !important;border-radius:50% !important}ytd-comment-view-model>#body>#main,ytd-comment-renderer>#body>#main{flex:1 !important;min-width:0 !important;display:block !important}ytd-comment-view-model>#body>#main>#header,ytd-comment-renderer>#body>#main>#header{display:block !important;margin-bottom:3px !important}ytd-comment-view-model>#body>#main>#header>#header-author,ytd-comment-renderer>#body>#main>#header>#header-author{display:flex !important;flex-wrap:wrap !important;align-items:baseline !important;gap:0 6px !important}ytd-comment-view-model>#body>#main>#header>#header-author>h3,ytd-comment-renderer>#body>#main>#header>#header-author>h3{display:contents !important}ytd-comment-view-model #author-text,ytd-comment-renderer #author-text{display:inline !important;font-size:12.5px !important;font-weight:600 !important;color:#a78bfa !important;line-height:1.4 !important;text-decoration:none !important;transition:color 0.15s !important}ytd-comment-view-model #author-text:hover,ytd-comment-renderer #author-text:hover{color:#c4b5fd !important}ytd-comment-view-model #author-text span,ytd-comment-renderer #author-text span{font-size:12.5px !important}ytd-comment-view-model ytd-author-comment-badge-renderer,ytd-comment-renderer ytd-author-comment-badge-renderer{display:inline-flex !important;vertical-align:baseline !important;margin-left:2px !important}.ytkit-vote-badge{display:inline-flex !important;align-items:center !important;font-size:10.5px !important;color:rgba(255,255,255,0.3) !important;cursor:pointer !important;vertical-align:baseline !important;gap:2px !important;padding:1px 4px !important;border-radius:3px !important;transition:all 0.15s ease !important}.ytkit-vote-badge:hover{color:rgba(167,139,250,0.9) !important;background:rgba(167,139,250,0.08) !important}.ytkit-vote-badge svg{width:11px !important;height:11px !important;fill:currentColor !important;vertical-align:-1px !important}.ytkit-vote-badge.ytkit-liked{color:rgba(167,139,250,0.9) !important}ytd-comment-view-model #published-time-text,ytd-comment-renderer #published-time-text,ytd-comment-view-model .published-time-text,ytd-comment-renderer .published-time-text{display:inline !important;font-size:11px !important;color:rgba(255,255,255,0.25) !important;line-height:1.4 !important}ytd-comment-view-model #published-time-text a,ytd-comment-renderer #published-time-text a,ytd-comment-view-model .published-time-text a,ytd-comment-renderer .published-time-text a{color:rgba(255,255,255,0.25) !important;text-decoration:none !important}ytd-comment-view-model #pinned-comment-badge,ytd-comment-renderer #pinned-comment-badge,ytd-comment-view-model #linked-comment-badge,ytd-comment-view-model #paid-comment-background,ytd-comment-view-model #creator-heart-button,ytd-comment-renderer #creator-heart-button,ytd-comment-view-model #inline-action-menu,ytd-comment-renderer #inline-action-menu,ytd-comment-view-model #action-menu,ytd-comment-renderer #action-menu,ytd-comment-view-model #more,ytd-comment-view-model [slot="more"],ytd-comment-view-model #less,ytd-comment-view-model [slot="less"],ytd-comment-renderer tp-yt-paper-button.ytd-expander,ytd-comment-view-model #sponsor-comment-badge,ytd-comment-renderer #sponsor-comment-badge,ytd-comment-engagement-bar #dislike-button{display:none !important}ytd-comment-view-model #content-text,ytd-comment-renderer #content-text{display:block !important;font-size:13px !important;line-height:1.55 !important;color:rgba(255,255,255,0.78) !important;margin:0 !important;padding:0 !important;word-break:break-word !important}ytd-comment-view-model #content-text *,ytd-comment-renderer #content-text *{font-size:13px !important;line-height:1.55 !important}ytd-comment-view-model #content-text a,ytd-comment-renderer #content-text a{color:rgba(167,139,250,0.75) !important;text-decoration:none !important}ytd-comment-view-model #content-text a:hover,ytd-comment-renderer #content-text a:hover{color:#c4b5fd !important;text-decoration:underline !important}ytd-comment-view-model #error-text{display:none !important}ytd-comment-view-model ytd-comment-engagement-bar,ytd-comment-renderer ytd-comment-engagement-bar{position:absolute !important;top:6px !important;right:4px !important;margin:0 !important;padding:0 !important;z-index:2 !important;pointer-events:none !important}ytd-comment-view-model:hover ytd-comment-engagement-bar,ytd-comment-renderer:hover ytd-comment-engagement-bar{pointer-events:auto !important}ytd-comment-engagement-bar #toolbar{display:none !important;position:static !important;align-items:center !important;gap:4px !important;margin:0 !important}ytd-comment-view-model:hover>* ytd-comment-engagement-bar #toolbar,ytd-comment-view-model:hover ytd-comment-engagement-bar #toolbar,ytd-comment-renderer:hover ytd-comment-engagement-bar #toolbar{display:inline-flex !important}ytd-comment-engagement-bar #like-button,ytd-comment-engagement-bar #dislike-button,ytd-comment-engagement-bar #vote-count-middle,ytd-comment-engagement-bar #vote-count-left,ytd-comment-engagement-bar #vote-count-right,ytd-comment-engagement-bar #creator-heart-button{display:none !important}ytd-comment-engagement-bar #reply-button-end .yt-spec-button-shape-next{height:24px !important;min-height:unset !important;padding:0 10px !important;font-size:11px !important;min-width:unset !important;color:rgba(167,139,250,0.6) !important;background:rgba(167,139,250,0.06) !important;border-radius:4px !important;transition:all 0.15s !important}ytd-comment-engagement-bar #reply-button-end .yt-spec-button-shape-next:hover{color:rgba(167,139,250,0.9) !important;background:rgba(167,139,250,0.12) !important}ytd-comment-engagement-bar #reply-button-end yt-icon{display:none !important}ytd-comment-engagement-bar #reply-dialog{padding:10px 0 4px !important;margin:0 !important;position:relative !important;width:100% !important;box-sizing:border-box !important;overflow:visible !important;border:none !important;outline:none !important;background:transparent !important}ytd-comment-engagement-bar #reply-dialog #unopened-dialog{display:none !important}ytd-comment-engagement-bar #reply-dialog:not(:has(ytd-commentbox:not([hidden]))){display:none !important}ytd-comment-engagement-bar #reply-dialog:empty{display:none !important;padding:0 !important}.ytkit-replying ytd-comment-engagement-bar{position:relative !important;top:auto !important;right:auto !important;pointer-events:auto !important;margin:4px 0 0 !important;width:100% !important;display:block !important}.ytkit-replying ytd-comment-engagement-bar #toolbar{display:none !important}.ytkit-replying:hover ytd-comment-engagement-bar #toolbar{display:none !important}ytd-comment-replies-renderer{margin:0 !important;padding:4px 0 4px 20px !important;border:none !important;display:block !important}.ytSubThreadThreadline,.ytSubThreadConnection,.ytSubThreadContinuation,.ytSubThreadShadow{display:none !important}yt-sub-thread{padding:0 !important;margin:0 !important}.ytSubThreadSubThreadContent{padding:0 !important}ytd-comment-replies-renderer #expanded-threads ytd-comment-view-model,ytd-comment-replies-renderer #expanded-threads ytd-comment-renderer,ytd-comment-replies-renderer #expander-contents ytd-comment-view-model,ytd-comment-replies-renderer #expander-contents ytd-comment-renderer{padding:8px 4px 8px 12px !important;border-bottom:none !important;border-left:2px solid rgba(167,139,250,0.12) !important;border-radius:0 !important;margin:0 !important}ytd-comment-replies-renderer #expanded-threads ytd-comment-view-model:hover,ytd-comment-replies-renderer #expanded-threads ytd-comment-renderer:hover,ytd-comment-replies-renderer #expander-contents ytd-comment-view-model:hover,ytd-comment-replies-renderer #expander-contents ytd-comment-renderer:hover{border-left-color:rgba(167,139,250,0.3) !important;background:rgba(167,139,250,0.025) !important}ytd-comment-replies-renderer ytd-comment-view-model #author-thumbnail,ytd-comment-replies-renderer ytd-comment-renderer #author-thumbnail{width:22px !important;height:22px !important}ytd-comment-replies-renderer ytd-comment-view-model #author-thumbnail img,ytd-comment-replies-renderer ytd-comment-renderer #author-thumbnail img,ytd-comment-replies-renderer ytd-comment-view-model #author-thumbnail yt-img-shadow,ytd-comment-replies-renderer ytd-comment-renderer #author-thumbnail yt-img-shadow{width:22px !important;height:22px !important}.show-replies-button,ytd-comment-replies-renderer #more-replies,ytd-comment-replies-renderer #more-replies-sub-thread{margin:2px 0 !important;padding:0 !important}ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next,ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next{font-size:11px !important;height:24px !important;padding:0 10px !important;color:rgba(167,139,250,0.6) !important;min-height:unset !important;min-width:unset !important;background:rgba(167,139,250,0.06) !important;border-radius:4px !important;transition:all 0.15s !important}ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next:hover,ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next:hover{background:rgba(167,139,250,0.12) !important;color:rgba(167,139,250,0.9) !important}ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next yt-icon,ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next yt-icon,ytd-comment-replies-renderer #more-replies svg,ytd-comment-replies-renderer #more-replies-sub-thread svg,ytd-comment-replies-renderer #more-replies yt-icon,ytd-comment-replies-renderer #more-replies-sub-thread yt-icon,ytd-comment-replies-renderer .show-replies-button yt-icon,ytd-comment-replies-renderer .show-replies-button svg{display:none !important}ytd-comment-replies-renderer #expanded-threads,ytd-comment-replies-renderer #expander-contents,#collapsed-threads.ytd-comment-replies-renderer{padding:0 !important;margin:0 !important}ytd-comment-replies-renderer #less-replies,ytd-comment-replies-renderer #less-replies-sub-thread{margin:2px 0 !important;padding:0 !important}ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next,ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next{font-size:11px !important;height:24px !important;padding:0 10px !important;color:rgba(167,139,250,0.35) !important;min-height:unset !important;background:rgba(167,139,250,0.04) !important;border-radius:4px !important}ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next yt-icon,ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next yt-icon,ytd-comment-replies-renderer #less-replies svg,ytd-comment-replies-renderer #less-replies-sub-thread svg,ytd-comment-replies-renderer #less-replies yt-icon,ytd-comment-replies-renderer #less-replies-sub-thread yt-icon{display:none !important}ytd-comments-header-renderer{margin:0 0 4px 0 !important;padding:0 !important}ytd-comments-entry-point-header-renderer,ytd-comments-entry-point-teaser-renderer{display:none !important}ytd-continuation-item-renderer{padding:4px 0 !important}`;
                 this._styleElement = injectStyle(css, this.id, true);
 
                 const thumbSVG = '<svg viewBox="0 0 24 24"><path d="M18.77 11h-4.23l1.52-4.94C16.38 5.03 15.54 4 14.38 4c-.58 0-1.14.24-1.52.65L7.87 10H4v10h2.5S11 21 13.21 21h3.04c1.37 0 2.57-.93 2.88-2.27l1.23-5.35c.4-1.73-.7-3.38-2.59-3.38z"/></svg>';
@@ -2663,28 +2932,99 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const processAll = () => {
                     document.querySelectorAll('ytd-comment-view-model:not([data-ytkit-chat]), ytd-comment-renderer:not([data-ytkit-chat])').forEach(processComment);
-                    // Toggle .ytkit-replying on comments with active reply dialogs
+                    // Toggle .ytkit-replying on comments with active (visible) reply dialogs
                     document.querySelectorAll('ytd-comment-view-model.ytkit-replying, ytd-comment-renderer.ytkit-replying').forEach(c => {
-                        if (!c.querySelector('ytd-comment-reply-dialog-renderer, #reply-dialog ytd-commentbox')) c.classList.remove('ytkit-replying');
+                        const replyBox = c.querySelector('#reply-dialog ytd-commentbox:not([hidden])');
+                        const isOpen = replyBox && !replyBox.closest('[hidden]') && replyBox.offsetParent !== null;
+                        if (!isOpen) c.classList.remove('ytkit-replying');
                     });
-                    document.querySelectorAll('ytd-comment-reply-dialog-renderer, #reply-dialog ytd-commentbox').forEach(d => {
+                    document.querySelectorAll('#reply-dialog ytd-commentbox:not([hidden])').forEach(d => {
+                        if (d.closest('[hidden]') || d.offsetParent === null) return;
                         const comment = d.closest('ytd-comment-view-model, ytd-comment-renderer');
                         if (comment) comment.classList.add('ytkit-replying');
                     });
 
-                    // Auto-cleanup: when reply dialog children are removed by YouTube,
-                    // remove the .ytkit-replying class
+                    // Style reply dialog elements via inline styles with !important (bypasses Shady DOM)
+                    document.querySelectorAll('ytd-comment-engagement-bar #reply-dialog').forEach(dialog => {
+                        const cb = dialog.querySelector('ytd-commentbox:not([hidden])');
+                        const isOpen = cb && !cb.closest('[hidden]') && cb.offsetParent !== null;
+
+                        // If dialog is closed, strip all inline styles we added
+                        if (!isOpen) {
+                            if (dialog.dataset.ytkitStyled) {
+                                delete dialog.dataset.ytkitStyled;
+                                dialog.removeAttribute('style');
+                                const allCb = dialog.querySelector('ytd-commentbox');
+                                if (allCb) {
+                                    allCb.removeAttribute('style');
+                                    allCb.querySelectorAll('#thumbnail-input-row, #main, #divider-line, #creation-box, #input-container, tp-yt-paper-input-container, .input-wrapper, #labelAndInputContainer, .paper-input-input, ytd-emoji-input, yt-user-mention-autosuggest-input, #author-thumbnail, .underline, .unfocused-line, .focused-line, #contenteditable-textarea, #contenteditable-root, #footer, ytd-comment-reply-dialog-renderer').forEach(el => el.removeAttribute('style'));
+                                    allCb.querySelectorAll('#footer .yt-spec-button-shape-next').forEach(el => el.removeAttribute('style'));
+                                    const ta = allCb.querySelector('#contenteditable-textarea');
+                                    if (ta) delete ta.dataset.ytkitFocus;
+                                }
+                                const rr = dialog.querySelector('ytd-comment-reply-dialog-renderer');
+                                if (rr) rr.removeAttribute('style');
+                            }
+                            return;
+                        }
+                        dialog.dataset.ytkitStyled = '1';
+
+                        const S = (el, props) => { if (!el) return; for (const [k, v] of Object.entries(props)) el.style.setProperty(k, v, 'important'); };
+                        const HIDE = { display: 'none', height: '0', border: 'none', 'border-bottom': 'none', overflow: 'hidden' };
+                        const CLEAR = { display: 'block', width: '100%', border: 'none', 'border-bottom': 'none', outline: 'none', background: 'transparent', 'box-shadow': 'none', padding: '0', margin: '0', 'box-sizing': 'border-box' };
+
+                        S(dialog, { display: 'block', padding: '10px 0 4px', margin: '0', position: 'relative', width: '100%', 'box-sizing': 'border-box', overflow: 'visible', border: 'none', outline: 'none', background: 'transparent' });
+                        S(cb, { ...CLEAR, overflow: 'visible' });
+                        S(cb.querySelector('#thumbnail-input-row'), CLEAR);
+                        S(cb.querySelector('#main'), CLEAR);
+                        S(cb.querySelector('#divider-line'), HIDE);
+                        S(cb.querySelector('#creation-box'), CLEAR);
+                        const inputContainer = cb.querySelector('#input-container') || cb.querySelector('tp-yt-paper-input-container');
+                        S(inputContainer, CLEAR);
+                        S(cb.querySelector('.input-wrapper'), CLEAR);
+                        S(cb.querySelector('#labelAndInputContainer'), CLEAR);
+                        cb.querySelectorAll('.paper-input-input').forEach(el => S(el, CLEAR));
+                        S(cb.querySelector('ytd-emoji-input'), CLEAR);
+                        S(cb.querySelector('yt-user-mention-autosuggest-input'), CLEAR);
+                        S(cb.querySelector('#author-thumbnail'), { display: 'none' });
+                        // Also clear the reply-dialog-renderer wrapper
+                        const replyRenderer = dialog.querySelector('ytd-comment-reply-dialog-renderer');
+                        S(replyRenderer, { ...CLEAR, overflow: 'visible' });
+
+                        // Hide paper-input underlines
+                        cb.querySelectorAll('.underline, .unfocused-line, .focused-line').forEach(el => S(el, HIDE));
+
+                        // Style the contenteditable textarea (outer yt-formatted-string)
+                        const textarea = cb.querySelector('#contenteditable-textarea');
+                        S(textarea, { display: 'block', 'font-size': '13px', padding: '10px 12px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(167,139,250,0.2)', 'border-radius': '8px', 'min-height': '60px', height: 'auto', color: 'rgba(255,255,255,0.85)', 'line-height': '1.5', outline: 'none', width: '100%', 'box-sizing': 'border-box', transition: 'border-color 0.2s, background 0.2s' });
+
+                        // Strip border from inner contenteditable-root
+                        const root = cb.querySelector('#contenteditable-root');
+                        S(root, { display: 'block', 'font-size': '13px', color: 'rgba(255,255,255,0.85)', 'line-height': '1.5', outline: 'none', border: 'none', background: 'transparent', padding: '0', 'min-height': 'unset', width: '100%' });
+
+                        // Focus effects (guarded to prevent listener stacking)
+                        if (textarea && !textarea.dataset.ytkitFocus) {
+                            textarea.dataset.ytkitFocus = '1';
+                            textarea.addEventListener('focusin', () => { textarea.style.setProperty('border-color', 'rgba(167,139,250,0.45)', 'important'); textarea.style.setProperty('background', 'rgba(255,255,255,0.06)', 'important'); });
+                            textarea.addEventListener('focusout', () => { textarea.style.setProperty('border-color', 'rgba(167,139,250,0.2)', 'important'); textarea.style.setProperty('background', 'rgba(255,255,255,0.04)', 'important'); });
+                        }
+
+                        // Footer buttons
+                        const footer = cb.querySelector('#footer');
+                        S(footer, { 'margin-top': '8px', gap: '6px', display: 'flex', 'justify-content': 'flex-end' });
+                        cb.querySelectorAll('#footer .yt-spec-button-shape-next').forEach(btn => S(btn, { height: '28px', 'font-size': '11px', padding: '0 14px', 'min-height': 'unset', 'border-radius': '6px' }));
+                    });
 
                 };
 
                 processAll();
-                let commentRafPending = false;
+                let _processScheduled = false;
                 this._observer = new MutationObserver(() => {
-                    if (commentRafPending) return;
-                    commentRafPending = true;
-                    requestAnimationFrame(() => { commentRafPending = false; processAll(); });
+                    if (_processScheduled) return;
+                    _processScheduled = true;
+                    requestAnimationFrame(() => { _processScheduled = false; processAll(); });
                 });
-                const target = document.querySelector('#comments, ytd-comments') || document.querySelector('ytd-app') || document.body;
+                const target = document.querySelector('ytd-app') || document.body;
                 this._observer.observe(target, { childList: true, subtree: true });
             },
             destroy() {
@@ -3034,600 +3374,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 removeNavigateRule('cleanShareUrlBar');
             }
         },
-        // ─── Video Hider ───
-        {
-            id: 'hideVideosFromHome',
-            name: 'Video Hider',
-            description: 'Hide videos/channels from feeds. Includes keyword filter, duration filter, and channel blocking.',
-            group: 'Video Hider',
-            icon: 'eye-off',
-            isParent: true,
-            _styleElement: null,
-            _observer: null,
-            _toastTimeout: null,
-            _lastHidden: null,
-            _STORAGE_KEY: 'ytkit-hidden-videos',
-            _CHANNELS_KEY: 'ytkit-blocked-channels',
-            _subsLoadState: {
-                consecutiveHiddenBatches: 0,
-                lastBatchSize: 0,
-                lastBatchHidden: 0,
-                loadingBlocked: false,
-                totalVideosLoaded: 0,
-                totalVideosHidden: 0
-            },
-
-            _resetSubsLoadState() {
-                this._subsLoadState = {
-                    consecutiveHiddenBatches: 0,
-                    lastBatchSize: 0,
-                    lastBatchHidden: 0,
-                    loadingBlocked: false,
-                    totalVideosLoaded: 0,
-                    totalVideosHidden: 0
-                };
-                this._removeLoadBlocker();
-            },
-
-            _blockSubsLoading() {
-                if (this._subsLoadState.loadingBlocked) return;
-                this._subsLoadState.loadingBlocked = true;
-                if (this._clearBatchBuffer) this._clearBatchBuffer();
-                const continuations = document.querySelectorAll('ytd-continuation-item-renderer, #continuations, ytd-browse[page-subtype="subscriptions"] ytd-continuation-item-renderer');
-                continuations.forEach(cont => {
-                    if (!(cont instanceof HTMLElement)) return;
-                    cont.style.display = 'none';
-                    cont.dataset.ytkitBlocked = 'true';
-                });
-                this._showLoadBlockedBanner();
-                DebugManager.log('VideoHider', 'Subscription loading blocked - too many consecutive hidden batches');
-            },
-
-            _removeLoadBlocker() {
-                this._subsLoadState.loadingBlocked = false;
-                document.querySelectorAll('[data-ytkit-blocked="true"]').forEach(el => {
-                    if (!(el instanceof HTMLElement)) return;
-                    el.style.display = '';
-                    delete el.dataset.ytkitBlocked;
-                });
-                document.getElementById('ytkit-subs-load-banner')?.remove();
-            },
-
-            _showLoadBlockedBanner() {
-                if (document.getElementById('ytkit-subs-load-banner')) return;
-                const banner = document.createElement('div');
-                banner.id = 'ytkit-subs-load-banner';
-                banner.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,#1e293b 0%,#0f172a 100%);border:1px solid #334155;border-radius:12px;padding:16px 24px;display:flex;align-items:center;gap:16px;z-index:99999;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:"Roboto",Arial,sans-serif;max-width:600px;';
-
-                const ns = 'http://www.w3.org/2000/svg';
-                const icon = document.createElement('div');
-                const svg = document.createElementNS(ns, 'svg');
-                svg.setAttribute('viewBox', '0 0 24 24');
-                svg.setAttribute('width', '24');
-                svg.setAttribute('height', '24');
-                svg.setAttribute('fill', 'none');
-                svg.setAttribute('stroke', '#f59e0b');
-                svg.setAttribute('stroke-width', '2');
-                svg.setAttribute('stroke-linecap', 'round');
-                svg.setAttribute('stroke-linejoin', 'round');
-                const circle = document.createElementNS(ns, 'circle');
-                circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '10');
-                const line1 = document.createElementNS(ns, 'line');
-                line1.setAttribute('x1', '12'); line1.setAttribute('y1', '8'); line1.setAttribute('x2', '12'); line1.setAttribute('y2', '12');
-                const line2 = document.createElementNS(ns, 'line');
-                line2.setAttribute('x1', '12'); line2.setAttribute('y1', '16'); line2.setAttribute('x2', '12.01'); line2.setAttribute('y2', '16');
-                svg.appendChild(circle); svg.appendChild(line1); svg.appendChild(line2);
-                icon.appendChild(svg);
-
-                const textContainer = document.createElement('div');
-                textContainer.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:4px;';
-                const title = document.createElement('div');
-                title.style.cssText = 'color:#f1f5f9;font-size:14px;font-weight:600;';
-                title.textContent = 'Infinite scroll stopped';
-                const subtitle = document.createElement('div');
-                subtitle.style.cssText = 'color:#94a3b8;font-size:12px;';
-                subtitle.textContent = `${this._subsLoadState.totalVideosHidden} of ${this._subsLoadState.totalVideosLoaded} videos were hidden. Stopped loading to prevent performance issues.`;
-                textContainer.appendChild(title);
-                textContainer.appendChild(subtitle);
-
-                const buttonContainer = document.createElement('div');
-                buttonContainer.style.cssText = 'display:flex;gap:8px;';
-
-                const resumeBtn = document.createElement('button');
-                resumeBtn.textContent = 'Load More';
-                resumeBtn.style.cssText = 'padding:8px 16px;border-radius:8px;border:none;background:#3b82f6;color:white;font-size:13px;font-weight:500;cursor:pointer;transition:background 0.2s;';
-                resumeBtn.onmouseenter = () => { resumeBtn.style.background = '#2563eb'; };
-                resumeBtn.onmouseleave = () => { resumeBtn.style.background = '#3b82f6'; };
-                resumeBtn.onclick = () => {
-                    this._subsLoadState.consecutiveHiddenBatches = 0;
-                    this._removeLoadBlocker();
-                    window.scrollBy(0, 100);
-                    setTimeout(() => window.scrollBy(0, -100), 100);
-                };
-
-                const dismissBtn = document.createElement('button');
-                dismissBtn.textContent = '\u2715';
-                dismissBtn.title = 'Dismiss';
-                dismissBtn.style.cssText = 'padding:8px 12px;border-radius:8px;border:1px solid #334155;background:transparent;color:#94a3b8;font-size:14px;cursor:pointer;transition:all 0.2s;';
-                dismissBtn.onmouseenter = () => { dismissBtn.style.background = '#1e293b'; dismissBtn.style.color = '#f1f5f9'; };
-                dismissBtn.onmouseleave = () => { dismissBtn.style.background = 'transparent'; dismissBtn.style.color = '#94a3b8'; };
-                dismissBtn.onclick = () => banner.remove();
-
-                buttonContainer.appendChild(resumeBtn);
-                buttonContainer.appendChild(dismissBtn);
-                banner.appendChild(icon);
-                banner.appendChild(textContainer);
-                banner.appendChild(buttonContainer);
-                document.body.appendChild(banner);
-            },
-
-            _trackSubsLoadBatch(processedVideos) {
-                if (window.location.pathname !== '/feed/subscriptions') return;
-                if (!appState.settings.hideVideosSubsLoadLimit) return;
-                if (this._subsLoadState.loadingBlocked) return;
-
-                const hiddenCount = processedVideos.filter(v => v.hidden).length;
-                const batchSize = processedVideos.length;
-                if (batchSize === 0) return;
-
-                this._subsLoadState.totalVideosLoaded += batchSize;
-                this._subsLoadState.totalVideosHidden += hiddenCount;
-                this._subsLoadState.lastBatchSize = batchSize;
-                this._subsLoadState.lastBatchHidden = hiddenCount;
-
-                const allHidden = hiddenCount === batchSize;
-                const threshold = appState.settings.hideVideosSubsLoadThreshold || 3;
-
-                if (allHidden) {
-                    this._subsLoadState.consecutiveHiddenBatches++;
-                    DebugManager.log('VideoHider', `Subs load: batch ${this._subsLoadState.consecutiveHiddenBatches}/${threshold} all hidden (${hiddenCount}/${batchSize})`);
-                    if (this._subsLoadState.consecutiveHiddenBatches >= threshold) {
-                        this._blockSubsLoading();
-                    }
-                } else {
-                    this._subsLoadState.consecutiveHiddenBatches = 0;
-                }
-            },
-
-            // Cached storage access — avoids GM_getValue deserialization per element
-            _hiddenCache: null,
-            _hiddenSet: null,
-            _blockedCache: null,
-            _filterCache: null,
-
-            _getHiddenVideos() {
-                if (this._hiddenCache) return this._hiddenCache;
-                try { this._hiddenCache = GM_getValue(this._STORAGE_KEY, []); }
-                catch(e) { const s = localStorage.getItem(this._STORAGE_KEY); this._hiddenCache = s ? JSON.parse(s) : []; }
-                this._hiddenSet = new Set(this._hiddenCache);
-                return this._hiddenCache;
-            },
-            _setHiddenVideos(videos) {
-                this._hiddenCache = videos;
-                this._hiddenSet = new Set(videos);
-                try { GM_setValue(this._STORAGE_KEY, videos); }
-                catch(e) { localStorage.setItem(this._STORAGE_KEY, JSON.stringify(videos)); }
-            },
-            _getBlockedChannels() {
-                if (this._blockedCache) return this._blockedCache;
-                try { this._blockedCache = GM_getValue(this._CHANNELS_KEY, []); }
-                catch(e) { const s = localStorage.getItem(this._CHANNELS_KEY); this._blockedCache = s ? JSON.parse(s) : []; }
-                return this._blockedCache;
-            },
-            _setBlockedChannels(channels) {
-                this._blockedCache = channels;
-                try { GM_setValue(this._CHANNELS_KEY, channels); }
-                catch(e) { localStorage.setItem(this._CHANNELS_KEY, JSON.stringify(channels)); }
-            },
-            _invalidateCache() {
-                this._hiddenCache = null;
-                this._hiddenSet = null;
-                this._blockedCache = null;
-                this._filterCache = null;
-            },
-            _getFilterCache() {
-                const filterStr = (appState.settings.hideVideosKeywordFilter || '').trim();
-                if (this._filterCache && this._filterCache.raw === filterStr) return this._filterCache;
-                const cache = { raw: filterStr, regex: null, positiveKw: [], negativeKw: [], hasFilter: false };
-                if (filterStr) {
-                    cache.hasFilter = true;
-                    if (filterStr.startsWith('/')) {
-                        try {
-                            const regexMatch = filterStr.match(/^\/(.+)\/([gimsuy]*)$/);
-                            if (regexMatch) cache.regex = new RegExp(regexMatch[1], regexMatch[2]);
-                        } catch (e) { DebugManager.log('Regex', 'Invalid regex pattern', e.message); }
-                    } else {
-                        const keywords = filterStr.toLowerCase().split(',').map(k => k.trim()).filter(Boolean);
-                        cache.positiveKw = keywords.filter(k => !k.startsWith('!'));
-                        cache.negativeKw = keywords.filter(k => k.startsWith('!')).map(k => k.slice(1));
-                    }
-                }
-                this._filterCache = cache;
-                return cache;
-            },
-
-            _extractVideoId(element) {
-                const lockup = element.querySelector('.yt-lockup-view-model[class*="content-id-"]');
-                if (lockup) { const m = lockup.className.match(/content-id-([a-zA-Z0-9_-]+)/); if (m) return m[1]; }
-                const links = element.querySelectorAll('a[href*="/watch?v="], a[href*="/shorts/"]');
-                for (const link of links) {
-                    const watchMatch = link.href.match(/[?&]v=([a-zA-Z0-9_-]+)/);
-                    if (watchMatch) return watchMatch[1];
-                    const shortsMatch = link.href.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
-                    if (shortsMatch) return shortsMatch[1];
-                }
-                const vidEl = element.querySelector('[data-video-id]');
-                return vidEl ? vidEl.getAttribute('data-video-id') : null;
-            },
-
-            _extractChannelInfo(element) {
-                const channelLink = element.querySelector('a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]');
-                if (!channelLink) return null;
-                const href = channelLink.href;
-                let channelId = null;
-                const handleMatch = href.match(/\/@([^/?]+)/);
-                if (handleMatch) channelId = '@' + handleMatch[1];
-                else {
-                    const idMatch = href.match(/\/(channel|c|user)\/([^/?]+)/);
-                    if (idMatch) channelId = idMatch[2];
-                }
-                const channelName = element.querySelector('#channel-name a, .ytd-channel-name a, [id="text"] a')?.textContent?.trim() ||
-                                   element.querySelector('#channel-name, .ytd-channel-name')?.textContent?.trim() || channelId;
-                return channelId ? { id: channelId, name: channelName } : null;
-            },
-
-            _extractDuration(element) {
-                const badge = element.querySelector('ytd-thumbnail-overlay-time-status-renderer, .ytd-thumbnail-overlay-time-status-renderer, [aria-label*=":"]');
-                if (!badge) return 0;
-                const text = badge.textContent?.trim() || badge.getAttribute('aria-label') || '';
-                const match = text.match(/(\d+):(\d+):?(\d+)?/);
-                if (!match) return 0;
-                if (match[3]) return parseInt(match[1])*3600 + parseInt(match[2])*60 + parseInt(match[3]);
-                return parseInt(match[1])*60 + parseInt(match[2]);
-            },
-
-            _extractTitle(element) {
-                return element.querySelector('#video-title, .title, [id="video-title"]')?.textContent?.trim()?.toLowerCase() || '';
-            },
-
-            _findThumbnailContainer(element) {
-                const selectors = ['a.yt-lockup-view-model__content-image', 'yt-thumbnail-view-model', '#thumbnail', 'ytd-thumbnail'];
-                for (const sel of selectors) { const c = element.querySelector(sel); if (c) return c; }
-                return null;
-            },
-
-            _createSVG(pathD) {
-                const svg = createSVG('0 0 24 24', [{ type: 'path', d: pathD, fill: 'currentColor' }], { fill: 'currentColor', stroke: false });
-                svg.setAttribute('width', '14');
-                svg.setAttribute('height', '14');
-                return svg;
-            },
-
-            _createHideButton() {
-                const btn = document.createElement('button');
-                btn.className = 'ytkit-video-hide-btn';
-                btn.title = 'Hide this video (right-click to block channel)';
-                btn.appendChild(this._createSVG('M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z'));
-                return btn;
-            },
-
-            _showToast(message, buttons = []) {
-                document.getElementById('ytkit-hide-toast')?.remove();
-                if (this._toastTimeout) clearTimeout(this._toastTimeout);
-                const primaryAction = buttons[0];
-                showToast(message, '#6b7280', {
-                    duration: 5,
-                    action: primaryAction ? { text: primaryAction.text, onClick: primaryAction.onClick } : undefined
-                });
-            },
-
-            _hideVideo(videoId, element) {
-                const hidden = this._getHiddenVideos();
-                if (!hidden.includes(videoId)) { hidden.push(videoId); this._setHiddenVideos(hidden); }
-                element.classList.add('ytkit-video-hidden');
-                this._lastHidden = { type: 'video', id: videoId, element };
-                this._showToast('Video hidden', [
-                    { text: 'Undo', onClick: () => this._undoHide() },
-                    { text: 'Manage', onClick: () => this._showManager() }
-                ]);
-            },
-
-            _blockChannel(channelInfo, element) {
-                if (!channelInfo) return;
-                const channels = this._getBlockedChannels();
-                if (!channels.find(c => c.id === channelInfo.id)) {
-                    channels.push(channelInfo);
-                    this._setBlockedChannels(channels);
-                }
-                this._hideChannelVideos(channelInfo.id);
-                this._lastHidden = { type: 'channel', info: channelInfo };
-                this._showToast(`Blocked: ${channelInfo.name}`, [
-                    { text: 'Undo', onClick: () => this._undoHide() },
-                    { text: 'Manage', onClick: () => this._showManager() }
-                ]);
-            },
-
-            _hideChannelVideos(channelId) {
-                document.querySelectorAll(VIDEO_RENDERERS).forEach(el => {
-                    const info = this._extractChannelInfo(el);
-                    if (info && info.id === channelId) el.classList.add('ytkit-video-hidden');
-                });
-            },
-
-            _undoHide() {
-                if (!this._lastHidden) return;
-                if (this._lastHidden.type === 'video') {
-                    const hidden = this._getHiddenVideos();
-                    const idx = hidden.indexOf(this._lastHidden.id);
-                    if (idx > -1) { hidden.splice(idx, 1); this._setHiddenVideos(hidden); }
-                    this._lastHidden.element?.classList.remove('ytkit-video-hidden');
-                } else if (this._lastHidden.type === 'channel') {
-                    const channels = this._getBlockedChannels();
-                    const idx = channels.findIndex(c => c.id === this._lastHidden.info.id);
-                    if (idx > -1) { channels.splice(idx, 1); this._setBlockedChannels(channels); }
-                    this._processAllVideos();
-                }
-                this._lastHidden = null;
-                document.getElementById('ytkit-hide-toast')?.classList.remove('show');
-            },
-
-            _unhideVideo(videoId) {
-                const hidden = this._getHiddenVideos();
-                const idx = hidden.indexOf(videoId);
-                if (idx > -1) {
-                    hidden.splice(idx, 1);
-                    this._setHiddenVideos(hidden);
-                    document.querySelectorAll(`[data-ytkit-video-id="${videoId}"]`)?.forEach(el => {
-                        el.classList.remove('ytkit-video-hidden');
-                    });
-                    this._processAllVideos();
-                    return true;
-                }
-                return false;
-            },
-
-            _showManager() {
-                document.getElementById('ytkit-hide-toast')?.classList.remove('show');
-                document.body.classList.add('ytkit-panel-open');
-                setTimeout(() => {
-                    const navBtn = document.querySelector('.ytkit-nav-btn[data-tab="Video-Hider"]');
-                    if (navBtn) navBtn.click();
-                }, 100);
-            },
-
-            _shouldHide(element) {
-                const videoId = this._extractVideoId(element);
-                this._getHiddenVideos(); // ensure cache is populated
-                if (videoId && this._hiddenSet.has(videoId)) return true;
-                const channelInfo = this._extractChannelInfo(element);
-                const blocked = this._getBlockedChannels();
-                if (channelInfo && blocked.find(c => c.id === channelInfo.id)) return true;
-
-                const fc = this._getFilterCache();
-                if (fc.hasFilter) {
-                    const title = this._extractTitle(element);
-                    const channelName = channelInfo?.name?.toLowerCase() || '';
-                    if (fc.regex) {
-                        if (fc.regex.test(title) || fc.regex.test(channelName)) return true;
-                    } else {
-                        const searchText = (title + ' ' + channelName).toLowerCase();
-                        if (fc.negativeKw.length && fc.negativeKw.some(k => searchText.includes(k))) return false;
-                        if (fc.positiveKw.length && fc.positiveKw.some(k => searchText.includes(k))) return true;
-                    }
-                }
-
-                const minDuration = (appState.settings.hideVideosDurationFilter || 0) * 60;
-                if (minDuration > 0) {
-                    const duration = this._extractDuration(element);
-                    if (duration > 0 && duration < minDuration) return true;
-                }
-                return false;
-            },
-
-            _processVideoElement(element) {
-                this._processVideoElementWithResult(element);
-            },
-
-            _processVideoElementWithResult(element) {
-                if (element.dataset.ytkitHideProcessed) {
-                    return element.classList.contains('ytkit-video-hidden');
-                }
-                element.dataset.ytkitHideProcessed = 'true';
-                const shouldHide = this._shouldHide(element);
-                if (shouldHide) { element.classList.add('ytkit-video-hidden'); }
-                else { element.classList.remove('ytkit-video-hidden'); }
-                const thumbnail = this._findThumbnailContainer(element);
-                if (thumbnail && !thumbnail.querySelector('.ytkit-video-hide-btn')) {
-                    const btn = this._createHideButton();
-                    const videoId = this._extractVideoId(element);
-                    const channelInfo = this._extractChannelInfo(element);
-                    btn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); if (videoId) this._hideVideo(videoId, element); });
-                    btn.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); if (channelInfo) this._blockChannel(channelInfo, element); });
-                    thumbnail.appendChild(btn);
-                }
-                return shouldHide;
-            },
-
-            _processAllVideos() {
-                this._invalidateCache();
-                document.querySelectorAll('[data-ytkit-hide-processed]').forEach(el => { delete el.dataset.ytkitHideProcessed; });
-                document.querySelectorAll(VIDEO_RENDERERS).forEach(el => this._processVideoElement(el));
-            },
-
-            _getVisibleVideos() {
-                const videos = [];
-                document.querySelectorAll(VIDEO_RENDERERS).forEach(item => {
-                    if (item.classList.contains('ytkit-video-hidden')) return;
-                    const videoId = this._extractVideoId(item);
-                    if (videoId) videos.push({ id: videoId, element: item });
-                });
-                return videos;
-            },
-
-            _hideAllVideos() {
-                const videos = this._getVisibleVideos();
-                if (videos.length === 0) { showToast('No visible videos to hide', '#6b7280'); return; }
-                const hidden = this._getHiddenVideos();
-                let newlyHidden = 0;
-                videos.forEach(v => {
-                    if (!hidden.includes(v.id)) { hidden.push(v.id); newlyHidden++; }
-                    v.element.classList.add('ytkit-video-hidden');
-                });
-                this._setHiddenVideos(hidden);
-                this._showToast(`Hidden ${newlyHidden} videos`, [
-                    { text: 'Undo All', onClick: () => this._undoHideAll(videos) },
-                    { text: 'Manage', onClick: () => this._showManager() }
-                ]);
-            },
-
-            _undoHideAll(videos) {
-                const removeSet = new Set(videos.map(v => v.id));
-                const hidden = this._getHiddenVideos().filter(id => !removeSet.has(id));
-                videos.forEach(v => v.element.classList.remove('ytkit-video-hidden'));
-                this._setHiddenVideos(hidden);
-                document.getElementById('ytkit-hide-toast')?.classList.remove('show');
-                showToast('Restored all videos', '#22c55e');
-            },
-
-            _createSubsHideAllButton() {
-                if (document.querySelector('.ytkit-subs-hide-all-btn')) return;
-                if (window.location.pathname !== '/feed/subscriptions') return;
-                const headerButtons = document.querySelector('#masthead #end #buttons');
-                if (!headerButtons) return;
-                const ns = 'http://www.w3.org/2000/svg';
-                const createSvgElement = (tag, attrs) => {
-                    const el = document.createElementNS(ns, tag);
-                    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-                    return el;
-                };
-                const hideAllBtn = document.createElement('button');
-                hideAllBtn.className = 'ytkit-subs-hide-all-btn';
-                hideAllBtn.title = 'Hide all visible videos on this page';
-                const svg = createSvgElement('svg', { viewBox: '0 0 24 24', width: '20', height: '20', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
-                svg.appendChild(createSvgElement('path', { d: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24' }));
-                svg.appendChild(createSvgElement('line', { x1: '1', y1: '1', x2: '23', y2: '23' }));
-                hideAllBtn.appendChild(svg);
-                const text = document.createElement('span');
-                text.textContent = 'Hide All';
-                hideAllBtn.appendChild(text);
-                hideAllBtn.style.cssText = 'display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:20px;border:none;background:#dc2626;color:white;font-family:"Roboto",Arial,sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background 0.2s;';
-                hideAllBtn.onmouseenter = () => { hideAllBtn.style.background = '#b91c1c'; };
-                hideAllBtn.onmouseleave = () => { hideAllBtn.style.background = '#dc2626'; };
-                hideAllBtn.addEventListener('click', () => this._hideAllVideos());
-                const vlcBtn = headerButtons.querySelector('.ytkit-subs-vlc-btn');
-                if (vlcBtn) headerButtons.insertBefore(hideAllBtn, vlcBtn);
-                else headerButtons.appendChild(hideAllBtn);
-            },
-
-            _removeSubsHideAllButton() {
-                document.querySelector('.ytkit-subs-hide-all-btn')?.remove();
-            },
-
-            init() {
-                const css = `
-                    a.yt-lockup-view-model__content-image, yt-thumbnail-view-model, #thumbnail, ytd-thumbnail { position:relative; }
-                    .ytkit-video-hide-btn { position:absolute;top:8px;right:8px;width:28px;height:28px;background:rgba(0,0,0,0.8);border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;transition:all 0.15s;padding:0; }
-                    .ytkit-video-hide-btn:hover { background:rgba(200,0,0,0.9);transform:scale(1.1); }
-                    .ytkit-video-hide-btn svg { width:16px;height:16px;fill:#fff;pointer-events:none; }
-                    ytd-rich-item-renderer:hover .ytkit-video-hide-btn, ytd-video-renderer:hover .ytkit-video-hide-btn, ytd-grid-video-renderer:hover .ytkit-video-hide-btn, ytd-compact-video-renderer:hover .ytkit-video-hide-btn { opacity:1; }
-                    .ytkit-video-hidden { display:none !important; }
-                    #ytkit-hide-toast { position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(100px);background:#323232;color:#fff;padding:12px 24px;border-radius:8px;font-size:14px;z-index:99999;opacity:0;transition:all 0.3s;display:flex;align-items:center;gap:12px;box-shadow:0 4px 12px rgba(0,0,0,0.3); }
-                    #ytkit-hide-toast.show { transform:translateX(-50%) translateY(0);opacity:1; }
-                    #ytkit-hide-toast button { background:transparent;border:none;color:#3ea6ff;cursor:pointer;font-size:14px;font-weight:500;padding:4px 8px;border-radius:4px; }
-                    #ytkit-hide-toast button:hover { background:rgba(62,166,255,0.1); }
-                `;
-                this._styleElement = injectStyle(css, this.id, true);
-                this._processAllVideos();
-                let batchBuffer = [];
-                let batchTimeout = null;
-                this._clearBatchBuffer = () => {
-                    batchBuffer = [];
-                    if (batchTimeout) { clearTimeout(batchTimeout); batchTimeout = null; }
-                };
-
-                const processBatch = () => {
-                    if (batchBuffer.length > 0 && !this._subsLoadState.loadingBlocked) {
-                        this._trackSubsLoadBatch(batchBuffer);
-                        batchBuffer = [];
-                    }
-                };
-
-                this._observer = new MutationObserver(mutations => {
-                    let needsRecycleCheck = false;
-                    for (const m of mutations) {
-                        for (const node of m.addedNodes) {
-                            if (node.nodeType !== 1) continue;
-                            if (node.matches?.(VIDEO_RENDERERS)) {
-                                const wasHidden = this._processVideoElementWithResult(node);
-                                batchBuffer.push({ element: node, hidden: wasHidden });
-                            }
-                            node.querySelectorAll?.(VIDEO_RENDERERS).forEach(el => {
-                                const wasHidden = this._processVideoElementWithResult(el);
-                                batchBuffer.push({ element: el, hidden: wasHidden });
-                            });
-                            if (!needsRecycleCheck && node.parentElement?.closest?.(VIDEO_RENDERERS)?.dataset.ytkitHideProcessed) {
-                                needsRecycleCheck = true;
-                            }
-                        }
-                    }
-                    if (needsRecycleCheck) {
-                        document.querySelectorAll('[data-ytkit-hide-processed]').forEach(el => {
-                            if (!el.querySelector('.ytkit-video-hide-btn')) {
-                                delete el.dataset.ytkitHideProcessed;
-                                const wasHidden = this._processVideoElementWithResult(el);
-                                batchBuffer.push({ element: el, hidden: wasHidden });
-                            }
-                        });
-                    }
-                    if (batchTimeout) clearTimeout(batchTimeout);
-                    batchTimeout = setTimeout(processBatch, 300);
-                });
-                this._observer.observe(document.body, { childList: true, subtree: true });
-
-                let wasOnSubsPage = window.location.pathname === '/feed/subscriptions';
-                const checkSubsPage = () => {
-                    const isOnSubsPage = window.location.pathname === '/feed/subscriptions';
-                    if (isOnSubsPage) {
-                        if (!wasOnSubsPage) this._resetSubsLoadState();
-                        setTimeout(() => this._createSubsHideAllButton(), 1000);
-                    } else {
-                        this._removeSubsHideAllButton();
-                        this._removeLoadBlocker();
-                    }
-                    wasOnSubsPage = isOnSubsPage;
-                };
-
-                addNavigateRule('hideVideosFromHomeNav', () => {
-                    setTimeout(() => this._processAllVideos(), 500);
-                    checkSubsPage();
-                });
-
-                let chipDebounce = null;
-                document.addEventListener('click', (e) => {
-                    if (e.target.closest('yt-chip-cloud-chip-renderer, ytd-feed-filter-chip-bar-renderer, iron-selector#chips')) {
-                        if (chipDebounce) clearTimeout(chipDebounce);
-                        chipDebounce = setTimeout(() => { chipDebounce = null; this._processAllVideos(); }, 1000);
-                    }
-                }, true);
-
-                checkSubsPage();
-                DebugManager.log('VideoHider', 'Initialized:', this._getHiddenVideos().length, 'videos,', this._getBlockedChannels().length, 'channels');
-            },
-
-            destroy() {
-                this._styleElement?.remove();
-                this._observer?.disconnect();
-                removeNavigateRule('hideVideosFromHomeNav');
-                document.querySelectorAll('.ytkit-video-hide-btn').forEach(b => b.remove());
-                document.querySelectorAll('.ytkit-video-hidden').forEach(e => e.classList.remove('ytkit-video-hidden'));
-                document.querySelectorAll('[data-ytkit-hide-processed]').forEach(e => delete e.dataset.ytkitHideProcessed);
-                document.getElementById('ytkit-hide-toast')?.remove();
-                document.getElementById('ytkit-hide-manager')?.remove();
-                document.getElementById('ytkit-hide-manager-overlay')?.remove();
-                this._removeSubsHideAllButton();
-                this._removeLoadBlocker();
-            }
-        },
         // ─── Video Player ───
         {
             id: 'fitPlayerToWindow',
@@ -3638,7 +3384,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _styleElement: null,
             _ruleId: 'fitPlayerToWindowRule',
             applyStyles() {
-                if (appState.settings.stickyVideo && document.documentElement.classList.contains('ytkit-split-active')) return;
+                // Theater Split takes full control on watch pages — skip this feature
+                if (appState.settings.stickyVideo && window.location.pathname.startsWith('/watch')) return;
                 const isWatchPage = window.location.pathname.startsWith('/watch');
                 document.documentElement.classList.toggle('yt-suite-fit-to-window', isWatchPage);
                 document.body.classList.toggle('yt-suite-fit-to-window', isWatchPage);
@@ -3652,15 +3399,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             init() {
                 this._styleElement = document.createElement('style');
                 this._styleElement.id = `yt-suite-style-${this.id}`;
-                this._styleElement.textContent = `
-                    html.yt-suite-fit-to-window, body.yt-suite-fit-to-window { overflow-y: auto !important; height: auto !important; }
-                    body.yt-suite-fit-to-window #movie_player { position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100vh !important; z-index: 9999 !important; background-color: #000 !important; }
-                    body.yt-suite-fit-to-window #movie_player .html5-video-container { width: 100% !important; height: 100% !important; }
-                    body.yt-suite-fit-to-window #movie_player video.html5-main-video { width: 100% !important; height: 100% !important; left: 0 !important; top: 0 !important; object-fit: contain !important; }
-                    html.yt-suite-fit-to-window { padding-top: calc(100vh) !important; }
-                    html.yt-suite-fit-to-window ytd-masthead { display: none !important; }
-                    body.yt-suite-fit-to-window #page-manager { margin-top: 0 !important; }
-                `;
+                this._styleElement.textContent = `html.yt-suite-fit-to-window,body.yt-suite-fit-to-window{overflow-y:auto !important;height:auto !important;} body.yt-suite-fit-to-window #movie_player{position:absolute !important;top:0 !important;left:0 !important;width:100% !important;height:100vh !important;z-index:9999 !important;background-color:#000 !important;} body.yt-suite-fit-to-window #movie_player .html5-video-container{width:100% !important;height:100% !important;} body.yt-suite-fit-to-window #movie_player video.html5-main-video{width:100% !important;height:100% !important;left:0 !important;top:0 !important;object-fit:contain !important;} html.yt-suite-fit-to-window{padding-top:calc(100vh) !important;} html.yt-suite-fit-to-window ytd-masthead{display:none !important;} body.yt-suite-fit-to-window #page-manager{margin-top:0 !important;}`;
                 document.head.appendChild(this._styleElement);
                 addNavigateRule(this._ruleId, () => this.applyStyles());
             },
@@ -4577,17 +4316,22 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const doUpdate = () => {
                         const url = (appState.settings.adblockFilterUrl || '').trim();
                         if (!url) return;
+                        // Validate URL: only allow HTTPS to prevent file:// or javascript: injection
+                        try { const u = new URL(url); if (u.protocol !== 'https:') { DebugManager.log('AdBlock', 'Filter URL rejected: must be HTTPS'); return; } } catch(e) { return; }
                         GM_xmlhttpRequest({
                             method: 'GET', url,
                             onload: (res) => {
                                 if (res.status === 200 && res.responseText) {
                                     const lines = res.responseText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('!') && !l.startsWith('#') && !l.startsWith('['));
-                                    if (lines.length > 0) {
-                                        const selectorStr = lines.join(',\n');
+                                    // Sanitize: reject lines with dangerous CSS patterns
+                                    const _dangerousCSS = /(?:url\s*\(|@import|expression\s*\(|javascript\s*:|\\00|\\u00|-moz-binding|behavior\s*:|content\s*:|var\s*\(\s*--[^)]*url)/i;
+                                    const safe = lines.filter(l => !_dangerousCSS.test(l) && !l.includes('{') && !l.includes('}') && !l.includes('`'));
+                                    if (safe.length > 0) {
+                                        const selectorStr = safe.join(',\n');
                                         GM_setValue('ytab_cached_selectors', selectorStr);
-                                        GM_setValue('ytab_cached_selector_count', lines.length);
+                                        GM_setValue('ytab_cached_selector_count', safe.length);
                                         GM_setValue('ytab_filter_update_time', Date.now());
-                                        DebugManager.log('AdBlock', `Auto-updated ${lines.length} filter selectors`);
+                                        DebugManager.log('AdBlock', `Auto-updated ${safe.length} filter selectors (${lines.length - safe.length} rejected)`);
                                     }
                                 }
                             }
@@ -4673,10 +4417,21 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _styleElement: null,
 
             async _sha256(message) {
-                const msgBuffer = new TextEncoder().encode(message);
-                const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
-                const hashArray = Array.from(new Uint8Array(hashBuffer));
-                return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+                try {
+                    const msgBuffer = new TextEncoder().encode(message);
+                    const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+                    const hashArray = Array.from(new Uint8Array(hashBuffer));
+                    return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+                } catch(e) {
+                    // Fallback: simple hash for environments where crypto.subtle is unavailable
+                    let hash = 0;
+                    for (let i = 0; i < message.length; i++) {
+                        const char = message.charCodeAt(i);
+                        hash = ((hash << 5) - hash) + char;
+                        hash = hash & hash; // Convert to 32bit integer
+                    }
+                    return Math.abs(hash).toString(16).padStart(4, '0');
+                }
             },
 
             async _getHashPrefix(videoID) {
@@ -4811,6 +4566,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             _reset() {
+                // Clear any in-flight video element poll
+                if (this._state._checkVideoInterval) {
+                    clearInterval(this._state._checkVideoInterval);
+                    this._state._checkVideoInterval = null;
+                }
                 // Remove video event listeners before clearing references
                 if (this._state.video) {
                     if (this._state._playHandler) this._state.video.removeEventListener("play", this._state._playHandler);
@@ -4875,14 +4635,20 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const newVideoID = this._getVideoID();
                 if (!newVideoID || newVideoID === this._state.videoID) return;
                 DebugManager.log('SponsorBlock', `Video changed to: ${newVideoID}`);
+                // Clear any in-flight video element poll from previous navigation
+                if (this._state._checkVideoInterval) {
+                    clearInterval(this._state._checkVideoInterval);
+                    this._state._checkVideoInterval = null;
+                }
                 this._reset();
                 this._state.videoID = newVideoID;
                 let attempts = 0;
-                const checkVideo = setInterval(() => {
+                this._state._checkVideoInterval = setInterval(() => {
                     attempts++;
                     const video = document.querySelector("video");
                     if (video) {
-                        clearInterval(checkVideo);
+                        clearInterval(this._state._checkVideoInterval);
+                        this._state._checkVideoInterval = null;
                         this._state.video = video;
                         this._state._playHandler = () => this._startRAFSkipLoop();
                         this._state._pauseHandler = () => this._stopRAFSkipLoop();
@@ -4892,7 +4658,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         video.addEventListener("seeked", this._state._seekedHandler);
                         this._loadSegmentsAndSetup();
                     } else if (attempts >= 50) {
-                        clearInterval(checkVideo);
+                        clearInterval(this._state._checkVideoInterval);
+                        this._state._checkVideoInterval = null;
                     }
                 }, 100);
             },
@@ -5055,6 +4822,205 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             `ytd-comment-thread-renderer.style-scope.ytd-item-section-renderer{margin-top:5px !important;margin-bottom:1px !important;} ytd-comment-thread-renderer.style-scope.ytd-comment-replies-renderer{padding-top:0px !important;padding-bottom:0px !important;margin-top:0px !important;margin-bottom:0px !important;}`),
         cssFeature('hideCommentTeaser', 'Hide Comment Teaser', 'Remove the "Scroll for comments" prompt on watch pages', 'Clutter', 'message-square-off',
             'ytd-comments-entry-point-header-renderer, ytd-comments-entry-point-teaser-renderer'),
+        {
+            id: 'autoExpandComments',
+            name: 'Auto-Expand Comments',
+            description: 'Automatically expand truncated comments so full text is always visible',
+            group: 'Clutter',
+            icon: 'fullscreen',
+            pages: [PageTypes.WATCH],
+            _styleElement: null,
+            init() {
+                // CSS: Force comment expanders to show full content and hide Read more / Show less buttons
+                const css = `
+                    /* Force ytd-expander in comments to be fully expanded */
+                    ytd-comment-view-model ytd-expander,
+                    ytd-comment-renderer ytd-expander,
+                    ytd-comment-thread-renderer ytd-expander {
+                        --ytd-expander-max-lines: 9999 !important;
+                        max-height: none !important;
+                        overflow: visible !important;
+                    }
+                    ytd-comment-view-model ytd-expander[collapsed] #content,
+                    ytd-comment-renderer ytd-expander[collapsed] #content,
+                    ytd-comment-view-model ytd-expander #content,
+                    ytd-comment-renderer ytd-expander #content {
+                        max-height: none !important;
+                        overflow: visible !important;
+                        -webkit-line-clamp: unset !important;
+                        -webkit-box-orient: unset !important;
+                        display: block !important;
+                    }
+                    /* Force content-text to show fully */
+                    ytd-comment-view-model #content-text,
+                    ytd-comment-renderer #content-text {
+                        max-height: none !important;
+                        overflow: visible !important;
+                        -webkit-line-clamp: unset !important;
+                        display: block !important;
+                        text-overflow: unset !important;
+                    }
+                    /* Override any inline truncation on the expander content wrapper */
+                    ytd-comment-view-model ytd-expander > #content.ytd-expander,
+                    ytd-comment-renderer ytd-expander > #content.ytd-expander {
+                        max-height: none !important;
+                        overflow: visible !important;
+                    }
+                    /* Hide Read more / Show less buttons since everything is expanded */
+                    ytd-comment-view-model ytd-expander #more,
+                    ytd-comment-view-model ytd-expander [slot="more"],
+                    ytd-comment-view-model ytd-expander #less,
+                    ytd-comment-view-model ytd-expander [slot="less"],
+                    ytd-comment-renderer ytd-expander #more,
+                    ytd-comment-renderer ytd-expander [slot="more"],
+                    ytd-comment-renderer ytd-expander #less,
+                    ytd-comment-renderer ytd-expander [slot="less"],
+                    ytd-comment-renderer tp-yt-paper-button.ytd-expander {
+                        display: none !important;
+                    }
+                `;
+                this._styleElement = injectStyle(css, this.id, true);
+
+                // MutationObserver fallback: programmatically expand any collapsed expanders
+                // YouTube sometimes sets truncation via JS attributes that resist CSS overrides
+                const expandComments = () => {
+                    const expanders = document.querySelectorAll(
+                        'ytd-comment-view-model ytd-expander[collapsed], ytd-comment-renderer ytd-expander[collapsed]'
+                    );
+                    expanders.forEach(exp => {
+                        // Remove collapsed attribute to trigger expansion
+                        exp.removeAttribute('collapsed');
+                        // Also try clicking the "Read more" button if it exists (handles edge cases)
+                        const moreBtn = exp.querySelector('#more, [slot="more"], tp-yt-paper-button#more');
+                        if (moreBtn) {
+                            try { moreBtn.click(); } catch(e) {}
+                        }
+                    });
+                };
+
+                addMutationRule(this.id, expandComments);
+            },
+            destroy() {
+                removeMutationRule(this.id);
+                this._styleElement?.remove();
+                this._styleElement = null;
+            }
+        },
+        {
+            id: 'commentEnhancements',
+            name: 'Comment Enhancements',
+            description: 'Highlight creator/OP replies, show like heat indicators, and add collapse-all-replies toggle per thread',
+            group: 'Clutter',
+            icon: 'message-square',
+            pages: [PageTypes.WATCH],
+            _styleElement: null,
+            init() {
+                const css = `
+                    /* Creator/OP reply highlight */
+                    ytd-comment-view-model[data-ytkit-creator],
+                    ytd-comment-renderer[data-ytkit-creator] {
+                        border-left: 3px solid rgba(255,69,58,0.6) !important;
+                        background: rgba(255,69,58,0.03) !important;
+                    }
+                    ytd-comment-view-model[data-ytkit-creator] #author-text,
+                    ytd-comment-renderer[data-ytkit-creator] #author-text {
+                        color: #ff453a !important;
+                    }
+                    /* Like heat indicator */
+                    .ytkit-heat-indicator {
+                        display: inline-flex; align-items: center; gap: 3px;
+                        font-size: 10px; padding: 1px 5px; border-radius: 3px;
+                        margin-left: 4px; vertical-align: baseline;
+                        font-weight: 600; letter-spacing: 0.02em;
+                    }
+                    .ytkit-heat-cold { color: rgba(255,255,255,0.2); }
+                    .ytkit-heat-warm { color: #f59e0b; background: rgba(245,158,11,0.08); }
+                    .ytkit-heat-hot { color: #ef4444; background: rgba(239,68,68,0.1); }
+                    .ytkit-heat-fire { color: #ff6b6b; background: rgba(255,107,107,0.12); text-shadow: 0 0 6px rgba(255,107,107,0.3); }
+                    /* Collapse replies button */
+                    .ytkit-collapse-replies {
+                        display: inline-flex; align-items: center; gap: 4px;
+                        padding: 3px 8px; margin: 4px 0 2px 20px;
+                        font-size: 11px; font-weight: 500;
+                        color: rgba(167,139,250,0.5); background: rgba(167,139,250,0.04);
+                        border: none; border-radius: 4px; cursor: pointer;
+                        transition: all 0.15s;
+                    }
+                    .ytkit-collapse-replies:hover {
+                        color: rgba(167,139,250,0.9); background: rgba(167,139,250,0.1);
+                    }
+                    .ytkit-collapse-replies.collapsed + ytd-comment-replies-renderer {
+                        display: none !important;
+                    }
+                `;
+                this._styleElement = injectStyle(css, this.id, true);
+
+                const processCommentEnhancements = () => {
+                    // Detect channel name for OP detection
+                    const channelEl = document.querySelector('#owner ytd-video-owner-renderer #channel-name a, ytd-video-owner-renderer #channel-name yt-formatted-string a');
+                    const channelName = channelEl?.textContent?.trim() || '';
+
+                    document.querySelectorAll('ytd-comment-view-model:not([data-ytkit-enhanced]), ytd-comment-renderer:not([data-ytkit-enhanced])').forEach(comment => {
+                        comment.dataset.ytkitEnhanced = '1';
+
+                        // Creator/OP detection
+                        const authorEl = comment.querySelector('#author-text');
+                        const authorName = authorEl?.textContent?.trim().replace(/^@/, '') || '';
+                        const hasBadge = comment.querySelector('ytd-author-comment-badge-renderer');
+                        if (hasBadge || (channelName && authorName && channelName.includes(authorName))) {
+                            comment.dataset.ytkitCreator = '1';
+                        }
+
+                        // Like heat indicator
+                        const voteEl = comment.querySelector('#vote-count-middle');
+                        const voteText = voteEl?.textContent?.trim() || '';
+                        if (voteText && voteText !== '0') {
+                            let count = 0;
+                            const lower = voteText.toLowerCase();
+                            if (lower.includes('k')) count = parseFloat(lower) * 1000;
+                            else if (lower.includes('m')) count = parseFloat(lower) * 1000000;
+                            else count = parseInt(voteText.replace(/,/g, ''), 10) || 0;
+
+                            if (count > 0) {
+                                const heat = document.createElement('span');
+                                heat.className = 'ytkit-heat-indicator';
+                                if (count >= 10000) { heat.classList.add('ytkit-heat-fire'); heat.textContent = voteText; }
+                                else if (count >= 1000) { heat.classList.add('ytkit-heat-hot'); heat.textContent = voteText; }
+                                else if (count >= 100) { heat.classList.add('ytkit-heat-warm'); heat.textContent = voteText; }
+                                else { heat.classList.add('ytkit-heat-cold'); heat.textContent = voteText; }
+                                const timeEl = comment.querySelector('#published-time-text, .published-time-text');
+                                if (timeEl && !comment.querySelector('.ytkit-heat-indicator')) timeEl.after(heat);
+                            }
+                        }
+                    });
+
+                    // Collapse-all-replies toggle per thread
+                    document.querySelectorAll('ytd-comment-thread-renderer:not([data-ytkit-collapse])').forEach(thread => {
+                        thread.dataset.ytkitCollapse = '1';
+                        const repliesRenderer = thread.querySelector('ytd-comment-replies-renderer');
+                        if (!repliesRenderer) return;
+                        const btn = document.createElement('button');
+                        btn.className = 'ytkit-collapse-replies';
+                        btn.textContent = 'Collapse replies';
+                        btn.addEventListener('click', () => {
+                            btn.classList.toggle('collapsed');
+                            btn.textContent = btn.classList.contains('collapsed') ? 'Show replies' : 'Collapse replies';
+                        });
+                        repliesRenderer.before(btn);
+                    });
+                };
+
+                addMutationRule(this.id, processCommentEnhancements);
+            },
+            destroy() {
+                removeMutationRule(this.id);
+                this._styleElement?.remove(); this._styleElement = null;
+                document.querySelectorAll('[data-ytkit-enhanced]').forEach(el => delete el.dataset.ytkitEnhanced);
+                document.querySelectorAll('[data-ytkit-creator]').forEach(el => delete el.dataset.ytkitCreator);
+                document.querySelectorAll('[data-ytkit-collapse]').forEach(el => delete el.dataset.ytkitCollapse);
+                document.querySelectorAll('.ytkit-heat-indicator, .ytkit-collapse-replies').forEach(el => el.remove());
+            }
+        },
         cssFeature('hideLiveChatEngagement', 'Hide Chat Engagement', 'Remove engagement prompts in live chat', 'Clutter', 'message-circle-off',
             'yt-live-chat-viewer-engagement-message-renderer,yt-live-chat-toast-renderer'),
         cssFeature('hidePaidPromotionWatch', 'Hide Paid Promotion', 'Remove "paid promotion" labels on watch pages', 'Clutter', 'dollar-sign',
@@ -5187,6 +5153,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _getDownloadUrl(videoUrl) {
                 const provider = appState.settings.downloadProvider || 'cobalt';
                 const baseUrl = this._providers[provider] || this._providers['cobalt'];
+                // Validate provider URL: must be HTTPS to prevent javascript:/file:// redirect
+                try {
+                    const parsed = new URL(typeof baseUrl === 'string' ? baseUrl : String(baseUrl));
+                    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+                        showToast('Invalid download provider URL — must be HTTP(S)', '#ef4444');
+                        return null;
+                    }
+                } catch(e) {
+                    showToast('Invalid download provider URL', '#ef4444');
+                    return null;
+                }
                 if (provider === 'ssyoutube') {
                     const videoId = new URL(videoUrl).searchParams.get('v');
                     return baseUrl + videoId;
@@ -5209,7 +5186,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     btn.addEventListener('click', () => {
                         const videoUrl = window.location.href;
                         const downloadUrl = this._getDownloadUrl(videoUrl);
-                        window.open(downloadUrl, '_blank');
+                        if (downloadUrl) window.open(downloadUrl, '_blank');
                     });
                     parent.appendChild(btn);
                 });
@@ -5292,7 +5269,19 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             init() {
                 // Sync textarea value to GM storage for the download provider getter
                 const val = appState.settings.cobaltUrl;
-                if (val) GM_setValue('ytkit_cobalt_url', val);
+                if (val) {
+                    // Validate: must be a valid HTTPS URL
+                    try {
+                        const u = new URL(val);
+                        if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+                            console.warn('[YTKit] Cobalt URL rejected: must be HTTP(S). Using default.');
+                            return;
+                        }
+                        GM_setValue('ytkit_cobalt_url', val);
+                    } catch(e) {
+                        console.warn('[YTKit] Cobalt URL invalid, using default.');
+                    }
+                }
             },
             destroy() {}
         },
@@ -5399,41 +5388,121 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 removeNavigateRule(this.id);
             }
         },
-        // Download button factory — eliminates triplicated button creation
-        ...[
-            { id: 'showVlcButton', name: 'VLC Player Button', description: 'Add button to stream video directly in VLC media player', icon: 'play-circle', isParent: true,
-              btnClass: 'ytkit-vlc-btn', regKey: 'vlcButton', regLabel: 'VLC', label: ' VLC', title: 'Stream in VLC Player (requires YTYT-Downloader)',
-              svgPath: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z',
-              color: '#f97316', hoverColor: '#ea580c', toast: '🎬 Sending to VLC...', urlBuilder: () => 'ytvlc://' + encodeURIComponent(window.location.href) },
-            { id: 'showLocalDownloadButton', name: 'Local Download Button', description: 'Add button to download video locally via yt-dlp', icon: 'hard-drive-download',
-              btnClass: 'ytkit-local-dl-btn', regKey: 'localDownloadButton', regLabel: 'Download', label: ' DL', title: 'Download to PC (requires YTYT-Downloader)',
-              svgPath: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
-              color: '#22c55e', hoverColor: '#16a34a', toast: '⬇️ Starting download...', urlBuilder: () => 'ytdl://' + encodeURIComponent(window.location.href) },
-            { id: 'showMp3DownloadButton', name: 'MP3 Download Button', description: 'Add button to download audio as MP3 via yt-dlp', icon: 'music',
-              btnClass: 'ytkit-mp3-dl-btn', regKey: 'mp3DownloadButton', regLabel: 'MP3', label: ' MP3', title: 'Download MP3 (requires YTYT-Downloader)',
-              svgPath: 'M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z',
-              color: '#8b5cf6', hoverColor: '#7c3aed', toast: '🎵 Starting MP3 download...', urlBuilder: () => 'ytdl://' + encodeURIComponent(window.location.href) + '?ytyt_audio_only=1' },
-        ].map(cfg => ({
-            id: cfg.id, name: cfg.name, description: cfg.description, group: 'Downloads', icon: cfg.icon, ...(cfg.isParent ? { isParent: true } : {}),
+        {
+            id: 'showVlcButton',
+            name: 'VLC Player Button',
+            description: 'Add button to stream video directly in VLC media player',
+            group: 'Downloads',
+            icon: 'play-circle',
+            isParent: true,
             _createButton(parent) {
                 const btn = document.createElement('button');
-                btn.className = cfg.btnClass;
-                btn.title = cfg.title;
+                btn.className = 'ytkit-vlc-btn';
+                btn.title = 'Stream in VLC Player (requires YTYT-Downloader)';
                 const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '20'); svg.setAttribute('height', '20');
+                svg.setAttribute('viewBox', '0 0 24 24');
+                svg.setAttribute('width', '20');
+                svg.setAttribute('height', '20');
                 const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                path.setAttribute('d', cfg.svgPath); path.setAttribute('fill', 'white');
-                svg.appendChild(path); btn.appendChild(svg);
-                btn.appendChild(document.createTextNode(cfg.label));
-                btn.style.cssText = `display:inline-flex;align-items:center;gap:6px;padding:0 16px;height:36px;margin-left:8px;border-radius:18px;border:none;background:${cfg.color};color:white;font-family:"Roboto","Arial",sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background 0.2s;`;
-                btn.onmouseenter = () => { btn.style.background = cfg.hoverColor; };
-                btn.onmouseleave = () => { btn.style.background = cfg.color; };
-                btn.addEventListener('click', () => { showToast(cfg.toast, cfg.color); window.location.href = cfg.urlBuilder(); });
+                path.setAttribute('d', 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z');
+                path.setAttribute('fill', 'white');
+                svg.appendChild(path);
+                btn.appendChild(svg);
+                btn.appendChild(document.createTextNode(' VLC'));
+                btn.style.cssText = `display:inline-flex;align-items:center;gap:6px;padding:0 16px;height:36px;margin-left:8px;border-radius:18px;border:none;background:#f97316;color:white;font-family:"Roboto","Arial",sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background 0.2s;`;
+                btn.onmouseenter = () => { btn.style.background = '#ea580c'; };
+                btn.onmouseleave = () => { btn.style.background = '#f97316'; };
+                btn.addEventListener('click', () => {
+                    showToast('🎬 Sending to VLC...', '#f97316');
+                    window.location.href = 'ytvlc://' + encodeURIComponent(window.location.href);
+                });
                 parent.appendChild(btn);
             },
-            init() { registerPersistentButton(cfg.regKey, BUTTON_CONTAINER, '.' + cfg.btnClass, this._createButton.bind(this), cfg.regLabel); startButtonChecker(); },
-            destroy() { unregisterPersistentButton(cfg.regKey); document.querySelector('.' + cfg.btnClass)?.remove(); }
-        })),
+            init() {
+                registerPersistentButton('vlcButton', '#top-level-buttons-computed', '.ytkit-vlc-btn', this._createButton.bind(this), 'VLC');
+                startButtonChecker();
+            },
+            destroy() {
+                unregisterPersistentButton('vlcButton');
+                document.querySelector('.ytkit-vlc-btn')?.remove();
+            }
+        },
+        {
+            id: 'showLocalDownloadButton',
+            name: 'Local Download Button',
+            description: 'Add button to download video locally via yt-dlp',
+            group: 'Downloads',
+            icon: 'hard-drive-download',
+            _createButton(parent) {
+                const btn = document.createElement('button');
+                btn.className = 'ytkit-local-dl-btn';
+                btn.title = 'Download to PC (requires YTYT-Downloader)';
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('viewBox', '0 0 24 24');
+                svg.setAttribute('width', '20');
+                svg.setAttribute('height', '20');
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z');
+                path.setAttribute('fill', 'white');
+                svg.appendChild(path);
+                btn.appendChild(svg);
+                btn.appendChild(document.createTextNode(' DL'));
+                btn.style.cssText = `display:inline-flex;align-items:center;gap:6px;padding:0 16px;height:36px;margin-left:8px;border-radius:18px;border:none;background:#22c55e;color:white;font-family:"Roboto","Arial",sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background 0.2s;`;
+                btn.onmouseenter = () => { btn.style.background = '#16a34a'; };
+                btn.onmouseleave = () => { btn.style.background = '#22c55e'; };
+                btn.addEventListener('click', () => {
+                    showToast('⬇️ Starting download...', '#22c55e');
+                    window.location.href = 'ytdl://' + encodeURIComponent(window.location.href);
+                });
+                parent.appendChild(btn);
+            },
+            init() {
+                registerPersistentButton('localDownloadButton', '#top-level-buttons-computed', '.ytkit-local-dl-btn', this._createButton.bind(this), 'Download');
+                startButtonChecker();
+            },
+            destroy() {
+                unregisterPersistentButton('localDownloadButton');
+                document.querySelector('.ytkit-local-dl-btn')?.remove();
+            }
+        },
+        {
+            id: 'showMp3DownloadButton',
+            name: 'MP3 Download Button',
+            description: 'Add button to download audio as MP3 via yt-dlp',
+            group: 'Downloads',
+            icon: 'music',
+            _createButton(parent) {
+                const btn = document.createElement('button');
+                btn.className = 'ytkit-mp3-dl-btn';
+                btn.title = 'Download MP3 (requires YTYT-Downloader)';
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('viewBox', '0 0 24 24');
+                svg.setAttribute('width', '20');
+                svg.setAttribute('height', '20');
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', 'M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z');
+                path.setAttribute('fill', 'white');
+                svg.appendChild(path);
+                btn.appendChild(svg);
+                btn.appendChild(document.createTextNode(' MP3'));
+                btn.style.cssText = `display:inline-flex;align-items:center;gap:6px;padding:0 16px;height:36px;margin-left:8px;border-radius:18px;border:none;background:#8b5cf6;color:white;font-family:"Roboto","Arial",sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background 0.2s;`;
+                btn.onmouseenter = () => { btn.style.background = '#7c3aed'; };
+                btn.onmouseleave = () => { btn.style.background = '#8b5cf6'; };
+                btn.addEventListener('click', () => {
+                    showToast('🎵 Starting MP3 download...', '#8b5cf6');
+                    window.location.href = 'ytdl://' + encodeURIComponent(window.location.href) + '?ytyt_audio_only=1';
+                });
+                parent.appendChild(btn);
+            },
+            init() {
+                registerPersistentButton('mp3DownloadButton', '#top-level-buttons-computed', '.ytkit-mp3-dl-btn', this._createButton.bind(this), 'MP3');
+                startButtonChecker();
+            },
+            destroy() {
+                unregisterPersistentButton('mp3DownloadButton');
+                document.querySelector('.ytkit-mp3-dl-btn')?.remove();
+            }
+        },
         {
             id: 'videoContextMenu',
             name: 'Video Context Menu',
@@ -5862,148 +5931,28 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         {
             id: 'gpuContextRecovery',
             name: 'Monitor Switch Fix',
-            description: 'Automatically recovers video when moving browser between monitors (fixes black screen with audio)',
+            description: 'Fixes black video on non-primary monitors by disabling Chromium hardware video overlays (mixed-DPI multi-monitor setups)',
             group: 'Video Player',
             icon: 'monitor',
-            _healthPoll: null,
-            _recovering: false,
-            _canvas: null,
-            _ctx: null,
-            _lastTime: 0,
-            _blackCount: 0,
-            _stage: 0,
-
-            _isBlackFrame(video) {
-                if (!this._canvas) {
-                    this._canvas = document.createElement('canvas');
-                    this._canvas.width = 16;
-                    this._canvas.height = 16;
-                    this._ctx = this._canvas.getContext('2d', { willReadFrequently: true });
-                }
-                try {
-                    this._ctx.drawImage(video, 0, 0, 16, 16);
-                    const data = this._ctx.getImageData(0, 0, 16, 16).data;
-                    let totalBrightness = 0;
-                    for (let i = 0; i < data.length; i += 4) {
-                        totalBrightness += data[i] + data[i + 1] + data[i + 2];
-                    }
-                    return (totalBrightness / (16 * 16)) < 15;
-                } catch (e) {
-                    return false;
-                }
-            },
-
-            _recover() {
-                if (this._recovering) return;
-                this._recovering = true;
-                this._stage++;
-                const video = document.querySelector('video.html5-main-video');
-                const player = document.querySelector('#movie_player');
-                if (!video || !player) { this._recovering = false; return; }
-
-                const currentTime = video.currentTime;
-                DebugManager.log('GPU', `Black frame detected — recovery stage ${this._stage}`);
-
-                if (this._stage <= 1) {
-                    // Stage 1: Pause → seekTo (forces keyframe decode) → play
-                    try {
-                        player.pauseVideo();
-                        setTimeout(() => {
-                            player.seekTo(currentTime, true);
-                            setTimeout(() => {
-                                player.playVideo();
-                                this._recovering = false;
-                            }, 200);
-                        }, 100);
-                    } catch(e) { this._recovering = false; }
-
-                } else if (this._stage <= 2) {
-                    // Stage 2: Remove video src, force reload via loadVideoById
-                    try {
-                        const videoId = new URLSearchParams(window.location.search).get('v');
-                        if (videoId && typeof player.loadVideoById === 'function') {
-                            player.loadVideoById({ videoId, startSeconds: currentTime });
-                            // loadVideoById auto-plays, give it time to reinit
-                            setTimeout(() => {
-                                this._recovering = false;
-                            }, 1000);
-                        } else {
-                            // Fallback: nuke the video element's rendering
-                            video.srcObject = video.srcObject;
-                            this._recovering = false;
-                        }
-                    } catch(e) { this._recovering = false; }
-
-                } else if (this._stage <= 3) {
-                    // Stage 3: Toggle hardware acceleration by forcing software rendering path
-                    try {
-                        // Remove will-change and transform hints to force software fallback
-                        video.style.willChange = 'auto';
-                        video.style.transform = 'none';
-                        video.style.backfaceVisibility = 'hidden';
-                        // Force layout
-                        void video.offsetHeight;
-                        // Re-seek to force new frame
-                        player.seekTo(currentTime + 0.1, true);
-                        setTimeout(() => {
-                            // Restore
-                            video.style.willChange = '';
-                            video.style.transform = '';
-                            video.style.backfaceVisibility = '';
-                            this._recovering = false;
-                        }, 500);
-                    } catch(e) { this._recovering = false; }
-
-                } else {
-                    // Stage 4: Full page-level reload as absolute last resort
-                    DebugManager.log('GPU', 'All recovery stages failed — reloading player');
-                    try {
-                        // Use YouTube's navigation to "reload" without full page refresh
-                        const url = window.location.href;
-                        if (typeof player.loadVideoByUrl === 'function') {
-                            player.loadVideoByUrl({ mediaContentUrl: `https://www.youtube.com/v/${new URLSearchParams(window.location.search).get('v')}`, startSeconds: currentTime });
-                        } else {
-                            window.location.replace(url);
-                        }
-                    } catch(e) {}
-                    this._recovering = false;
-                    this._stage = 0;
-                    this._blackCount = 0;
-                }
-            },
+            _styleEl: null,
 
             init() {
-                this._healthPoll = setInterval(() => {
-                    if (this._recovering) return;
-                    const video = document.querySelector('video.html5-main-video');
-                    if (!video || video.paused || video.ended || video.readyState < 3) {
-                        this._blackCount = 0;
-                        return;
-                    }
-                    const ct = video.currentTime;
-                    if (ct === this._lastTime) return;
-                    this._lastTime = ct;
-
-                    if (this._isBlackFrame(video)) {
-                        this._blackCount++;
-                        if (this._blackCount >= 2) {
-                            this._recover();
-                        }
-                    } else {
-                        // Video is rendering — reset stages
-                        this._blackCount = 0;
-                        this._stage = 0;
-                    }
-                }, 1500);
+                // Chrome on Windows uses DirectComposition hardware overlays for <video>.
+                // The overlay renders directly on the display, bypassing normal compositing.
+                // On mixed-DPI multi-monitor setups, this only works on the primary display —
+                // secondary monitors at different scaling get a black rectangle.
+                //
+                // Overriding the video element to use CSS-based sizing with object-fit: contain
+                // forces Chrome out of the hardware overlay path because overlays cannot perform
+                // CSS object-fit calculations. Falls back to normal GPU compositing which works
+                // on all displays regardless of DPI.
+                this._styleEl = GM_addStyle([
+                    '#movie_player .html5-video-container { width: 100% !important; height: 100% !important; }',
+                    '#movie_player video.html5-main-video { width: 100% !important; height: 100% !important; left: 0 !important; top: 0 !important; object-fit: contain !important; }'
+                ].join('\n'));
             },
             destroy() {
-                clearInterval(this._healthPoll);
-                this._healthPoll = null;
-                this._canvas = null;
-                this._ctx = null;
-                this._blackCount = 0;
-                this._recovering = false;
-                this._stage = 0;
+                if (this._styleEl) { this._styleEl.remove(); this._styleEl = null; }
             }
         },
 
@@ -6580,7 +6529,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         'Interface': { icon: 'interface', color: '#60a5fa' },
         'Appearance': { icon: 'appearance', color: '#f472b6' },
         'Content': { icon: 'content', color: '#34d399' },
-        'Video Hider': { icon: 'eye-off', color: '#ef4444' },
         'Video Player': { icon: 'player', color: '#a78bfa' },
         'Ad Blocker': { icon: 'shield', color: '#10b981' },
         'SponsorBlock': { icon: 'sponsor', color: '#22d3ee' },
@@ -6637,7 +6585,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
     function buildSettingsPanel() {
         if (document.getElementById('ytkit-settings-panel')) return;
 
-        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Ad Blocker', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads'];
+        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Player', 'Ad Blocker', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads'];
 
         // Group labels: maps first category of each group → label text
         const categoryGroupLabels = {
@@ -6778,46 +6726,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 return;
             }
 
-            // Special handling for Video Hider
-            if (cat === 'Video Hider') {
-                const config = CATEGORY_CONFIG[cat];
-                const catId = cat.replace(/ /g, '-');
-                const videoHiderFeature = features.find(f => f.id === 'hideVideosFromHome');
-                const videoCount = (typeof videoHiderFeature?._getHiddenVideos === 'function' ? videoHiderFeature._getHiddenVideos() : []).length;
-                const channelCount = (typeof videoHiderFeature?._getBlockedChannels === 'function' ? videoHiderFeature._getBlockedChannels() : []).length;
-
-                const btn = document.createElement('button');
-                btn.className = 'ytkit-nav-btn';
-                btn.dataset.tab = catId;
-
-                const iconWrap = document.createElement('span');
-                iconWrap.className = 'ytkit-nav-icon';
-                iconWrap.style.setProperty('--cat-color', config.color);
-                const iconFn = ICONS['eye-off'] || ICONS.settings;
-                iconWrap.appendChild(iconFn());
-
-                const labelSpan = document.createElement('span');
-                labelSpan.className = 'ytkit-nav-label';
-                labelSpan.textContent = cat;
-
-                const countSpan = document.createElement('span');
-                countSpan.className = 'ytkit-nav-count';
-                countSpan.textContent = `${videoCount + channelCount}`;
-                countSpan.title = `${videoCount} videos, ${channelCount} channels`;
-
-                const arrowSpan = document.createElement('span');
-                arrowSpan.className = 'ytkit-nav-arrow';
-                arrowSpan.appendChild(ICONS.chevronRight());
-
-                btn.appendChild(iconWrap);
-                btn.appendChild(labelSpan);
-                btn.appendChild(countSpan);
-                btn.appendChild(arrowSpan);
-
-                sidebar.appendChild(btn);
-                return;
-            }
-
             const categoryFeatures = featuresByCategory[cat];
             if (!categoryFeatures || categoryFeatures.length === 0) return;
 
@@ -6853,12 +6761,123 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             btn.appendChild(countSpan);
             btn.appendChild(arrowSpan);
 
+            // Drag-reorder support
+            btn.draggable = true;
+            btn.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData('text/plain', catId);
+                btn.classList.add('ytkit-dragging');
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            btn.addEventListener('dragend', () => btn.classList.remove('ytkit-dragging'));
+            btn.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                const rect = btn.getBoundingClientRect();
+                const midY = rect.top + rect.height / 2;
+                btn.classList.toggle('ytkit-drag-above', e.clientY < midY);
+                btn.classList.toggle('ytkit-drag-below', e.clientY >= midY);
+            });
+            btn.addEventListener('dragleave', () => {
+                btn.classList.remove('ytkit-drag-above', 'ytkit-drag-below');
+            });
+            btn.addEventListener('drop', (e) => {
+                e.preventDefault();
+                btn.classList.remove('ytkit-drag-above', 'ytkit-drag-below');
+                const draggedCatId = e.dataTransfer.getData('text/plain');
+                const draggedBtn = sidebar.querySelector('.ytkit-nav-btn[data-tab="' + draggedCatId + '"]');
+                if (!draggedBtn || draggedBtn === btn) return;
+                const rect = btn.getBoundingClientRect();
+                const midY = rect.top + rect.height / 2;
+                if (e.clientY < midY) btn.before(draggedBtn);
+                else btn.after(draggedBtn);
+                // Persist order
+                const newOrder = Array.from(sidebar.querySelectorAll('.ytkit-nav-btn')).map(b => b.dataset.tab);
+                GM_setValue('ytkit_sidebar_order', JSON.stringify(newOrder));
+            });
+
             sidebar.appendChild(btn);
         });
+
+        // Apply saved sidebar order
+        try {
+            const savedOrder = JSON.parse(GM_getValue('ytkit_sidebar_order', 'null'));
+            if (savedOrder && Array.isArray(savedOrder)) {
+                const navBtns = Array.from(sidebar.querySelectorAll('.ytkit-nav-btn'));
+                const groupLabels = Array.from(sidebar.querySelectorAll('.ytkit-nav-group-label'));
+                // Remove group labels (order is now user-controlled)
+                groupLabels.forEach(gl => gl.remove());
+                // Reorder buttons
+                const btnMap = {};
+                navBtns.forEach(b => { btnMap[b.dataset.tab] = b; });
+                savedOrder.forEach(catId => {
+                    if (btnMap[catId]) sidebar.appendChild(btnMap[catId]);
+                });
+                // Append any new categories not in saved order
+                navBtns.forEach(b => {
+                    if (!savedOrder.includes(b.dataset.tab)) sidebar.appendChild(b);
+                });
+            }
+        } catch(e) {}
 
         // Content
         const content = document.createElement('div');
         content.className = 'ytkit-content';
+
+        // Recently Changed section
+        const recentSection = document.createElement('div');
+        recentSection.id = 'ytkit-recent-section';
+        recentSection.className = 'ytkit-recent-section';
+        recentSection.style.display = 'none';
+
+        function renderRecentSection() {
+            while (recentSection.firstChild) recentSection.firstChild.remove();
+            if (_recentlyChanged.length === 0) { recentSection.style.display = 'none'; return; }
+            recentSection.style.display = 'block';
+
+            const rHeader = document.createElement('div');
+            rHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
+            const rTitle = document.createElement('span');
+            rTitle.style.cssText = 'font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--ytkit-text-muted);';
+            rTitle.textContent = 'Recently Changed';
+            const rClear = document.createElement('button');
+            rClear.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);background:none;border:none;cursor:pointer;padding:2px 6px;border-radius:3px;transition:all 0.15s;';
+            rClear.textContent = 'Clear';
+            rClear.onmouseenter = () => { rClear.style.color = '#ef4444'; rClear.style.background = 'rgba(239,68,68,0.1)'; };
+            rClear.onmouseleave = () => { rClear.style.color = ''; rClear.style.background = ''; };
+            rClear.onclick = () => { _recentlyChanged.length = 0; renderRecentSection(); };
+            rHeader.appendChild(rTitle);
+            rHeader.appendChild(rClear);
+            recentSection.appendChild(rHeader);
+
+            const rGrid = document.createElement('div');
+            rGrid.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
+            _recentlyChanged.forEach(item => {
+                const feat = features.find(ff => ff.id === item.id);
+                if (!feat) return;
+                const pill = document.createElement('button');
+                pill.style.cssText = 'display:inline-flex;align-items:center;gap:5px;padding:5px 10px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid var(--ytkit-border);cursor:pointer;transition:all 0.15s;background:' + (item.enabled ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.06)') + ';color:' + (item.enabled ? '#22c55e' : '#ef4444') + ';';
+                const dot = document.createElement('span');
+                dot.style.cssText = 'width:5px;height:5px;border-radius:50%;background:' + (item.enabled ? '#22c55e' : '#ef4444') + ';';
+                pill.appendChild(dot);
+                const lbl = document.createElement('span');
+                lbl.textContent = feat.name;
+                lbl.style.color = 'var(--ytkit-text-secondary)';
+                pill.appendChild(lbl);
+                // Click to navigate to the feature's category
+                pill.onclick = () => {
+                    const catId = (feat.group || '').replace(/ /g, '-');
+                    const navBtn = document.querySelector('.ytkit-nav-btn[data-tab="' + catId + '"]');
+                    if (navBtn) navBtn.click();
+                };
+                pill.onmouseenter = () => { pill.style.borderColor = item.enabled ? '#22c55e' : '#ef4444'; };
+                pill.onmouseleave = () => { pill.style.borderColor = ''; };
+                rGrid.appendChild(pill);
+            });
+            recentSection.appendChild(rGrid);
+        }
+
+        document.addEventListener('ytkit-recent-changed', renderRecentSection);
+        renderRecentSection();
 
         //  Ad Blocker Custom Pane
         function buildAdBlockPane(config) {
@@ -7235,464 +7254,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             return pane;
         }
 
-        function buildVideoHiderPane(config) {
-            const videoHiderFeature = features.find(f => f.id === 'hideVideosFromHome');
-
-            const pane = document.createElement('section');
-            pane.id = 'ytkit-pane-Video-Hider';
-            pane.className = 'ytkit-pane ytkit-vh-pane';
-
-            // Pane header
-            const paneHeader = document.createElement('div');
-            paneHeader.className = 'ytkit-pane-header';
-
-            const paneTitle = document.createElement('div');
-            paneTitle.className = 'ytkit-pane-title';
-
-            const paneIcon = document.createElement('span');
-            paneIcon.className = 'ytkit-pane-icon';
-            paneIcon.style.setProperty('--cat-color', config.color);
-            const paneIconFn = ICONS['eye-off'] || ICONS.settings;
-            paneIcon.appendChild(paneIconFn());
-
-            const paneTitleH2 = document.createElement('h2');
-            paneTitleH2.textContent = 'Video Hider';
-
-            paneTitle.appendChild(paneIcon);
-            paneTitle.appendChild(paneTitleH2);
-
-            // Enable toggle
-            const toggleLabel = document.createElement('label');
-            toggleLabel.className = 'ytkit-toggle-all';
-            toggleLabel.style.marginLeft = 'auto';
-
-            const toggleText = document.createElement('span');
-            toggleText.textContent = 'Enabled';
-
-            const toggleSwitch = document.createElement('div');
-            toggleSwitch.className = 'ytkit-switch' + (appState.settings.hideVideosFromHome ? ' active' : '');
-
-            const toggleInput = document.createElement('input');
-            toggleInput.type = 'checkbox';
-            toggleInput.id = 'ytkit-toggle-hideVideosFromHome';
-            toggleInput.checked = appState.settings.hideVideosFromHome;
-            toggleInput.onchange = async () => {
-                appState.settings.hideVideosFromHome = toggleInput.checked;
-                toggleSwitch.classList.toggle('active', toggleInput.checked);
-                settingsManager.save(appState.settings);
-                if (toggleInput.checked) videoHiderFeature?.init?.();
-                else videoHiderFeature?.destroy?.();
-                updateAllToggleStates();
-            };
-
-            const toggleTrack = document.createElement('span');
-            toggleTrack.className = 'ytkit-switch-track';
-            const toggleThumb = document.createElement('span');
-            toggleThumb.className = 'ytkit-switch-thumb';
-            toggleTrack.appendChild(toggleThumb);
-
-            toggleSwitch.appendChild(toggleInput);
-            toggleSwitch.appendChild(toggleTrack);
-            toggleLabel.appendChild(toggleText);
-            toggleLabel.appendChild(toggleSwitch);
-
-            paneHeader.appendChild(paneTitle);
-            paneHeader.appendChild(toggleLabel);
-            pane.appendChild(paneHeader);
-
-            // Tab navigation
-            const tabNav = document.createElement('div');
-            tabNav.className = 'ytkit-vh-tabs';
-            tabNav.style.cssText = 'display:flex;gap:0;border-bottom:1px solid var(--ytkit-border);margin-bottom:20px;';
-
-            const tabs = ['Videos', 'Channels', 'Keywords', 'Settings'];
-            tabs.forEach((tabName, i) => {
-                const tab = document.createElement('button');
-                tab.className = 'ytkit-vh-tab' + (i === 0 ? ' active' : '');
-                tab.dataset.tab = tabName.toLowerCase();
-                tab.textContent = tabName;
-                tab.style.cssText = 'flex:1;padding:12px 16px;background:transparent;border:none;color:var(--ytkit-text-muted);font-size:13px;font-weight:500;cursor:pointer;transition:all 0.2s;border-bottom:2px solid transparent;';
-                tab.onmouseenter = () => { if (!tab.classList.contains('active')) tab.style.color = 'var(--ytkit-text-secondary)'; };
-                tab.onmouseleave = () => { if (!tab.classList.contains('active')) tab.style.color = 'var(--ytkit-text-muted)'; };
-                tab.onclick = () => {
-                    tabNav.querySelectorAll('.ytkit-vh-tab').forEach(t => {
-                        t.classList.remove('active');
-                        t.style.color = 'var(--ytkit-text-muted)';
-                        t.style.borderBottomColor = 'transparent';
-                    });
-                    tab.classList.add('active');
-                    tab.style.color = config.color;
-                    tab.style.borderBottomColor = config.color;
-                    renderTabContent(tabName.toLowerCase());
-                };
-                if (i === 0) {
-                    tab.style.color = config.color;
-                    tab.style.borderBottomColor = config.color;
-                }
-                tabNav.appendChild(tab);
-            });
-            pane.appendChild(tabNav);
-
-            const tabContent = document.createElement('div');
-            tabContent.id = 'ytkit-vh-content';
-            pane.appendChild(tabContent);
-
-            function buildEmptyState(title, description) {
-                const empty = document.createElement('div');
-                empty.style.cssText = 'text-align:center;padding:60px 20px;color:var(--ytkit-text-muted);';
-                const emptyTitle = document.createElement('div');
-                emptyTitle.style.cssText = 'font-size:15px;margin-bottom:8px;';
-                emptyTitle.textContent = title;
-                const emptyDesc = document.createElement('div');
-                emptyDesc.style.cssText = 'font-size:13px;opacity:0.7;';
-                emptyDesc.textContent = description;
-                empty.appendChild(emptyTitle);
-                empty.appendChild(emptyDesc);
-                return empty;
-            }
-
-            function buildClearAllButton(label, onClear) {
-                const clearBtn = document.createElement('button');
-                clearBtn.textContent = label;
-                clearBtn.style.cssText = 'margin-top:20px;padding:12px 24px;width:100%;background:#dc2626;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;transition:background 0.2s;';
-                clearBtn.onmouseenter = () => { clearBtn.style.background = '#b91c1c'; };
-                clearBtn.onmouseleave = () => { clearBtn.style.background = '#dc2626'; };
-                clearBtn.onclick = onClear;
-                return clearBtn;
-            }
-
-            function renderTabContent(tab) {
-                while (tabContent.firstChild) tabContent.removeChild(tabContent.firstChild);
-
-                if (tab === 'videos') {
-                    const videos = videoHiderFeature?._getHiddenVideos() || [];
-                    if (videos.length === 0) {
-                        tabContent.appendChild(buildEmptyState('No hidden videos yet', 'Click the X button on video thumbnails to hide them'));
-                    } else {
-                        const grid = document.createElement('div');
-                        grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;';
-
-                        videos.forEach(vid => {
-                            const item = document.createElement('div');
-                            item.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px;background:var(--ytkit-bg-surface);border-radius:8px;border:1px solid var(--ytkit-border);';
-
-                            const thumb = document.createElement('img');
-                            thumb.src = `https://i.ytimg.com/vi/${vid}/mqdefault.jpg`;
-                            thumb.style.cssText = 'width:100px;height:56px;object-fit:cover;border-radius:4px;flex-shrink:0;';
-                            thumb.onerror = () => { thumb.style.background = 'var(--ytkit-bg-elevated)'; };
-
-                            const info = document.createElement('div');
-                            info.style.cssText = 'flex:1;min-width:0;';
-                            const vidId = document.createElement('div');
-                            vidId.style.cssText = 'font-size:12px;color:var(--ytkit-text-secondary);font-family:monospace;margin-bottom:4px;';
-                            vidId.textContent = vid;
-                            const link = document.createElement('a');
-                            link.href = `https://youtube.com/watch?v=${vid}`;
-                            link.target = '_blank';
-                            link.style.cssText = 'font-size:12px;color:var(--ytkit-accent);text-decoration:none;';
-                            link.textContent = 'View on YouTube \u2192';
-                            info.appendChild(vidId);
-                            info.appendChild(link);
-
-                            const removeBtn = document.createElement('button');
-                            removeBtn.textContent = 'Unhide';
-                            removeBtn.style.cssText = 'padding:6px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);color:var(--ytkit-text-secondary);border-radius:6px;cursor:pointer;font-size:12px;transition:all 0.2s;';
-                            removeBtn.onmouseenter = () => { removeBtn.style.background = '#dc2626'; removeBtn.style.color = '#fff'; removeBtn.style.borderColor = '#dc2626'; };
-                            removeBtn.onmouseleave = () => { removeBtn.style.background = 'var(--ytkit-bg-elevated)'; removeBtn.style.color = 'var(--ytkit-text-secondary)'; removeBtn.style.borderColor = 'var(--ytkit-border)'; };
-                            removeBtn.onclick = () => {
-                                const h = videoHiderFeature._getHiddenVideos();
-                                const idx = h.indexOf(vid);
-                                if (idx > -1) { h.splice(idx, 1); videoHiderFeature._setHiddenVideos(h); }
-                                item.remove();
-                                videoHiderFeature._processAllVideos();
-                                if (videoHiderFeature._getHiddenVideos().length === 0) renderTabContent('videos');
-                            };
-
-                            item.appendChild(thumb);
-                            item.appendChild(info);
-                            item.appendChild(removeBtn);
-                            grid.appendChild(item);
-                        });
-
-                        tabContent.appendChild(grid);
-
-                        tabContent.appendChild(buildClearAllButton(`Clear All Hidden Videos (${videos.length})`, () => {
-                            const backup = [...videoHiderFeature._getHiddenVideos()];
-                            videoHiderFeature._setHiddenVideos([]);
-                            videoHiderFeature._processAllVideos();
-                            renderTabContent('videos');
-                            showToast(`Cleared ${backup.length} hidden videos`, '#dc2626', { duration: 5, action: { text: 'Undo', onClick: () => {
-                                videoHiderFeature._setHiddenVideos(backup);
-                                videoHiderFeature._processAllVideos();
-                                renderTabContent('videos');
-                                showToast('Videos restored', '#22c55e');
-                            }}});
-                        }));
-                    }
-                } else if (tab === 'channels') {
-                    const channels = videoHiderFeature?._getBlockedChannels() || [];
-                    if (channels.length === 0) {
-                        tabContent.appendChild(buildEmptyState('No blocked channels yet', 'Right-click the X button on thumbnails to block channels'));
-                    } else {
-                        const list = document.createElement('div');
-                        list.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
-
-                        channels.forEach(ch => {
-                            const item = document.createElement('div');
-                            item.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px;background:var(--ytkit-bg-surface);border-radius:8px;border:1px solid var(--ytkit-border);';
-
-                            const icon = document.createElement('div');
-                            icon.style.cssText = 'width:40px;height:40px;border-radius:50%;background:var(--ytkit-bg-elevated);display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--ytkit-text-muted);';
-                            icon.appendChild((ICONS['eye-off'] || ICONS.settings)());
-
-                            const info = document.createElement('div');
-                            info.style.cssText = 'flex:1;';
-                            const name = document.createElement('div');
-                            name.style.cssText = 'font-size:14px;color:var(--ytkit-text-primary);font-weight:500;';
-                            name.textContent = ch.name || ch.id;
-                            const handle = document.createElement('div');
-                            handle.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);';
-                            handle.textContent = ch.id;
-                            info.appendChild(name);
-                            info.appendChild(handle);
-
-                            const removeBtn = document.createElement('button');
-                            removeBtn.textContent = 'Unblock';
-                            removeBtn.style.cssText = 'padding:6px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);color:var(--ytkit-text-secondary);border-radius:6px;cursor:pointer;font-size:12px;transition:all 0.2s;';
-                            removeBtn.onmouseenter = () => { removeBtn.style.background = '#22c55e'; removeBtn.style.color = '#fff'; removeBtn.style.borderColor = '#22c55e'; };
-                            removeBtn.onmouseleave = () => { removeBtn.style.background = 'var(--ytkit-bg-elevated)'; removeBtn.style.color = 'var(--ytkit-text-secondary)'; removeBtn.style.borderColor = 'var(--ytkit-border)'; };
-                            removeBtn.onclick = () => {
-                                const c = videoHiderFeature._getBlockedChannels();
-                                const idx = c.findIndex(x => x.id === ch.id);
-                                if (idx > -1) { c.splice(idx, 1); videoHiderFeature._setBlockedChannels(c); }
-                                item.remove();
-                                videoHiderFeature._processAllVideos();
-                                if (videoHiderFeature._getBlockedChannels().length === 0) renderTabContent('channels');
-                            };
-
-                            item.appendChild(icon);
-                            item.appendChild(info);
-                            item.appendChild(removeBtn);
-                            list.appendChild(item);
-                        });
-
-                        tabContent.appendChild(list);
-
-                        tabContent.appendChild(buildClearAllButton(`Unblock All Channels (${channels.length})`, () => {
-                            const backup = [...videoHiderFeature._getBlockedChannels()];
-                            videoHiderFeature._setBlockedChannels([]);
-                            videoHiderFeature._processAllVideos();
-                            renderTabContent('channels');
-                            showToast(`Unblocked ${backup.length} channels`, '#dc2626', { duration: 5, action: { text: 'Undo', onClick: () => {
-                                videoHiderFeature._setBlockedChannels(backup);
-                                videoHiderFeature._processAllVideos();
-                                renderTabContent('channels');
-                                showToast('Channels restored', '#22c55e');
-                            }}});
-                        }));
-                    }
-                } else if (tab === 'keywords') {
-                    const container = document.createElement('div');
-                    container.style.cssText = 'padding:0;';
-
-                    const desc = document.createElement('div');
-                    desc.style.cssText = 'color:var(--ytkit-text-muted);font-size:13px;margin-bottom:16px;line-height:1.5;';
-                    desc.textContent = 'Videos with titles containing these keywords will be automatically hidden. Separate multiple keywords with commas. Prefix with / for regex (e.g. /\\[.*\\]/i). Prefix with ! to whitelist.';
-                    container.appendChild(desc);
-
-                    const textarea = document.createElement('textarea');
-                    textarea.style.cssText = 'width:100%;min-height:150px;padding:12px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:8px;color:var(--ytkit-text-primary);font-size:13px;resize:vertical;font-family:inherit;';
-                    textarea.placeholder = 'e.g., reaction, unboxing, prank, shorts';
-                    textarea.value = appState.settings.hideVideosKeywordFilter || '';
-                    textarea.onchange = async () => {
-                        appState.settings.hideVideosKeywordFilter = textarea.value;
-                        settingsManager.save(appState.settings);
-                        videoHiderFeature?._processAllVideos();
-                    };
-                    container.appendChild(textarea);
-
-                    const hint = document.createElement('div');
-                    hint.style.cssText = 'color:var(--ytkit-text-muted);font-size:11px;margin-top:8px;';
-                    hint.textContent = 'Changes apply immediately. Keywords are case-insensitive.';
-                    container.appendChild(hint);
-
-                    tabContent.appendChild(container);
-                } else if (tab === 'settings') {
-                    const container = document.createElement('div');
-                    container.style.cssText = 'display:flex;flex-direction:column;gap:24px;';
-
-                    // Duration filter
-                    const durSection = document.createElement('div');
-                    durSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:12px;padding:20px;';
-
-                    const durTitle = document.createElement('div');
-                    durTitle.style.cssText = 'font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:8px;';
-                    durTitle.textContent = 'Duration Filter';
-                    durSection.appendChild(durTitle);
-
-                    const durDesc = document.createElement('div');
-                    durDesc.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);margin-bottom:12px;';
-                    durDesc.textContent = 'Automatically hide videos shorter than the specified duration.';
-                    durSection.appendChild(durDesc);
-
-                    const durRow = document.createElement('div');
-                    durRow.style.cssText = 'display:flex;align-items:center;gap:12px;';
-
-                    const durInput = document.createElement('input');
-                    durInput.type = 'number';
-                    durInput.min = '0';
-                    durInput.max = '60';
-                    durInput.value = appState.settings.hideVideosDurationFilter || 0;
-                    durInput.style.cssText = 'width:80px;padding:8px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:6px;color:var(--ytkit-text-primary);font-size:14px;';
-                    durInput.onchange = async () => {
-                        appState.settings.hideVideosDurationFilter = parseInt(durInput.value) || 0;
-                        settingsManager.save(appState.settings);
-                        videoHiderFeature?._processAllVideos();
-                    };
-
-                    const durLabel = document.createElement('span');
-                    durLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:13px;';
-                    durLabel.textContent = 'minutes (0 = disabled)';
-
-                    durRow.appendChild(durInput);
-                    durRow.appendChild(durLabel);
-                    durSection.appendChild(durRow);
-                    container.appendChild(durSection);
-
-                    // Subscription Load Limiter
-                    const limiterSection = document.createElement('div');
-                    limiterSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:12px;padding:20px;';
-
-                    const limiterTitle = document.createElement('div');
-                    limiterTitle.style.cssText = 'font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:8px;';
-                    limiterTitle.textContent = 'Subscription Page Load Limiter';
-                    limiterSection.appendChild(limiterTitle);
-
-                    const limiterDesc = document.createElement('div');
-                    limiterDesc.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);margin-bottom:16px;line-height:1.5;';
-                    limiterDesc.textContent = "Prevents infinite scrolling when many consecutive videos are hidden. Useful if you've hidden years of subscription videos.";
-                    limiterSection.appendChild(limiterDesc);
-
-                    const limiterToggleRow = document.createElement('div');
-                    limiterToggleRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding:12px;background:var(--ytkit-bg-elevated);border-radius:8px;';
-
-                    const limiterToggleLabel = document.createElement('span');
-                    limiterToggleLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:13px;';
-                    limiterToggleLabel.textContent = 'Enable load limiter';
-
-                    const limiterSwitch = document.createElement('div');
-                    limiterSwitch.className = 'ytkit-switch' + (appState.settings.hideVideosSubsLoadLimit !== false ? ' active' : '');
-                    limiterSwitch.style.cssText = 'cursor:pointer;';
-
-                    const limiterInput = document.createElement('input');
-                    limiterInput.type = 'checkbox';
-                    limiterInput.checked = appState.settings.hideVideosSubsLoadLimit !== false;
-                    limiterInput.onchange = async () => {
-                        appState.settings.hideVideosSubsLoadLimit = limiterInput.checked;
-                        limiterSwitch.classList.toggle('active', limiterInput.checked);
-                        settingsManager.save(appState.settings);
-                    };
-
-                    const limiterTrack = document.createElement('span');
-                    limiterTrack.className = 'ytkit-switch-track';
-
-                    limiterSwitch.appendChild(limiterInput);
-                    limiterSwitch.appendChild(limiterTrack);
-                    limiterToggleRow.appendChild(limiterToggleLabel);
-                    limiterToggleRow.appendChild(limiterSwitch);
-                    limiterSection.appendChild(limiterToggleRow);
-
-                    const thresholdRow = document.createElement('div');
-                    thresholdRow.style.cssText = 'display:flex;align-items:center;gap:12px;';
-
-                    const thresholdLabel = document.createElement('span');
-                    thresholdLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:13px;flex:1;';
-                    thresholdLabel.textContent = 'Stop after consecutive hidden batches:';
-
-                    const thresholdInput = document.createElement('input');
-                    thresholdInput.type = 'number';
-                    thresholdInput.min = '1';
-                    thresholdInput.max = '20';
-                    thresholdInput.value = appState.settings.hideVideosSubsLoadThreshold || 3;
-                    thresholdInput.style.cssText = 'width:70px;padding:8px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:6px;color:var(--ytkit-text-primary);font-size:14px;text-align:center;';
-                    thresholdInput.onchange = async () => {
-                        appState.settings.hideVideosSubsLoadThreshold = Math.max(1, Math.min(20, parseInt(thresholdInput.value) || 3));
-                        thresholdInput.value = appState.settings.hideVideosSubsLoadThreshold;
-                        settingsManager.save(appState.settings);
-                    };
-
-                    thresholdRow.appendChild(thresholdLabel);
-                    thresholdRow.appendChild(thresholdInput);
-                    limiterSection.appendChild(thresholdRow);
-
-                    const thresholdHint = document.createElement('div');
-                    thresholdHint.style.cssText = 'color:var(--ytkit-text-muted);font-size:11px;margin-top:8px;';
-                    thresholdHint.textContent = 'Lower = stops faster, Higher = loads more before stopping (1-20)';
-                    limiterSection.appendChild(thresholdHint);
-
-                    container.appendChild(limiterSection);
-
-                    // Stats
-                    const statsSection = document.createElement('div');
-                    statsSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:12px;padding:20px;';
-
-                    const statsTitle = document.createElement('div');
-                    statsTitle.style.cssText = 'font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:12px;';
-                    statsTitle.textContent = 'Statistics';
-                    statsSection.appendChild(statsTitle);
-
-                    const statsGrid = document.createElement('div');
-                    statsGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:12px;';
-
-                    const videoCount = videoHiderFeature?._getHiddenVideos()?.length || 0;
-                    const channelCount = videoHiderFeature?._getBlockedChannels()?.length || 0;
-
-                    const videoStat = document.createElement('div');
-                    videoStat.style.cssText = 'background:var(--ytkit-bg-elevated);padding:16px;border-radius:8px;text-align:center;';
-                    const videoStatNum = document.createElement('div');
-                    videoStatNum.style.cssText = `font-size:24px;font-weight:700;color:${config.color};`;
-                    videoStatNum.textContent = videoCount;
-                    const videoStatLabel = document.createElement('div');
-                    videoStatLabel.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);margin-top:4px;';
-                    videoStatLabel.textContent = 'Hidden Videos';
-                    videoStat.appendChild(videoStatNum);
-                    videoStat.appendChild(videoStatLabel);
-
-                    const channelStat = document.createElement('div');
-                    channelStat.style.cssText = 'background:var(--ytkit-bg-elevated);padding:16px;border-radius:8px;text-align:center;';
-                    const channelStatNum = document.createElement('div');
-                    channelStatNum.style.cssText = `font-size:24px;font-weight:700;color:${config.color};`;
-                    channelStatNum.textContent = channelCount;
-                    const channelStatLabel = document.createElement('div');
-                    channelStatLabel.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);margin-top:4px;';
-                    channelStatLabel.textContent = 'Blocked Channels';
-                    channelStat.appendChild(channelStatNum);
-                    channelStat.appendChild(channelStatLabel);
-
-                    statsGrid.appendChild(videoStat);
-                    statsGrid.appendChild(channelStat);
-                    statsSection.appendChild(statsGrid);
-                    container.appendChild(statsSection);
-
-                    tabContent.appendChild(container);
-                }
-            }
-
-            renderTabContent('videos');
-            return pane;
-        }
+        content.appendChild(recentSection);
 
         categoryOrder.forEach((cat, index) => {
             // Special handling for Ad Blocker
             if (cat === 'Ad Blocker') {
                 const config = CATEGORY_CONFIG[cat];
                 content.appendChild(buildAdBlockPane(config));
-                return;
-            }
-            // Special handling for Video Hider
-            if (cat === 'Video Hider') {
-                const config = CATEGORY_CONFIG[cat];
-                content.appendChild(buildVideoHiderPane(config));
                 return;
             }
 
@@ -7896,24 +7464,26 @@ pause
             URL.revokeObjectURL(url);
             showToast('📦 Installer downloaded! Double-click the .bat file to run.', '#22c55e');
         });
+        const ytToolsLink = ytToolsBtn; // Alias for existing appendChild call
 
         const versionSpan = document.createElement('span');
         versionSpan.className = 'ytkit-version';
-        versionSpan.textContent = 'v' + YTKIT_VERSION;
+        versionSpan.textContent = 'v1.1.0';
         versionSpan.style.position = 'relative';
         versionSpan.style.cursor = 'pointer';
         // What's New badge
+        const CURRENT_VER = '1.1.0';
         const lastSeenVer = GM_getValue('ytkit_last_seen_version', '');
-        if (lastSeenVer !== YTKIT_VERSION) {
+        if (lastSeenVer !== CURRENT_VER) {
             const badge = document.createElement('span');
             badge.id = 'ytkit-whats-new-badge';
             badge.style.cssText = 'position:absolute;top:-3px;right:-8px;width:8px;height:8px;background:#ef4444;border-radius:50%;animation:ytkit-badge-pulse 2s infinite;';
             versionSpan.appendChild(badge);
-            versionSpan.title = 'New in v' + YTKIT_VERSION + ': Video Hider, watch page restyle, download buttons, performance optimizations';
+            versionSpan.title = 'New in v1.1.0: Watch page alignment fixes, ad-block stats display, configurable Cobalt URL, performance optimizations';
             versionSpan.onclick = () => {
-                GM_setValue('ytkit_last_seen_version', YTKIT_VERSION);
+                GM_setValue('ytkit_last_seen_version', CURRENT_VER);
                 badge.remove();
-                showToast('v' + YTKIT_VERSION + ': Video/channel hiding, watch page glassmorphism, VLC/download/MP3 buttons, 40+ improvements', '#3b82f6', { duration: 6 });
+                showToast('v1.3.6: Fixed black video on secondary monitors (object-fit:contain forces Chrome out of hardware overlay path)', '#3b82f6', { duration: 6 });
             };
         }
 
@@ -7922,7 +7492,7 @@ pause
         shortcutSpan.textContent = 'Ctrl+Alt+Y';
 
         footerLeft.appendChild(githubLink);
-        footerLeft.appendChild(ytToolsBtn);
+        footerLeft.appendChild(ytToolsLink);
         footerLeft.appendChild(versionSpan);
         footerLeft.appendChild(shortcutSpan);
 
@@ -7991,6 +7561,32 @@ pause
 
         info.appendChild(name);
         info.appendChild(desc);
+
+        // Feature state badge
+        const _status = getFeatureStatus(f);
+        if (_status.label && !isSubFeature) {
+            const statusBadge = document.createElement('span');
+            statusBadge.className = 'ytkit-status-badge';
+            statusBadge.dataset.status = _status.status;
+            statusBadge.style.cssText = 'display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:100px;margin-top:4px;letter-spacing:0.02em;';
+            const dot = document.createElement('span');
+            dot.style.cssText = 'width:5px;height:5px;border-radius:50%;background:' + _status.color + ';flex-shrink:0;';
+            if (_status.status === 'active') dot.style.boxShadow = '0 0 4px ' + _status.color;
+            statusBadge.appendChild(dot);
+            const lbl = document.createElement('span');
+            lbl.textContent = _status.label;
+            lbl.style.color = _status.color;
+            statusBadge.appendChild(lbl);
+            info.appendChild(statusBadge);
+        }
+
+        // Feature preview tooltip
+        const previewText = FEATURE_PREVIEWS[f.id];
+        if (previewText) {
+            card.dataset.preview = previewText;
+            card.classList.add('ytkit-has-preview');
+        }
+
         card.appendChild(info);
 
         if (f.type === 'info') {
@@ -8338,6 +7934,22 @@ pause
                     appState.settings[featureId] = isEnabled;
                     settingsManager.save(appState.settings);
 
+                    // Conflict detection
+                    if (isEnabled && CONFLICT_MAP[featureId]) {
+                        const conflicts = CONFLICT_MAP[featureId].conflicts || [];
+                        const activeConflicts = conflicts.filter(cid => appState.settings[cid]);
+                        if (activeConflicts.length > 0) {
+                            const conflictNames = activeConflicts.map(cid => {
+                                const cf = features.find(ff => ff.id === cid);
+                                return cf?.name || cid;
+                            }).join(', ');
+                            showToast('Conflict: ' + (feature?.name || featureId) + ' may clash with ' + conflictNames + ' — ' + (CONFLICT_MAP[featureId].reason || 'both modify similar elements'), '#f59e0b', { duration: 6 });
+                        }
+                    }
+
+                    // Track recently changed
+                    trackRecentChange(featureId, isEnabled);
+
                     if (feature) {
                         isEnabled ? feature.init?.() : feature.destroy?.();
                     }
@@ -8474,7 +8086,70 @@ pause
 
     //  SECTION 5: STYLES
     function injectPanelStyles() {
-        GM_addStyle(`@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');:root{--ytkit-font:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--ytkit-bg-base:#0a0a0b;--ytkit-bg-elevated:#111113;--ytkit-bg-surface:#18181b;--ytkit-bg-hover:#1f1f23;--ytkit-bg-active:#27272a;--ytkit-border:#27272a;--ytkit-border-subtle:#1f1f23;--ytkit-text-primary:#fafafa;--ytkit-text-secondary:#a1a1aa;--ytkit-text-muted:#71717a;--ytkit-accent:#ff4e45;--ytkit-accent-soft:rgba(255,78,69,0.15);--ytkit-success:#22c55e;--ytkit-error:#ef4444;--ytkit-radius-sm:6px;--ytkit-radius-md:10px;--ytkit-radius-lg:14px;--ytkit-radius-xl:20px;--ytkit-shadow-sm:0 1px 2px rgba(0,0,0,0.3);--ytkit-shadow-md:0 4px 12px rgba(0,0,0,0.4);--ytkit-shadow-lg:0 8px 32px rgba(0,0,0,0.5);--ytkit-shadow-xl:0 24px 64px rgba(0,0,0,0.6);--ytkit-transition:200ms cubic-bezier(0.4,0,0.2,1);} .ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn,.ytkit-transcript-btn,.ytkit-mpv-btn,.ytkit-dlplay-btn,.ytkit-embed-btn{display:inline-flex !important;visibility:visible !important;opacity:1 !important;z-index:9999 !important;position:relative !important;} .ytkit-button-container{display:flex !important;gap:8px !important;margin:8px 0 !important;flex-wrap:wrap !important;visibility:visible !important;} .ytkit-trigger-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;margin:0 4px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-trigger-btn svg{width:22px;height:22px;color:var(--yt-spec-icon-inactive,#aaa);transition:all var(--ytkit-transition);} .ytkit-trigger-btn:hover{background:var(--yt-spec-badge-chip-background,rgba(255,255,255,0.1));} .ytkit-trigger-btn:hover svg{color:var(--yt-spec-text-primary,#fff);transform:rotate(45deg);} #ytkit-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:99998;opacity:0;pointer-events:none;transition:opacity 300ms ease;} body.ytkit-panel-open #ytkit-overlay{opacity:1;pointer-events:auto;} #ytkit-settings-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.96);z-index:99999;display:flex;flex-direction:column;width:95%;max-width:1100px;height:85vh;max-height:800px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-xl);box-shadow:var(--ytkit-shadow-xl),0 0 0 1px rgba(255,255,255,0.05) inset;font-family:var(--ytkit-font);color:var(--ytkit-text-primary);opacity:0;pointer-events:none;transition:all 300ms cubic-bezier(0.32,0.72,0,1);overflow:hidden;} body.ytkit-panel-open #ytkit-settings-panel{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);} .ytkit-header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;background:linear-gradient(180deg,var(--ytkit-bg-elevated) 0%,var(--ytkit-bg-base) 100%);border-bottom:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-brand{display:flex;align-items:center;gap:12px;} .ytkit-logo{display:flex;align-items:center;justify-content:center;width:42px;height:42px;background:linear-gradient(135deg,#ff0000 0%,#cc0000 100%);border-radius:var(--ytkit-radius-md);box-shadow:0 4px 12px rgba(255,0,0,0.3);} .ytkit-yt-icon{width:26px;height:auto;} .ytkit-title{font-size:26px;font-weight:700;letter-spacing:-0.5px;margin:0;} .ytkit-title-yt{background:linear-gradient(135deg,#ff4e45 0%,#ff0000 50%,#ff4e45 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ytkit-shimmer 3s linear infinite;} .ytkit-title-kit{color:var(--ytkit-text-primary);} @keyframes ytkit-shimmer{0%{background-position:0% center;} 100%{background-position:200% center;} } .ytkit-badge{padding:4px 10px;font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#fff;background:linear-gradient(135deg,#ff4e45,#ff0000);border-radius:100px;box-shadow:0 2px 8px rgba(255,78,69,0.4);} .ytkit-close{display:flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-close svg{width:18px;height:18px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-close:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);} .ytkit-close:hover svg{color:#fff;} .ytkit-body{display:flex;flex:1;overflow:hidden;} .ytkit-sidebar{display:flex;flex-direction:column;width:240px;padding:16px 12px;background:var(--ytkit-bg-elevated);border-right:1px solid var(--ytkit-border);overflow-y:auto;flex-shrink:0;} .ytkit-search-container{position:relative;margin-bottom:12px;} .ytkit-search-input{width:100%;padding:10px 12px 10px 36px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-size:13px;transition:all var(--ytkit-transition);} .ytkit-search-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px rgba(255,78,69,0.15);} .ytkit-search-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:var(--ytkit-text-muted);pointer-events:none;} .ytkit-sidebar-divider{height:1px;background:var(--ytkit-border);margin:8px 0 12px;} .ytkit-pane.ytkit-search-active{display:block;} .ytkit-pane.ytkit-search-active .ytkit-pane-header{display:none;} .ytkit-nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;margin-bottom:2px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);text-align:left;} .ytkit-nav-btn:hover{background:var(--ytkit-bg-hover);} .ytkit-nav-btn.active{background:var(--ytkit-bg-active);} .ytkit-nav-icon{display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:var(--ytkit-bg-surface);border-radius:var(--ytkit-radius-sm);flex-shrink:0;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon{background:var(--cat-color,var(--ytkit-accent));box-shadow:0 2px 8px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 40%,transparent);} .ytkit-nav-icon svg{width:16px;height:16px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon svg{color:#fff;} .ytkit-nav-label{flex:1;font-size:13px;font-weight:500;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .ytkit-nav-btn.active .ytkit-nav-label{color:var(--ytkit-text-primary);} .ytkit-nav-count{font-size:11px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:2px 6px;border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-count{background:rgba(255,255,255,0.15);color:var(--ytkit-text-primary);} .ytkit-nav-arrow{display:flex;opacity:0;transition:opacity var(--ytkit-transition);} .ytkit-nav-arrow svg{width:14px;height:14px;color:var(--ytkit-text-muted);} .ytkit-nav-btn.active .ytkit-nav-arrow{opacity:1;} .ytkit-nav-group-label{padding:4px 12px 2px;font-size:9.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--ytkit-text-muted);user-select:none;pointer-events:none;} .ytkit-content{flex:1;padding:24px;overflow-y:auto;background:var(--ytkit-bg-base);} .ytkit-pane{display:none;animation:ytkit-fade-in 300ms ease;} .ytkit-pane.active{display:block;} .ytkit-pane.ytkit-vh-pane.active{display:flex;flex-direction:column;height:100%;max-height:calc(85vh - 180px);} #ytkit-vh-content{flex:1;overflow-y:auto;padding-right:8px;} @keyframes ytkit-fade-in{from{opacity:0;transform:translateX(8px);} to{opacity:1;transform:translateX(0);} } @keyframes ytkit-badge-pulse{0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.5;transform:scale(1.3);} } .ytkit-pane-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--ytkit-border);} .ytkit-pane-title{display:flex;align-items:center;gap:12px;} .ytkit-pane-icon{display:flex;align-items:center;justify-content:center;width:40px;height:40px;background:var(--cat-color,var(--ytkit-accent));border-radius:var(--ytkit-radius-md);box-shadow:0 4px 12px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 30%,transparent);} .ytkit-pane-icon svg{width:20px;height:20px;color:#fff;} .ytkit-pane-title h2{font-size:20px;font-weight:600;margin:0;color:var(--ytkit-text-primary);} .ytkit-toggle-all{display:flex;align-items:center;gap:10px;cursor:pointer;} .ytkit-toggle-all span{font-size:13px;font-weight:500;color:var(--ytkit-text-secondary);} .ytkit-reset-group-btn{padding:6px 12px;margin-right:12px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-muted);font-size:12px;font-weight:500;cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-reset-group-btn:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);color:#fff;} .ytkit-features-grid{display:flex;flex-direction:column;gap:8px;} .ytkit-feature-card{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border-subtle);border-left:3px solid transparent;border-radius:var(--ytkit-radius-md);transition:all var(--ytkit-transition);} .ytkit-feature-card:hover{background:var(--ytkit-bg-hover);border-color:var(--ytkit-border);border-left-color:transparent;} .ytkit-feature-card.ytkit-card-enabled{border-left-color:var(--cat-color,var(--ytkit-accent));} .ytkit-sub-card{margin-left:24px;background:var(--ytkit-bg-elevated);border-left:2px solid var(--ytkit-accent-soft);} .ytkit-sub-features{display:flex;flex-direction:column;gap:8px;} .ytkit-feature-info{flex:1;min-width:0;padding-right:16px;} .ytkit-feature-name{font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin:0 0 4px 0;} .ytkit-feature-desc{font-size:12px;color:var(--ytkit-text-muted);margin:0;line-height:1.4;} .ytkit-textarea-card{flex-direction:column;align-items:stretch;gap:12px;} .ytkit-textarea-card .ytkit-feature-info{padding-right:0;} .ytkit-input{width:100%;padding:10px 12px;font-family:var(--ytkit-font);font-size:13px;color:var(--ytkit-text-primary);background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);resize:vertical;min-height:60px;transition:all var(--ytkit-transition);} .ytkit-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px var(--ytkit-accent-soft);} .ytkit-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-switch{position:relative;width:44px;height:24px;flex-shrink:0;} .ytkit-switch input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1;margin:0;} .ytkit-switch-track{position:absolute;inset:0;background:var(--ytkit-bg-active);border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-switch.active .ytkit-switch-track{background:var(--switch-color,var(--ytkit-accent));box-shadow:0 0 12px color-mix(in srgb,var(--switch-color,var(--ytkit-accent)) 50%,transparent);} .ytkit-switch-thumb{position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;box-shadow:var(--ytkit-shadow-sm);transition:all var(--ytkit-transition);display:flex;align-items:center;justify-content:center;} .ytkit-switch.active .ytkit-switch-thumb{transform:translateX(20px);} .ytkit-switch-icon{display:flex;opacity:0;transform:scale(0.5);transition:all var(--ytkit-transition);} .ytkit-switch-icon svg{width:12px;height:12px;color:var(--switch-color,var(--ytkit-accent));} .ytkit-switch.active .ytkit-switch-icon{opacity:1;transform:scale(1);} .ytkit-footer{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--ytkit-bg-elevated);border-top:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-footer-left{display:flex;align-items:center;gap:16px;} .ytkit-github{display:flex;align-items:center;justify-content:center;width:32px;height:32px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);border-radius:var(--ytkit-radius-sm);transition:all var(--ytkit-transition);} .ytkit-github:hover{color:var(--ytkit-text-primary);background:var(--ytkit-bg-hover);} .ytkit-github svg{width:18px;height:18px;} .ytkit-version{font-size:12px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:4px 10px;border-radius:100px;} .ytkit-shortcut{font-size:11px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:4px 8px;border-radius:var(--ytkit-radius-sm);font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace;} .ytkit-footer-right{display:flex;gap:10px;} .ytkit-btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;font-family:var(--ytkit-font);font-size:13px;font-weight:600;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-btn svg{width:16px;height:16px;} .ytkit-btn-secondary{color:var(--ytkit-text-secondary);background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);} .ytkit-btn-secondary:hover{background:var(--ytkit-bg-hover);color:var(--ytkit-text-primary);} .ytkit-btn-primary{color:#fff;background:linear-gradient(135deg,#ff4e45,#e6423a);box-shadow:0 2px 8px rgba(255,78,69,0.3);} .ytkit-btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(255,78,69,0.4);} .ytkit-toast{position:fixed;bottom:-80px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:14px 20px;font-family:var(--ytkit-font);font-size:14px;font-weight:500;color:#fff;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-lg);box-shadow:var(--ytkit-shadow-lg);z-index:100000;transition:all 400ms cubic-bezier(0.68,-0.55,0.27,1.55);} .ytkit-toast.show{bottom:24px;} .ytkit-toast-success{border-color:var(--ytkit-success);box-shadow:0 4px 20px rgba(34,197,94,0.2);} .ytkit-toast-error{border-color:var(--ytkit-error);box-shadow:0 4px 20px rgba(239,68,68,0.2);}ytd-watch-metadata.watch-active-metadata{margin-top:180px !important;} ytd-live-chat-frame:not([style*="position"]){margin-top:-57px !important;width:402px !important;} .ytkit-sidebar::-webkit-scrollbar,.ytkit-content::-webkit-scrollbar{width:6px;} .ytkit-sidebar::-webkit-scrollbar-track,.ytkit-content::-webkit-scrollbar-track{background:transparent;} .ytkit-sidebar::-webkit-scrollbar-thumb,.ytkit-content::-webkit-scrollbar-thumb{background:var(--ytkit-border);border-radius:100px;} .ytkit-sidebar::-webkit-scrollbar-thumb:hover,.ytkit-content::-webkit-scrollbar-thumb:hover{background:var(--ytkit-text-muted);}  .ytkit-css-editor{width:100%;min-height:150px;padding:12px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-family:'Monaco','Menlo','Ubuntu Mono',monospace;font-size:13px;line-height:1.5;resize:vertical;} .ytkit-css-editor:focus{outline:none;border-color:var(--ytkit-accent);} .ytkit-bulk-bar{animation:slideDown 0.2s ease-out;} @keyframes slideDown{from{opacity:0;transform:translateY(-10px);} to{opacity:1;transform:translateY(0);} }`);
+        GM_addStyle(`@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');:root{--ytkit-font:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--ytkit-bg-base:#0a0a0b;--ytkit-bg-elevated:#111113;--ytkit-bg-surface:#18181b;--ytkit-bg-hover:#1f1f23;--ytkit-bg-active:#27272a;--ytkit-border:#27272a;--ytkit-border-subtle:#1f1f23;--ytkit-text-primary:#fafafa;--ytkit-text-secondary:#a1a1aa;--ytkit-text-muted:#71717a;--ytkit-accent:#ff4e45;--ytkit-accent-soft:rgba(255,78,69,0.15);--ytkit-success:#22c55e;--ytkit-error:#ef4444;--ytkit-radius-sm:6px;--ytkit-radius-md:10px;--ytkit-radius-lg:14px;--ytkit-radius-xl:20px;--ytkit-shadow-sm:0 1px 2px rgba(0,0,0,0.3);--ytkit-shadow-md:0 4px 12px rgba(0,0,0,0.4);--ytkit-shadow-lg:0 8px 32px rgba(0,0,0,0.5);--ytkit-shadow-xl:0 24px 64px rgba(0,0,0,0.6);--ytkit-transition:200ms cubic-bezier(0.4,0,0.2,1);} .ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn,.ytkit-transcript-btn,.ytkit-mpv-btn,.ytkit-dlplay-btn,.ytkit-embed-btn{display:inline-flex !important;visibility:visible !important;opacity:1 !important;z-index:9999 !important;position:relative !important;} .ytkit-button-container{display:flex !important;gap:8px !important;margin:8px 0 !important;flex-wrap:wrap !important;visibility:visible !important;} .ytkit-trigger-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;margin:0 4px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-trigger-btn svg{width:22px;height:22px;color:var(--yt-spec-icon-inactive,#aaa);transition:all var(--ytkit-transition);} .ytkit-trigger-btn:hover{background:var(--yt-spec-badge-chip-background,rgba(255,255,255,0.1));} .ytkit-trigger-btn:hover svg{color:var(--yt-spec-text-primary,#fff);transform:rotate(45deg);} #ytkit-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:99998;opacity:0;pointer-events:none;transition:opacity 300ms ease;} body.ytkit-panel-open #ytkit-overlay{opacity:1;pointer-events:auto;} #ytkit-settings-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.96);z-index:99999;display:flex;flex-direction:column;width:95%;max-width:1100px;height:85vh;max-height:800px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-xl);box-shadow:var(--ytkit-shadow-xl),0 0 0 1px rgba(255,255,255,0.05) inset;font-family:var(--ytkit-font);color:var(--ytkit-text-primary);opacity:0;pointer-events:none;transition:all 300ms cubic-bezier(0.32,0.72,0,1);overflow:hidden;} body.ytkit-panel-open #ytkit-settings-panel{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);} .ytkit-header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;background:linear-gradient(180deg,var(--ytkit-bg-elevated) 0%,var(--ytkit-bg-base) 100%);border-bottom:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-brand{display:flex;align-items:center;gap:12px;} .ytkit-logo{display:flex;align-items:center;justify-content:center;width:42px;height:42px;background:linear-gradient(135deg,#ff0000 0%,#cc0000 100%);border-radius:var(--ytkit-radius-md);box-shadow:0 4px 12px rgba(255,0,0,0.3);} .ytkit-yt-icon{width:26px;height:auto;} .ytkit-title{font-size:26px;font-weight:700;letter-spacing:-0.5px;margin:0;} .ytkit-title-yt{background:linear-gradient(135deg,#ff4e45 0%,#ff0000 50%,#ff4e45 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ytkit-shimmer 3s linear infinite;} .ytkit-title-kit{color:var(--ytkit-text-primary);} @keyframes ytkit-shimmer{0%{background-position:0% center;} 100%{background-position:200% center;} } .ytkit-badge{padding:4px 10px;font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#fff;background:linear-gradient(135deg,#ff4e45,#ff0000);border-radius:100px;box-shadow:0 2px 8px rgba(255,78,69,0.4);} .ytkit-close{display:flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-close svg{width:18px;height:18px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-close:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);} .ytkit-close:hover svg{color:#fff;} .ytkit-body{display:flex;flex:1;overflow:hidden;} .ytkit-sidebar{display:flex;flex-direction:column;width:240px;padding:16px 12px;background:var(--ytkit-bg-elevated);border-right:1px solid var(--ytkit-border);overflow-y:auto;flex-shrink:0;} .ytkit-search-container{position:relative;margin-bottom:12px;} .ytkit-search-input{width:100%;padding:10px 12px 10px 36px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-size:13px;transition:all var(--ytkit-transition);} .ytkit-search-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px rgba(255,78,69,0.15);} .ytkit-search-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:var(--ytkit-text-muted);pointer-events:none;} .ytkit-sidebar-divider{height:1px;background:var(--ytkit-border);margin:8px 0 12px;} .ytkit-pane.ytkit-search-active{display:block;} .ytkit-pane.ytkit-search-active .ytkit-pane-header{display:none;} .ytkit-nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;margin-bottom:2px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);text-align:left;} .ytkit-nav-btn:hover{background:var(--ytkit-bg-hover);} .ytkit-nav-btn.active{background:var(--ytkit-bg-active);} .ytkit-nav-icon{display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:var(--ytkit-bg-surface);border-radius:var(--ytkit-radius-sm);flex-shrink:0;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon{background:var(--cat-color,var(--ytkit-accent));box-shadow:0 2px 8px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 40%,transparent);} .ytkit-nav-icon svg{width:16px;height:16px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon svg{color:#fff;} .ytkit-nav-label{flex:1;font-size:13px;font-weight:500;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .ytkit-nav-btn.active .ytkit-nav-label{color:var(--ytkit-text-primary);} .ytkit-nav-count{font-size:11px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:2px 6px;border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-count{background:rgba(255,255,255,0.15);color:var(--ytkit-text-primary);} .ytkit-nav-arrow{display:flex;opacity:0;transition:opacity var(--ytkit-transition);} .ytkit-nav-arrow svg{width:14px;height:14px;color:var(--ytkit-text-muted);} .ytkit-nav-btn.active .ytkit-nav-arrow{opacity:1;} .ytkit-nav-group-label{padding:4px 12px 2px;font-size:9.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--ytkit-text-muted);user-select:none;pointer-events:none;} .ytkit-content{flex:1;padding:24px;overflow-y:auto;background:var(--ytkit-bg-base);} .ytkit-pane{display:none;animation:ytkit-fade-in 300ms ease;} .ytkit-pane.active{display:block;} .ytkit-pane.ytkit-vh-pane.active{display:flex;flex-direction:column;height:100%;max-height:calc(85vh - 180px);} #ytkit-vh-content{flex:1;overflow-y:auto;padding-right:8px;} @keyframes ytkit-fade-in{from{opacity:0;transform:translateX(8px);} to{opacity:1;transform:translateX(0);} } @keyframes ytkit-badge-pulse{0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.5;transform:scale(1.3);} } .ytkit-pane-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--ytkit-border);} .ytkit-pane-title{display:flex;align-items:center;gap:12px;} .ytkit-pane-icon{display:flex;align-items:center;justify-content:center;width:40px;height:40px;background:var(--cat-color,var(--ytkit-accent));border-radius:var(--ytkit-radius-md);box-shadow:0 4px 12px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 30%,transparent);} .ytkit-pane-icon svg{width:20px;height:20px;color:#fff;} .ytkit-pane-title h2{font-size:20px;font-weight:600;margin:0;color:var(--ytkit-text-primary);} .ytkit-toggle-all{display:flex;align-items:center;gap:10px;cursor:pointer;} .ytkit-toggle-all span{font-size:13px;font-weight:500;color:var(--ytkit-text-secondary);} .ytkit-reset-group-btn{padding:6px 12px;margin-right:12px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-muted);font-size:12px;font-weight:500;cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-reset-group-btn:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);color:#fff;} .ytkit-features-grid{display:flex;flex-direction:column;gap:8px;} .ytkit-feature-card{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border-subtle);border-left:3px solid transparent;border-radius:var(--ytkit-radius-md);transition:all var(--ytkit-transition);} .ytkit-feature-card:hover{background:var(--ytkit-bg-hover);border-color:var(--ytkit-border);border-left-color:transparent;} .ytkit-feature-card.ytkit-card-enabled{border-left-color:var(--cat-color,var(--ytkit-accent));} .ytkit-sub-card{margin-left:24px;background:var(--ytkit-bg-elevated);border-left:2px solid var(--ytkit-accent-soft);} .ytkit-sub-features{display:flex;flex-direction:column;gap:8px;} .ytkit-feature-info{flex:1;min-width:0;padding-right:16px;} .ytkit-feature-name{font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin:0 0 4px 0;} .ytkit-feature-desc{font-size:12px;color:var(--ytkit-text-muted);margin:0;line-height:1.4;} .ytkit-textarea-card{flex-direction:column;align-items:stretch;gap:12px;} .ytkit-textarea-card .ytkit-feature-info{padding-right:0;} .ytkit-input{width:100%;padding:10px 12px;font-family:var(--ytkit-font);font-size:13px;color:var(--ytkit-text-primary);background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);resize:vertical;min-height:60px;transition:all var(--ytkit-transition);} .ytkit-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px var(--ytkit-accent-soft);} .ytkit-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-switch{position:relative;width:44px;height:24px;flex-shrink:0;} .ytkit-switch input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1;margin:0;} .ytkit-switch-track{position:absolute;inset:0;background:var(--ytkit-bg-active);border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-switch.active .ytkit-switch-track{background:var(--switch-color,var(--ytkit-accent));box-shadow:0 0 12px color-mix(in srgb,var(--switch-color,var(--ytkit-accent)) 50%,transparent);} .ytkit-switch-thumb{position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;box-shadow:var(--ytkit-shadow-sm);transition:all var(--ytkit-transition);display:flex;align-items:center;justify-content:center;} .ytkit-switch.active .ytkit-switch-thumb{transform:translateX(20px);} .ytkit-switch-icon{display:flex;opacity:0;transform:scale(0.5);transition:all var(--ytkit-transition);} .ytkit-switch-icon svg{width:12px;height:12px;color:var(--switch-color,var(--ytkit-accent));} .ytkit-switch.active .ytkit-switch-icon{opacity:1;transform:scale(1);} .ytkit-footer{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--ytkit-bg-elevated);border-top:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-footer-left{display:flex;align-items:center;gap:16px;} .ytkit-github{display:flex;align-items:center;justify-content:center;width:32px;height:32px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);border-radius:var(--ytkit-radius-sm);transition:all var(--ytkit-transition);} .ytkit-github:hover{color:var(--ytkit-text-primary);background:var(--ytkit-bg-hover);} .ytkit-github svg{width:18px;height:18px;} .ytkit-version{font-size:12px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:4px 10px;border-radius:100px;} .ytkit-shortcut{font-size:11px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:4px 8px;border-radius:var(--ytkit-radius-sm);font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace;} .ytkit-footer-right{display:flex;gap:10px;} .ytkit-btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;font-family:var(--ytkit-font);font-size:13px;font-weight:600;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-btn svg{width:16px;height:16px;} .ytkit-btn-secondary{color:var(--ytkit-text-secondary);background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);} .ytkit-btn-secondary:hover{background:var(--ytkit-bg-hover);color:var(--ytkit-text-primary);} .ytkit-btn-primary{color:#fff;background:linear-gradient(135deg,#ff4e45,#e6423a);box-shadow:0 2px 8px rgba(255,78,69,0.3);} .ytkit-btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(255,78,69,0.4);} .ytkit-toast{position:fixed;bottom:-80px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:14px 20px;font-family:var(--ytkit-font);font-size:14px;font-weight:500;color:#fff;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-lg);box-shadow:var(--ytkit-shadow-lg);z-index:100000;transition:all 400ms cubic-bezier(0.68,-0.55,0.27,1.55);} .ytkit-toast.show{bottom:24px;} .ytkit-toast-success{border-color:var(--ytkit-success);box-shadow:0 4px 20px rgba(34,197,94,0.2);} .ytkit-toast-error{border-color:var(--ytkit-error);box-shadow:0 4px 20px rgba(239,68,68,0.2);}ytd-watch-metadata.watch-active-metadata{margin-top:180px !important;} ytd-live-chat-frame:not([style*="position"]){margin-top:-57px !important;width:402px !important;} .ytkit-sidebar::-webkit-scrollbar,.ytkit-content::-webkit-scrollbar{width:6px;} .ytkit-sidebar::-webkit-scrollbar-track,.ytkit-content::-webkit-scrollbar-track{background:transparent;} .ytkit-sidebar::-webkit-scrollbar-thumb,.ytkit-content::-webkit-scrollbar-thumb{background:var(--ytkit-border);border-radius:100px;} .ytkit-sidebar::-webkit-scrollbar-thumb:hover,.ytkit-content::-webkit-scrollbar-thumb:hover{background:var(--ytkit-text-muted);}  .ytkit-css-editor{width:100%;min-height:150px;padding:12px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-family:'Monaco','Menlo','Ubuntu Mono',monospace;font-size:13px;line-height:1.5;resize:vertical;} .ytkit-css-editor:focus{outline:none;border-color:var(--ytkit-accent);} .ytkit-bulk-bar{animation:slideDown 0.2s ease-out;} @keyframes slideDown{from{opacity:0;transform:translateY(-10px);} to{opacity:1;transform:translateY(0);} }
+
+/* ─── Drag-reorder sidebar ─── */
+.ytkit-nav-btn{cursor:grab;user-select:none;}
+.ytkit-nav-btn:active{cursor:grabbing;}
+.ytkit-nav-btn.ytkit-dragging{opacity:0.3;transform:scale(0.95);}
+.ytkit-drag-above{box-shadow:0 -2px 0 0 var(--ytkit-accent) inset;}
+.ytkit-drag-below{box-shadow:0 2px 0 0 var(--ytkit-accent) inset;}
+
+/* ─── Recently Changed section ─── */
+.ytkit-recent-section{margin-bottom:20px;padding:12px 14px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border-subtle);border-radius:var(--ytkit-radius-md);}
+
+/* ─── Feature Preview Tooltip ─── */
+.ytkit-feature-card.ytkit-has-preview{position:relative;}
+.ytkit-feature-card.ytkit-has-preview::after{content:attr(data-preview);position:absolute;bottom:calc(100% + 8px);left:16px;right:16px;padding:8px 12px;background:#1a1a2e;color:var(--ytkit-text-secondary);font-size:11px;line-height:1.45;border-radius:8px;border:1px solid var(--ytkit-border);box-shadow:var(--ytkit-shadow-md);opacity:0;pointer-events:none;transition:opacity 0.2s ease 0.5s,transform 0.2s ease 0.5s;transform:translateY(4px);z-index:10;white-space:normal;}
+.ytkit-feature-card.ytkit-has-preview:hover::after{opacity:1;transform:translateY(0);}
+
+/* ─── Responsive Breakpoints ─── */
+@media (max-width:900px){
+    #ytkit-settings-panel{width:98%;height:92vh;max-height:none;border-radius:12px;}
+    .ytkit-sidebar{width:200px;padding:10px 8px;}
+    .ytkit-nav-label{font-size:12px;}
+    .ytkit-nav-icon{width:28px;height:28px;}
+    .ytkit-nav-icon svg{width:14px;height:14px;}
+    .ytkit-content{padding:16px;}
+    .ytkit-pane-title h2{font-size:17px;}
+}
+@media (max-width:700px){
+    .ytkit-body{flex-direction:column;}
+    .ytkit-sidebar{width:100%;flex-direction:row;overflow-x:auto;overflow-y:hidden;border-right:none;border-bottom:1px solid var(--ytkit-border);padding:8px;gap:4px;flex-shrink:0;max-height:none;height:auto;}
+    .ytkit-search-container{display:none;}
+    .ytkit-sidebar-divider{display:none;}
+    .ytkit-nav-group-label{display:none;}
+    .ytkit-nav-btn{flex-direction:column;gap:3px;padding:6px 10px;min-width:fit-content;white-space:nowrap;margin-bottom:0;border-radius:8px;}
+    .ytkit-nav-icon{width:24px;height:24px;}
+    .ytkit-nav-label{font-size:10px;}
+    .ytkit-nav-count{font-size:9px;padding:1px 4px;}
+    .ytkit-nav-arrow{display:none !important;}
+    .ytkit-content{padding:12px;flex:1;overflow-y:auto;}
+    .ytkit-pane-header{flex-wrap:wrap;gap:8px;}
+    .ytkit-toggle-all span{font-size:11px;}
+    .ytkit-feature-card{padding:10px 12px;}
+    .ytkit-feature-name{font-size:13px;}
+    .ytkit-feature-desc{font-size:11px;}
+    .ytkit-header{padding:12px 16px;}
+    .ytkit-title{font-size:20px;}
+    .ytkit-footer{padding:10px 16px;flex-wrap:wrap;gap:8px;}
+    .ytkit-footer-left{gap:8px;}
+    .ytkit-btn{padding:8px 12px;font-size:12px;}
+    .ytkit-recent-section{margin-bottom:12px;padding:10px;}
+    /* Tooltip below on mobile */
+    .ytkit-feature-card.ytkit-has-preview::after{bottom:auto;top:calc(100% + 4px);left:8px;right:8px;}
+}
+@media (max-width:480px){
+    #ytkit-settings-panel{width:100%;height:100vh;border-radius:0;max-height:100vh;}
+    .ytkit-sidebar{padding:6px;gap:2px;}
+    .ytkit-nav-btn{padding:5px 8px;}
+    .ytkit-content{padding:10px;}
+    .ytkit-pane-icon{width:32px;height:32px;}
+    .ytkit-pane-icon svg{width:16px;height:16px;}
+    .ytkit-pane-title h2{font-size:15px;}
+    .ytkit-sub-card{margin-left:12px;}
+    .ytkit-feature-card.ytkit-has-preview::after{display:none;}
+}`);
     }
 
     //  SECTION 6: BOOTSTRAP
@@ -8753,8 +8428,13 @@ pause
 
     GM_addStyle(`.ytkit-pm-overlay{position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0);transition:background 0.2s ease;pointer-events:none;} .ytkit-pm-ov-visible{background:rgba(0,0,0,0.55);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);pointer-events:auto;} .ytkit-pm{position:fixed;top:60px;right:16px;width:400px;max-height:calc(100vh - 80px);overflow-y:auto;z-index:99991;background:linear-gradient(145deg,rgba(18,18,28,0.98),rgba(12,12,20,0.98));border:1px solid rgba(255,255,255,0.08);border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.04) inset;font-family:"Roboto",Arial,sans-serif;color:var(--yt-spec-text-primary,#fff);opacity:0;transform:translateY(-8px) scale(0.98);transition:opacity 0.2s ease,transform 0.2s ease;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.1) transparent;} .ytkit-pm::-webkit-scrollbar{width:4px;} .ytkit-pm::-webkit-scrollbar-track{background:transparent;} .ytkit-pm::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:2px;} .ytkit-pm-visible{opacity:1;transform:translateY(0) scale(1);} .ytkit-pm-header{display:flex;align-items:center;justify-content:space-between;padding:16px 16px 12px;border-bottom:1px solid rgba(255,255,255,0.06);} .ytkit-pm-title-wrap{display:flex;align-items:center;gap:10px;} .ytkit-pm-badge{font-size:10px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#3b82f6;background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.25);border-radius:6px;padding:2px 8px;} .ytkit-pm-title{margin:0;font-size:15px;font-weight:600;color:rgba(255,255,255,0.9);} .ytkit-pm-close{width:30px;height:30px;border-radius:8px;border:none;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.15s;flex-shrink:0;} .ytkit-pm-close:hover{background:rgba(255,255,255,0.12);color:#fff;} .ytkit-pm-close svg{width:14px;height:14px;} .ytkit-pm-grid{display:flex;flex-direction:column;gap:2px;padding:8px;} .ytkit-pm-card{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;border:none;background:transparent;cursor:pointer;text-align:left;transition:background 0.15s;width:100%;} .ytkit-pm-card:hover{background:rgba(255,255,255,0.05);} .ytkit-pm-card.on{background:rgba(59,130,246,0.08);} .ytkit-pm-card.on:hover{background:rgba(59,130,246,0.13);} .ytkit-pm-card-icon{width:34px;height:34px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.45);transition:all 0.15s;} .ytkit-pm-card.on .ytkit-pm-card-icon{background:rgba(59,130,246,0.18);color:#60a5fa;} .ytkit-pm-card-icon svg{width:16px;height:16px;} .ytkit-pm-card-text{flex:1;min-width:0;} .ytkit-pm-card-label{display:block;font-size:13px;font-weight:500;color:rgba(255,255,255,0.8);line-height:1.3;} .ytkit-pm-card.on .ytkit-pm-card-label{color:#e0eaff;} .ytkit-pm-card-desc{display:block;font-size:11px;color:rgba(255,255,255,0.35);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;} .ytkit-pm-card-toggle{flex-shrink:0;} .ytkit-pm-toggle-track{width:34px;height:18px;border-radius:9px;background:rgba(255,255,255,0.1);position:relative;transition:background 0.2s;} .ytkit-pm-card.on .ytkit-pm-toggle-track{background:#2563eb;} .ytkit-pm-toggle-thumb{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:rgba(255,255,255,0.5);transition:transform 0.2s,background 0.2s;} .ytkit-pm-card.on .ytkit-pm-toggle-thumb{transform:translateX(16px);background:#fff;} .ytkit-pm-footer{padding:10px 16px 14px;border-top:1px solid rgba(255,255,255,0.06);} .ytkit-pm-full-settings{width:100%;padding:9px 16px;border-radius:8px;border:none;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.55);font-size:12px;font-weight:500;cursor:pointer;transition:all 0.15s;letter-spacing:0.2px;} .ytkit-pm-full-settings:hover{background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.85);} .ytkit-page-trigger.active svg{color:#3b82f6 !important;transform:none !important;} .ytkit-page-trigger:hover svg{transform:none !important;}`);
 
+    function buildPageDock() {
+        // Dock replaced by page modal — no-op kept for call-site compatibility
+    }
+
             buildSettingsPanel();
         injectSettingsButton();
+        buildPageDock();
         injectPageModalButton();
         attachUIEventListeners();
         updateAllToggleStates();
@@ -8814,8 +8494,11 @@ pause
             },
             settings: appState.settings,
             features,
-            version: YTKIT_VERSION,
+            version: '1.3.6',
         };
+
+        const _featureCrashCounts = {};
+        const MAX_FEATURE_CRASHES = 3;
 
         if (isSafeMode) {
             console.log('%c[YTKit] SAFE MODE — All features disabled. ytkit.unsafe() to exit.', 'color:#f97316;font-weight:bold;font-size:16px;');
@@ -8845,8 +8528,17 @@ pause
                 if (f.pages && !f.pages.includes(appState.currentPage)) return;
                 if (f.dependsOn && !appState.settings[f.dependsOn]) return;
                 if (f._initialized) return;
-                try { f.init?.(); f._initialized = true; } catch(err) {
-                    console.error(`[YTKit] Error initializing "${f.id}":`, err);
+                // Skip features that have crashed too many times
+                if ((_featureCrashCounts[f.id] || 0) >= MAX_FEATURE_CRASHES) {
+                    DebugManager.log('Init', `Skipping "${f.id}" — crashed ${MAX_FEATURE_CRASHES}+ times`);
+                    return;
+                }
+                try { f.init?.(); f._initialized = true; _featureCrashCounts[f.id] = 0; } catch(err) {
+                    _featureCrashCounts[f.id] = (_featureCrashCounts[f.id] || 0) + 1;
+                    console.error(`[YTKit] Error initializing "${f.id}" (crash ${_featureCrashCounts[f.id]}/${MAX_FEATURE_CRASHES}):`, err);
+                    if (_featureCrashCounts[f.id] >= MAX_FEATURE_CRASHES) {
+                        console.warn(`[YTKit] Feature "${f.id}" auto-disabled after ${MAX_FEATURE_CRASHES} crashes`);
+                    }
                 }
             };
 
@@ -8862,7 +8554,7 @@ pause
             // Tier 1: after first paint
             requestAnimationFrame(() => {
                 normal.forEach(f => { initFeature(f); if (f._initialized) normalLog.push(f.id); });
-                console.log(`[YTKit] v${YTKIT_VERSION} | critical:${critLog.length} normal:${normalLog.length} (lazy pending)`);
+                console.log(`[YTKit] v1.3.6 | critical:${critLog.length} normal:${normalLog.length} (lazy pending)`);
             });
 
             // Tier 2: after page is interactive
@@ -8887,7 +8579,10 @@ pause
 
         // Button injection is handled by startButtonChecker() called from each button feature's init()
 
-        settingsManager.setFirstRunStatus(true);
+        const hasRun = settingsManager.getFirstRunStatus();
+        if (!hasRun) {
+            settingsManager.setFirstRunStatus(true);
+        }
 
         // Track page changes for lazy loading (skip in safe mode)
         if (!isSafeMode) {
@@ -8910,7 +8605,11 @@ pause
                         const shouldBeActive = f.pages.includes(newPage);
 
                         if (!wasActive && shouldBeActive && !f._initialized) {
-                            try { f.init?.(); f._initialized = true; } catch(e) {}
+                            if ((_featureCrashCounts[f.id] || 0) >= MAX_FEATURE_CRASHES) return;
+                            try { f.init?.(); f._initialized = true; _featureCrashCounts[f.id] = 0; } catch(e) {
+                                _featureCrashCounts[f.id] = (_featureCrashCounts[f.id] || 0) + 1;
+                                console.error(`[YTKit] Nav re-init error "${f.id}" (crash ${_featureCrashCounts[f.id]}/${MAX_FEATURE_CRASHES}):`, e);
+                            }
                         } else if (wasActive && !shouldBeActive && f._initialized) {
                             try { f.destroy?.(); f._initialized = false; } catch(e) {}
                         }
@@ -8920,7 +8619,7 @@ pause
         });
         } // end !isSafeMode
 
-        console.log(`%c[YTKit] v${YTKIT_VERSION} Initialized${isSafeMode ? ' (SAFE MODE)' : ''}`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
+        console.log(`%c[YTKit] v1.3.6 Initialized${isSafeMode ? ' (SAFE MODE)' : ''}`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
     }
 
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
