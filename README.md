@@ -5,7 +5,7 @@
 <h1 align="center">YTKit: YouTube Customization Suite</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.4-ff4e45?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.3.1-ff4e45?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/platform-Tampermonkey%20%7C%20Violentmonkey-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/YouTube-Desktop-ff0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube">
@@ -103,6 +103,19 @@ The ad blocker uses a split architecture: Phase 1 injects a proxy engine into th
 | Hide Promotion Badges | Remove "Includes paid promotion" overlays | On |
 | Hide Info Panels | Remove Wikipedia/context info boxes (FEMA, COVID, etc.) | On |
 | Clean Share URLs | Strip tracking params (`si`, `pp`, `feature`) from copied/shared YouTube links | On |
+
+### Video Hider
+
+| Feature | Description | Default |
+|---------|-------------|---------|
+| Hide Videos from Home | Hide individual videos or entire channels from feeds — click the X on thumbnails, right-click to block channels | On |
+| Block Channels | Maintain a block list of channels whose videos are automatically hidden | On |
+| Keyword Filter | Auto-hide videos matching keywords (comma-separated) or regex patterns (e.g. `/\[.*\]/i`). Prefix with `!` to whitelist | — |
+| Duration Filter | Auto-hide videos shorter than a specified duration (in minutes) | Off |
+| Subscriptions Load Limiter | Stop infinite scroll on subscriptions page when consecutive batches are all hidden | On |
+| Hide All Button | Bulk-hide all visible videos on the subscriptions page | — |
+
+The Video Hider settings panel provides a 4-tab interface: **Videos** (grid with thumbnails and unhide buttons), **Channels** (list with unblock), **Keywords** (textarea with regex support), and **Settings** (duration filter, load limiter, statistics). All data persists via `GM_setValue` with undo support.
 
 ### Video Player
 
