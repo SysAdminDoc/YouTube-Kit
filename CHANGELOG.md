@@ -4,6 +4,22 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.4.0] - Competitive Feature Parity
+
+New features inspired by research across Enhancer for YouTube, ImprovedTube, Return YouTube Dislike, Unhook, BlockTube, YouTube NonStop, Nova YouTube, and DeArrow:
+
+- **Mousewheel Speed Control** (Playback) - Hold Shift + scroll on video to adjust playback speed (0.25x - 4x) with overlay indicator
+- **Mousewheel Volume Control** (Playback) - Scroll on video to adjust volume in 5% increments with overlay indicator
+- **Video Screenshot** (Playback) - Press S while watching to capture current frame as PNG (copies to clipboard + downloads)
+- **Return YouTube Dislike** (Playback) - Shows dislike counts and like/dislike ratio bar using the RYD API
+- **Cinema Mode** (Playback) - Press C to dim everything except the video player; press again to toggle off
+- **A-B Loop** (Playback) - Press [ for loop start, ] for loop end, \ to toggle. Visual markers on progress bar.
+- **Force H.264 Codec** (Quality) - Prefer H.264 over VP9/AV1 for lower CPU usage on older hardware
+- **Normalize Clickbait Titles** (Content) - Converts ALL CAPS titles to Title Case while preserving acronyms
+- **Watch Progress Indicators** (Content) - Shows colored progress bars on thumbnails based on locally-saved watch history
+- Enhanced "Still Watching?" prevention with proactive activity simulation
+- New "Playback" settings category for player interaction features
+
 ## [2.3.0] - Robustness & Polish
 
 - Protocol handler error handling: try/catch with informative toast for ytdl://, ytvlc://, ytmpv://, ytvlcq:// failures

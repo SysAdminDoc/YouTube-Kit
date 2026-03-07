@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      2.3.0
+// @version      2.4.0
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -19,6 +19,7 @@
 // @connect      sponsor.ajay.app
 // @connect      raw.githubusercontent.com
 // @connect      cobalt.meowing.de
+// @connect      returnyoutubedislikeapi.com
 // @connect      meowing.de
 // @updateURL    https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js
 // @downloadURL  https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js
@@ -941,7 +942,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.3.0';
+    const YTKIT_VERSION = '2.4.0';
 
     // ── Z-Index Hierarchy ──
     const Z = {
@@ -2123,6 +2124,17 @@
             colorTheme: 'none',
             commentEnhancements: true,
             sidebarOrder: null,
+
+            // v2.4.0 features
+            mousewheelSpeed: true,
+            mousewheelVolume: true,
+            videoScreenshot: true,
+            returnYoutubeDislike: true,
+            cinemaMode: false,
+            abLoop: false,
+            forceH264: false,
+            titleNormalization: false,
+            watchProgress: false,
 
         },
 
@@ -6707,14 +6719,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
 
-        // ─── Auto-Skip "Still Watching?" ───
+        // ─── Auto-Skip "Still Watching?" (YouTube NonStop) ───
         {
             id: 'autoSkipStillWatching',
             name: 'Auto-Skip "Still Watching?"',
-            description: 'Automatically dismiss the "Video paused. Continue watching?" popup',
+            description: 'Automatically dismiss the "Video paused. Continue watching?" popup and prevent YouTube inactivity pauses',
             group: 'Video Player',
             icon: 'skip-forward',
             _checkInterval: null,
+            _origPause: null,
+            _patchedVideo: null,
             init() {
                 const dismissPopup = () => {
                     const confirmButton = document.querySelector(
@@ -6740,6 +6754,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                             showToast('Auto-resumed playback', '#22c55e');
                         }
                     }
+                    // Proactive: simulate user activity to prevent the popup from appearing
+                    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
                 };
                 this._checkInterval = setInterval(dismissPopup, 2000);
                 addMutationRule(this.id, () => setTimeout(dismissPopup, 100));
@@ -7025,6 +7041,599 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     document.removeEventListener('ytkit-settings-changed', this._settingsHandler);
                     this._settingsHandler = null;
                 }
+            }
+        },
+
+        // ─── Playback Features ───
+        {
+            id: 'mousewheelSpeed',
+            name: 'Mousewheel Speed Control',
+            description: 'Hold Shift + scroll on the video player to adjust playback speed (0.25x - 4x)',
+            group: 'Playback',
+            icon: 'gauge',
+            _handler: null,
+            _overlay: null,
+            _overlayTimer: null,
+            _showOverlay(text) {
+                if (!this._overlay) {
+                    this._overlay = document.createElement('div');
+                    this._overlay.className = 'ytkit-speed-overlay';
+                    this._overlay.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fff;padding:6px 16px;border-radius:6px;font-size:18px;font-weight:700;font-family:"Roboto",sans-serif;z-index:100;pointer-events:none;opacity:0;transition:opacity 0.15s;';
+                }
+                const player = document.querySelector('#movie_player');
+                if (player && !player.contains(this._overlay)) player.appendChild(this._overlay);
+                this._overlay.textContent = text;
+                this._overlay.style.opacity = '1';
+                clearTimeout(this._overlayTimer);
+                this._overlayTimer = setTimeout(() => { if (this._overlay) this._overlay.style.opacity = '0'; }, 800);
+            },
+            init() {
+                this._handler = (e) => {
+                    if (!e.shiftKey) return;
+                    const player = document.querySelector('#movie_player');
+                    if (!player || !player.contains(e.target)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const video = document.querySelector('video.html5-main-video');
+                    if (!video) return;
+                    const delta = e.deltaY < 0 ? 0.25 : -0.25;
+                    const newSpeed = Math.min(4, Math.max(0.25, Math.round((video.playbackRate + delta) * 100) / 100));
+                    video.playbackRate = newSpeed;
+                    this._showOverlay(newSpeed + 'x');
+                    // Sync speed preset buttons if present
+                    document.querySelectorAll('.ytkit-speed-btn').forEach(b => {
+                        b.classList.toggle('active', Math.abs(parseFloat(b.dataset.speed) - newSpeed) < 0.01);
+                    });
+                };
+                document.addEventListener('wheel', this._handler, { passive: false, capture: true });
+            },
+            destroy() {
+                if (this._handler) document.removeEventListener('wheel', this._handler, true);
+                this._overlay?.remove();
+                this._overlay = null;
+                clearTimeout(this._overlayTimer);
+            }
+        },
+        {
+            id: 'mousewheelVolume',
+            name: 'Mousewheel Volume Control',
+            description: 'Scroll on the video player to adjust volume (without Shift held)',
+            group: 'Playback',
+            icon: 'volume-2',
+            _handler: null,
+            _overlay: null,
+            _overlayTimer: null,
+            _showOverlay(text) {
+                if (!this._overlay) {
+                    this._overlay = document.createElement('div');
+                    this._overlay.className = 'ytkit-volume-overlay';
+                    this._overlay.style.cssText = 'position:absolute;top:12px;right:12px;background:rgba(0,0,0,0.8);color:#fff;padding:6px 16px;border-radius:6px;font-size:16px;font-weight:600;font-family:"Roboto",sans-serif;z-index:100;pointer-events:none;opacity:0;transition:opacity 0.15s;display:flex;align-items:center;gap:8px;';
+                }
+                const player = document.querySelector('#movie_player');
+                if (player && !player.contains(this._overlay)) player.appendChild(this._overlay);
+                this._overlay.textContent = text;
+                this._overlay.style.opacity = '1';
+                clearTimeout(this._overlayTimer);
+                this._overlayTimer = setTimeout(() => { if (this._overlay) this._overlay.style.opacity = '0'; }, 800);
+            },
+            init() {
+                this._handler = (e) => {
+                    if (e.shiftKey) return; // Shift+scroll = speed control
+                    const player = document.querySelector('#movie_player');
+                    if (!player || !player.contains(e.target)) return;
+                    // Don't capture if scrolling on progress bar or controls
+                    if (e.target.closest('.ytp-chrome-bottom, .ytp-progress-bar')) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const video = document.querySelector('video.html5-main-video');
+                    if (!video) return;
+                    const step = 5;
+                    const delta = e.deltaY < 0 ? step : -step;
+                    const newVol = Math.min(100, Math.max(0, Math.round(video.volume * 100 + delta)));
+                    video.volume = newVol / 100;
+                    video.muted = newVol === 0;
+                    this._showOverlay('Vol: ' + newVol + '%');
+                };
+                document.addEventListener('wheel', this._handler, { passive: false, capture: true });
+            },
+            destroy() {
+                if (this._handler) document.removeEventListener('wheel', this._handler, true);
+                this._overlay?.remove();
+                this._overlay = null;
+                clearTimeout(this._overlayTimer);
+            }
+        },
+        {
+            id: 'videoScreenshot',
+            name: 'Video Screenshot',
+            description: 'Press S while watching to capture the current video frame as PNG (copies to clipboard + downloads)',
+            group: 'Playback',
+            icon: 'camera',
+            _handler: null,
+            init() {
+                this._handler = (e) => {
+                    if (e.key !== 's' && e.key !== 'S') return;
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                    if (e.ctrlKey || e.altKey || e.metaKey) return;
+                    if (!window.location.pathname.startsWith('/watch')) return;
+                    const video = document.querySelector('video.html5-main-video');
+                    if (!video || video.readyState < 2) return;
+                    e.preventDefault();
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    // Copy to clipboard
+                    canvas.toBlob(blob => {
+                        if (blob) {
+                            try {
+                                navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(() => {
+                                    showToast('Screenshot copied to clipboard', '#22c55e');
+                                }).catch(() => {
+                                    showToast('Screenshot saved (clipboard blocked)', '#f59e0b');
+                                });
+                            } catch(e) {
+                                showToast('Screenshot saved', '#22c55e');
+                            }
+                            // Also trigger download
+                            const url = URL.createObjectURL(blob);
+                            const a = Object.assign(document.createElement('a'), {
+                                href: url,
+                                download: `ytkit-screenshot-${getVideoId() || 'video'}-${Math.floor(video.currentTime)}s.png`
+                            });
+                            a.click();
+                            URL.revokeObjectURL(url);
+                        }
+                    }, 'image/png');
+                };
+                document.addEventListener('keydown', this._handler);
+            },
+            destroy() {
+                if (this._handler) document.removeEventListener('keydown', this._handler);
+                this._handler = null;
+            }
+        },
+        {
+            id: 'returnYoutubeDislike',
+            name: 'Return YouTube Dislike',
+            description: 'Show dislike counts on videos using the Return YouTube Dislike API',
+            group: 'Playback',
+            icon: 'thumbs-down',
+            _lastVideoId: null,
+            _styleElement: null,
+            pages: ['watch'],
+
+            async _fetchDislikes(videoId) {
+                return new Promise((resolve) => {
+                    GM.xmlHttpRequest({
+                        method: 'GET',
+                        url: `https://returnyoutubedislikeapi.com/votes?videoId=${videoId}`,
+                        headers: { Accept: 'application/json' },
+                        timeout: 5000,
+                        onload: (r) => {
+                            if (r.status === 200) {
+                                try { resolve(JSON.parse(r.responseText)); } catch { resolve(null); }
+                            } else { resolve(null); }
+                        },
+                        onerror: () => resolve(null),
+                        ontimeout: () => resolve(null),
+                    });
+                });
+            },
+
+            _formatCount(n) {
+                if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+                if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+                if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+                return String(n);
+            },
+
+            async _updateDislikeCount() {
+                const videoId = getVideoId();
+                if (!videoId || videoId === this._lastVideoId) return;
+                this._lastVideoId = videoId;
+
+                const data = await this._fetchDislikes(videoId);
+                if (!data || data.dislikes === undefined) return;
+
+                // Find the dislike button and add count
+                const dislikeBtn = document.querySelector('dislike-button-view-model button, ytd-toggle-button-renderer:has(button[aria-label*="islike"]) button, segmented-like-dislike-button-view-model .YtSegmentedLikeDislikeButtonViewModelSegmentedButtonsWrapper button:last-child');
+                if (!dislikeBtn) return;
+
+                // Remove existing YTKit dislike count
+                dislikeBtn.querySelector('.ytkit-dislike-count')?.remove();
+
+                const span = document.createElement('span');
+                span.className = 'ytkit-dislike-count';
+                span.textContent = this._formatCount(data.dislikes);
+                span.style.cssText = 'margin-left:6px;font-size:12px;font-weight:500;';
+                dislikeBtn.appendChild(span);
+
+                // Also show the like/dislike ratio bar
+                this._showRatioBar(data.likes, data.dislikes);
+            },
+
+            _showRatioBar(likes, dislikes) {
+                document.querySelector('.ytkit-ryd-bar')?.remove();
+                const total = likes + dislikes;
+                if (total === 0) return;
+                const likePercent = (likes / total) * 100;
+                const bar = document.createElement('div');
+                bar.className = 'ytkit-ryd-bar';
+                bar.style.cssText = `width:100%;height:3px;border-radius:2px;margin-top:4px;background:#666;overflow:hidden;`;
+                const fill = document.createElement('div');
+                fill.style.cssText = `width:${likePercent}%;height:100%;background:#3ea6ff;border-radius:2px;transition:width 0.3s;`;
+                bar.appendChild(fill);
+                // Insert below the like/dislike buttons
+                const container = document.querySelector('segmented-like-dislike-button-view-model, ytd-segmented-like-dislike-button-renderer, #top-level-buttons-computed');
+                if (container) {
+                    container.style.position = container.style.position || 'relative';
+                    container.appendChild(bar);
+                }
+            },
+
+            init() {
+                this._styleElement = injectStyle('.ytkit-dislike-count { font-variant-numeric: tabular-nums; }', this.id, true);
+                this._updateDislikeCount();
+                addNavigateRule('rydUpdate', () => {
+                    this._lastVideoId = null;
+                    setTimeout(() => this._updateDislikeCount(), 1500);
+                });
+            },
+            destroy() {
+                removeNavigateRule('rydUpdate');
+                document.querySelector('.ytkit-dislike-count')?.remove();
+                document.querySelector('.ytkit-ryd-bar')?.remove();
+                this._styleElement?.remove();
+                this._lastVideoId = null;
+            }
+        },
+        {
+            id: 'cinemaMode',
+            name: 'Cinema Mode',
+            description: 'Dims everything except the video player for a theater-like experience (toggle with C key)',
+            group: 'Playback',
+            icon: 'tv',
+            _handler: null,
+            _overlay: null,
+            _active: false,
+
+            _toggle() {
+                if (!window.location.pathname.startsWith('/watch')) return;
+                this._active = !this._active;
+                if (this._active) {
+                    if (!this._overlay) {
+                        this._overlay = document.createElement('div');
+                        this._overlay.className = 'ytkit-cinema-overlay';
+                        this._overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:${Z.BUTTONS - 1};pointer-events:none;opacity:0;transition:opacity 0.4s ease;`;
+                        document.body.appendChild(this._overlay);
+                    }
+                    requestAnimationFrame(() => { this._overlay.style.opacity = '1'; });
+                    // Elevate player above overlay
+                    const player = document.querySelector('#movie_player');
+                    if (player) {
+                        player.style.position = 'relative';
+                        player.style.zIndex = String(Z.BUTTONS);
+                    }
+                    showToast('Cinema Mode ON', '#a78bfa', { duration: 1.5 });
+                } else {
+                    if (this._overlay) this._overlay.style.opacity = '0';
+                    const player = document.querySelector('#movie_player');
+                    if (player) {
+                        player.style.position = '';
+                        player.style.zIndex = '';
+                    }
+                    showToast('Cinema Mode OFF', '#71717a', { duration: 1.5 });
+                }
+            },
+
+            init() {
+                this._handler = (e) => {
+                    if (e.key !== 'c' && e.key !== 'C') return;
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                    if (e.ctrlKey || e.altKey || e.metaKey) return;
+                    this._toggle();
+                };
+                document.addEventListener('keydown', this._handler);
+                // Disable on navigation away from watch page
+                addNavigateRule('cinemaModeNav', () => {
+                    if (this._active && !window.location.pathname.startsWith('/watch')) {
+                        this._active = false;
+                        if (this._overlay) this._overlay.style.opacity = '0';
+                        const player = document.querySelector('#movie_player');
+                        if (player) { player.style.position = ''; player.style.zIndex = ''; }
+                    }
+                });
+            },
+            destroy() {
+                if (this._handler) document.removeEventListener('keydown', this._handler);
+                this._handler = null;
+                removeNavigateRule('cinemaModeNav');
+                if (this._overlay) { this._overlay.remove(); this._overlay = null; }
+                const player = document.querySelector('#movie_player');
+                if (player) { player.style.position = ''; player.style.zIndex = ''; }
+                this._active = false;
+            }
+        },
+        {
+            id: 'abLoop',
+            name: 'A-B Loop',
+            description: 'Press [ to set loop start, ] to set loop end, then \\ to toggle loop on/off. Visual markers on progress bar.',
+            group: 'Playback',
+            icon: 'repeat',
+            _handler: null,
+            _loopA: null,
+            _loopB: null,
+            _loopActive: false,
+            _rafId: null,
+            _markers: null,
+            _styleElement: null,
+
+            _updateMarkers() {
+                document.querySelector('.ytkit-ab-markers')?.remove();
+                const video = document.querySelector('video.html5-main-video');
+                const progressBar = document.querySelector('.ytp-progress-bar');
+                if (!video || !progressBar || !video.duration) return;
+                const duration = video.duration;
+                const container = document.createElement('div');
+                container.className = 'ytkit-ab-markers';
+                container.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:41;';
+                if (this._loopA !== null) {
+                    const markerA = document.createElement('div');
+                    markerA.style.cssText = `position:absolute;top:-2px;bottom:-2px;width:3px;background:#22c55e;left:${(this._loopA / duration) * 100}%;border-radius:1px;`;
+                    markerA.title = 'Loop Start: ' + this._formatTime(this._loopA);
+                    container.appendChild(markerA);
+                }
+                if (this._loopB !== null) {
+                    const markerB = document.createElement('div');
+                    markerB.style.cssText = `position:absolute;top:-2px;bottom:-2px;width:3px;background:#ef4444;left:${(this._loopB / duration) * 100}%;border-radius:1px;`;
+                    markerB.title = 'Loop End: ' + this._formatTime(this._loopB);
+                    container.appendChild(markerB);
+                }
+                if (this._loopA !== null && this._loopB !== null && this._loopActive) {
+                    const region = document.createElement('div');
+                    region.style.cssText = `position:absolute;top:0;height:100%;background:rgba(34,197,94,0.2);left:${(this._loopA / duration) * 100}%;width:${((this._loopB - this._loopA) / duration) * 100}%;`;
+                    container.appendChild(region);
+                }
+                progressBar.appendChild(container);
+                this._markers = container;
+            },
+
+            _formatTime(s) {
+                const m = Math.floor(s / 60);
+                const sec = Math.floor(s % 60);
+                return m + ':' + String(sec).padStart(2, '0');
+            },
+
+            _startLoop() {
+                this._stopLoop();
+                const check = () => {
+                    const video = document.querySelector('video.html5-main-video');
+                    if (video && this._loopActive && this._loopA !== null && this._loopB !== null) {
+                        if (video.currentTime >= this._loopB) {
+                            video.currentTime = this._loopA;
+                        }
+                    }
+                    if (this._loopActive) this._rafId = requestAnimationFrame(check);
+                };
+                this._rafId = requestAnimationFrame(check);
+            },
+
+            _stopLoop() {
+                if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
+            },
+
+            init() {
+                this._handler = (e) => {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                    if (e.ctrlKey || e.altKey || e.metaKey) return;
+                    if (!window.location.pathname.startsWith('/watch')) return;
+                    const video = document.querySelector('video.html5-main-video');
+                    if (!video) return;
+
+                    if (e.key === '[') {
+                        this._loopA = video.currentTime;
+                        showToast('Loop Start: ' + this._formatTime(this._loopA), '#22c55e', { duration: 1.5 });
+                        this._updateMarkers();
+                    } else if (e.key === ']') {
+                        this._loopB = video.currentTime;
+                        if (this._loopA !== null && this._loopB <= this._loopA) {
+                            showToast('Loop end must be after start', '#ef4444', { duration: 2 });
+                            this._loopB = null;
+                            return;
+                        }
+                        showToast('Loop End: ' + this._formatTime(this._loopB), '#ef4444', { duration: 1.5 });
+                        this._updateMarkers();
+                    } else if (e.key === '\\') {
+                        if (this._loopA === null || this._loopB === null) {
+                            showToast('Set loop points first: [ for start, ] for end', '#f59e0b', { duration: 3 });
+                            return;
+                        }
+                        this._loopActive = !this._loopActive;
+                        if (this._loopActive) {
+                            this._startLoop();
+                            showToast('A-B Loop ON (' + this._formatTime(this._loopA) + ' - ' + this._formatTime(this._loopB) + ')', '#22c55e', { duration: 2 });
+                        } else {
+                            this._stopLoop();
+                            showToast('A-B Loop OFF', '#71717a', { duration: 1.5 });
+                        }
+                        this._updateMarkers();
+                    }
+                };
+                document.addEventListener('keydown', this._handler);
+                // Reset on navigation
+                addNavigateRule('abLoopNav', () => {
+                    this._loopA = null; this._loopB = null; this._loopActive = false;
+                    this._stopLoop();
+                    document.querySelector('.ytkit-ab-markers')?.remove();
+                });
+            },
+            destroy() {
+                if (this._handler) document.removeEventListener('keydown', this._handler);
+                this._handler = null;
+                this._stopLoop();
+                removeNavigateRule('abLoopNav');
+                document.querySelector('.ytkit-ab-markers')?.remove();
+                this._loopA = null; this._loopB = null; this._loopActive = false;
+            }
+        },
+        {
+            id: 'forceH264',
+            name: 'Force H.264 Codec',
+            description: 'Prefer H.264 (AVC) over VP9/AV1 for lower CPU usage on older hardware. May reduce max quality.',
+            group: 'Quality',
+            icon: 'cpu',
+            _origCanPlayType: null,
+
+            init() {
+                const videoProto = HTMLVideoElement.prototype;
+                this._origCanPlayType = videoProto.canPlayType;
+                videoProto.canPlayType = function(type) {
+                    // Block VP9 and AV1 codecs — YouTube will fall back to H.264
+                    if (/vp0?9|av01/i.test(type)) return '';
+                    return videoProto.__ytkit_origCanPlayType
+                        ? videoProto.__ytkit_origCanPlayType.call(this, type)
+                        : '';
+                };
+                videoProto.__ytkit_origCanPlayType = this._origCanPlayType;
+                DebugManager.log('Codec', 'Forcing H.264 — VP9/AV1 blocked');
+            },
+            destroy() {
+                if (this._origCanPlayType) {
+                    HTMLVideoElement.prototype.canPlayType = this._origCanPlayType;
+                    delete HTMLVideoElement.prototype.__ytkit_origCanPlayType;
+                    this._origCanPlayType = null;
+                }
+            }
+        },
+        {
+            id: 'titleNormalization',
+            name: 'Normalize Clickbait Titles',
+            description: 'Convert ALL CAPS titles to Title Case. Reduces clickbait without changing meaning.',
+            group: 'Content',
+            icon: 'type',
+            _observer: null,
+
+            _toTitleCase(str) {
+                // Only normalize if more than 50% of letters are uppercase
+                const letters = str.replace(/[^a-zA-Z]/g, '');
+                if (letters.length < 4) return str;
+                const upperCount = (str.match(/[A-Z]/g) || []).length;
+                if (upperCount / letters.length < 0.5) return str;
+
+                // Preserve acronyms (2-4 consecutive caps), numbers, special chars
+                return str.replace(/\b([A-Z]{2,4})\b/g, '|||$1|||')
+                    .toLowerCase()
+                    .replace(/\|\|\|([^|]+)\|\|\|/g, (_, acr) => acr.toUpperCase())
+                    .replace(/(^|\s|["\-(\[])([a-z])/g, (_, pre, c) => pre + c.toUpperCase())
+                    .replace(/\bi\b/g, 'I');
+            },
+
+            _processTitle(el) {
+                if (el._ytkitNormalized) return;
+                const text = el.textContent.trim();
+                if (!text) return;
+                const normalized = this._toTitleCase(text);
+                if (normalized !== text) {
+                    el._ytkitOriginalTitle = text;
+                    el.textContent = normalized;
+                    el._ytkitNormalized = true;
+                    el.title = text; // Show original on hover
+                }
+            },
+
+            _processAll() {
+                // Video titles in feeds
+                document.querySelectorAll('#video-title, #video-title-link yt-formatted-string, ytd-rich-grid-media #video-title-link, h3.ytd-rich-grid-media a#video-title-link').forEach(el => this._processTitle(el));
+                // Watch page title
+                document.querySelectorAll('h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string').forEach(el => this._processTitle(el));
+            },
+
+            init() {
+                this._processAll();
+                addMutationRule(this.id, () => this._processAll());
+                addNavigateRule('titleNorm', () => setTimeout(() => this._processAll(), 1000));
+            },
+            destroy() {
+                removeMutationRule(this.id);
+                removeNavigateRule('titleNorm');
+                // Restore original titles
+                document.querySelectorAll('[data-ytkit-normalized]').forEach(el => {
+                    if (el._ytkitOriginalTitle) el.textContent = el._ytkitOriginalTitle;
+                });
+            }
+        },
+        {
+            id: 'watchProgress',
+            name: 'Watch Progress Indicators',
+            description: 'Show colored progress bars on video thumbnails based on your watch history (saved locally)',
+            group: 'Content',
+            icon: 'bar-chart',
+            _styleElement: null,
+            _storageKey: 'ytkit-watch-progress',
+            _saveInterval: null,
+
+            _getProgress() {
+                return StorageManager.get(this._storageKey, {});
+            },
+
+            _saveCurrentProgress() {
+                if (!window.location.pathname.startsWith('/watch')) return;
+                const video = document.querySelector('video.html5-main-video');
+                const videoId = getVideoId();
+                if (!video || !videoId || !video.duration || video.duration < 30) return;
+                const percent = Math.round((video.currentTime / video.duration) * 100);
+                if (percent < 5) return; // Don't save negligible progress
+                const progress = this._getProgress();
+                progress[videoId] = { p: Math.min(percent, 100), t: Date.now() };
+                // Prune entries older than 30 days
+                const cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+                for (const id in progress) {
+                    if (progress[id].t < cutoff) delete progress[id];
+                }
+                StorageManager.set(this._storageKey, progress);
+            },
+
+            _addProgressBars() {
+                const progress = this._getProgress();
+                if (Object.keys(progress).length === 0) return;
+                document.querySelectorAll('ytd-rich-item-renderer a#thumbnail, ytd-video-renderer a#thumbnail, ytd-compact-video-renderer a#thumbnail, ytd-grid-video-renderer a#thumbnail').forEach(thumb => {
+                    if (thumb.querySelector('.ytkit-progress-bar')) return;
+                    const href = thumb.getAttribute('href');
+                    if (!href) return;
+                    const match = href.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+                    if (!match) return;
+                    const videoId = match[1];
+                    const entry = progress[videoId];
+                    if (!entry) return;
+                    const bar = document.createElement('div');
+                    bar.className = 'ytkit-progress-bar';
+                    const color = entry.p >= 90 ? '#22c55e' : '#3ea6ff';
+                    bar.style.cssText = `position:absolute;bottom:0;left:0;height:3px;background:${color};z-index:10;border-radius:0 1px 0 0;transition:width 0.3s;width:${entry.p}%;`;
+                    thumb.style.position = thumb.style.position || 'relative';
+                    thumb.appendChild(bar);
+                });
+            },
+
+            init() {
+                this._styleElement = injectStyle('.ytkit-progress-bar { pointer-events: none; }', this.id, true);
+                this._addProgressBars();
+                addMutationRule(this.id, () => this._addProgressBars());
+                addNavigateRule('watchProgress', () => {
+                    this._saveCurrentProgress();
+                    setTimeout(() => this._addProgressBars(), 1500);
+                });
+                // Periodically save progress while watching
+                this._saveInterval = setInterval(() => this._saveCurrentProgress(), 15000);
+            },
+            destroy() {
+                removeMutationRule(this.id);
+                removeNavigateRule('watchProgress');
+                if (this._saveInterval) { clearInterval(this._saveInterval); this._saveInterval = null; }
+                this._saveCurrentProgress(); // Save one last time
+                this._styleElement?.remove();
+                document.querySelectorAll('.ytkit-progress-bar').forEach(el => el.remove());
             }
         },
     ];
@@ -7484,6 +8093,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         'Appearance': { icon: 'appearance', color: '#f472b6' },
         'Content': { icon: 'content', color: '#34d399' },
         'Video Player': { icon: 'player', color: '#a78bfa' },
+        'Playback': { icon: 'gauge', color: '#fb923c' },
         'Ad Blocker': { icon: 'shield', color: '#10b981' },
         'SponsorBlock': { icon: 'sponsor', color: '#22d3ee' },
         'Quality': { icon: 'quality', color: '#facc15' },
@@ -7540,7 +8150,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
     function buildSettingsPanel() {
         if (document.getElementById('ytkit-settings-panel')) return;
 
-        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Ad Blocker', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads'];
+        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Playback', 'Ad Blocker', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads'];
 
         // Group labels: maps first category of each group → label text
         const categoryGroupLabels = {
