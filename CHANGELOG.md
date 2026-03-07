@@ -4,6 +4,14 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.6.2] - Black Video Fix
+
+### Fixed
+- **Conflict enforcement at init time** — Features in CONFLICT_MAP (e.g., Fit Player to Window vs Theater Split) are now checked during initialization, not just when toggling in settings. Previously, both could initialize simultaneously and fight over the player layout, causing a black video with only audio
+- **Default settings** — Changed `fitPlayerToWindow` default to `false` since Theater Split (stickyVideo) is the preferred default and initializes as a critical feature
+
+---
+
 ## [2.6.1] - Seek Preview Fix
 
 ### Added

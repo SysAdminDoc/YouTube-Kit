@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      2.6.1
+// @version      2.6.2
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -942,7 +942,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.6.1';
+    const YTKIT_VERSION = '2.6.2';
 
     // ── Z-Index Hierarchy ──
     const Z = {
@@ -2040,7 +2040,7 @@
             hideMembersOnly: true,
             hideNewsHome: true,
             hidePlaylistsHome: true,
-            fitPlayerToWindow: true,
+            fitPlayerToWindow: false,
             hideRelatedVideos: true,
             expandVideoWidth: true,
             floatingLogoOnWatch: true,
@@ -10564,6 +10564,19 @@ pause
                 if (f.pages && !f.pages.includes(appState.currentPage)) return;
                 if (f.dependsOn && !appState.settings[f.dependsOn]) return;
                 if (f._initialized) return;
+                // Conflict enforcement at init time — skip if a conflicting feature already initialized
+                if (CONFLICT_MAP[f.id]) {
+                    const activeConflicts = (CONFLICT_MAP[f.id].conflicts || []).filter(cid => {
+                        const cf = features.find(ff => ff.id === cid);
+                        return cf && cf._initialized;
+                    });
+                    if (activeConflicts.length > 0) {
+                        DebugManager.log('Init', `Skipping "${f.id}" — conflicts with already-initialized: ${activeConflicts.join(', ')}`);
+                        appState.settings[f.id] = false;
+                        settingsManager.save(appState.settings);
+                        return;
+                    }
+                }
                 // Skip features that have crashed too many times
                 if ((_featureCrashCounts[f.id] || 0) >= MAX_FEATURE_CRASHES) {
                     DebugManager.log('Init', `Skipping "${f.id}" — crashed ${MAX_FEATURE_CRASHES}+ times`);
