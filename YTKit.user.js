@@ -928,6 +928,9 @@
         return PageTypes.OTHER;
     }
 
+    // ── Version ──
+    const YTKIT_VERSION = '2.2.0';
+
     // ── Timing Constants ──
     const TIMING = {
         NAV_DEBOUNCE: 50,         // Navigation detection debounce (ms)
@@ -2165,7 +2168,7 @@
                 bookmarks: bookmarks,
                 exportVersion: 3,
                 exportDate: new Date().toISOString(),
-                ytkitVersion: '2.2.0'
+                ytkitVersion: YTKIT_VERSION
             };
             return JSON.stringify(exportData, null, 2);
         },
@@ -8732,22 +8735,22 @@ pause
 
         const versionSpan = document.createElement('span');
         versionSpan.className = 'ytkit-version';
-        versionSpan.textContent = 'v1.1.0';
+        versionSpan.textContent = 'v' + YTKIT_VERSION;
         versionSpan.style.position = 'relative';
         versionSpan.style.cursor = 'pointer';
         // What's New badge
-        const CURRENT_VER = '1.1.0';
+        const CURRENT_VER = YTKIT_VERSION;
         const lastSeenVer = GM_getValue('ytkit_last_seen_version', '');
         if (lastSeenVer !== CURRENT_VER) {
             const badge = document.createElement('span');
             badge.id = 'ytkit-whats-new-badge';
             badge.style.cssText = 'position:absolute;top:-3px;right:-8px;width:8px;height:8px;background:#ef4444;border-radius:50%;animation:ytkit-badge-pulse 2s infinite;';
             versionSpan.appendChild(badge);
-            versionSpan.title = 'New in v1.1.0: Watch page alignment fixes, ad-block stats display, configurable Cobalt URL, performance optimizations';
+            versionSpan.title = `New in v${YTKIT_VERSION}: Architecture hardening, inline Quick Links editor, settings migration, observer consolidation, leak fixes`;
             versionSpan.onclick = () => {
                 GM_setValue('ytkit_last_seen_version', CURRENT_VER);
                 badge.remove();
-                showToast('v2.2.0: Fixed black video on secondary monitors (object-fit:contain forces Chrome out of hardware overlay path)', '#3b82f6', { duration: 6 });
+                showToast(`v${YTKIT_VERSION}: Error boundaries, settings migration, Quick Links editor, observer consolidation, leak fixes`, '#3b82f6', { duration: 6 });
             };
         }
 
@@ -9790,7 +9793,7 @@ pause
             },
             settings: appState.settings,
             features,
-            version: '2.2.0',
+            version: YTKIT_VERSION,
         };
 
         const _featureCrashCounts = {};
@@ -9868,7 +9871,7 @@ pause
             // Tier 1: after first paint
             requestAnimationFrame(() => {
                 normal.forEach(f => { initFeature(f); if (f._initialized) normalLog.push(f.id); });
-                console.log(`[YTKit] v2.2.0 | critical:${critLog.length} normal:${normalLog.length} (lazy pending)`);
+                console.log(`[YTKit] v${YTKIT_VERSION} | critical:${critLog.length} normal:${normalLog.length} (lazy pending)`);
             });
 
             // Tier 2: after page is interactive
@@ -9935,7 +9938,7 @@ pause
         });
         } // end !isSafeMode
 
-        console.log(`%c[YTKit] v2.2.0 Initialized${isSafeMode ? ' (SAFE MODE)' : ''}`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
+        console.log(`%c[YTKit] v${YTKIT_VERSION} Initialized${isSafeMode ? ' (SAFE MODE)' : ''}`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
     }
 
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
