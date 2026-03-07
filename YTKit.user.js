@@ -942,7 +942,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.6.0';
+    const YTKIT_VERSION = '2.6.1';
 
     // ── Z-Index Hierarchy ──
     const Z = {
@@ -2135,6 +2135,7 @@
             forceH264: false,
             titleNormalization: false,
             watchProgress: false,
+            disableSeekPreview: true,
 
         },
 
@@ -7059,6 +7060,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }
             }
         },
+
+        cssFeature('disableSeekPreview', 'Disable Seek Preview', 'Hide the large video frame preview that appears when hovering/clicking the progress bar (fixes seek issues)', 'Video Player', 'eye-off',
+            `.ytp-tooltip.ytp-preview { display: none !important; }
+             .ytp-tooltip.ytp-text-detail.ytp-preview { display: none !important; }
+             .ytp-chapter-hover-container { display: none !important; }
+             .ytp-storyboard-framepreview { display: none !important; }
+             .ytp-inline-preview-ui { display: none !important; }
+             .ytp-tooltip-bg { display: none !important; }
+             .ytp-tooltip-duration-text { display: none !important; }`),
 
         // ─── Playback Features ───
         {

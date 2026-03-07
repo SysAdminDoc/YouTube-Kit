@@ -4,6 +4,13 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.6.1] - Seek Preview Fix
+
+### Added
+- **Disable Seek Preview** — New feature (enabled by default) that hides the large video frame preview overlay on the progress bar, fixing issues where the preview blocks click-to-seek
+
+---
+
 ## [2.6.0] - Unified Theme System
 
 ### Changed
