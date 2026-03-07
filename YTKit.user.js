@@ -6827,14 +6827,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 menu.appendChild(bottomRow);
                 parentEl.appendChild(menu);
 
-                // JS hover with delayed hide
+                // JS hover — stay open while cursor is anywhere inside wrapper or menu
                 let hideTimer = null;
-                const show = () => { clearTimeout(hideTimer); menu.classList.add('ytkit-ql-visible'); };
-                const scheduleHide = () => { hideTimer = setTimeout(() => menu.classList.remove('ytkit-ql-visible'), 1500); };
+                const show = () => { clearTimeout(hideTimer); hideTimer = null; menu.classList.add('ytkit-ql-visible'); };
+                const scheduleHide = (e) => {
+                    // Don't hide if cursor moved to another element inside the wrapper
+                    if (e && e.relatedTarget && parentEl.contains(e.relatedTarget)) return;
+                    clearTimeout(hideTimer);
+                    hideTimer = setTimeout(() => menu.classList.remove('ytkit-ql-visible'), 300);
+                };
                 parentEl.addEventListener('mouseenter', show);
                 parentEl.addEventListener('mouseleave', scheduleHide);
-                menu.addEventListener('mouseenter', show);
-                menu.addEventListener('mouseleave', scheduleHide);
 
                 return menu;
             },
