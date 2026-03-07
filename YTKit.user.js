@@ -6732,21 +6732,99 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const menu = document.createElement('div');
                 menu.id = dropId;
                 menu.className = 'ytkit-ql-drop';
-                this._parseItems().forEach(item => {
+                const self = this;
+                this._parseItems().forEach((item, idx) => {
+                    const row = document.createElement('div');
+                    row.className = 'ytkit-ql-row';
                     const a = document.createElement('a'); a.href = item.url; a.className = 'ytkit-ql-item';
                     TrustedHTML.setHTML(a, `<svg viewBox="0 0 24 24" class="ytkit-ql-icon"><path d="${item.icon}"></path></svg><span>${item.text}</span>`);
-                    menu.appendChild(a);
+                    row.appendChild(a);
+                    // Delete button (hidden unless editing)
+                    const del = document.createElement('button');
+                    del.className = 'ytkit-ql-del';
+                    del.title = 'Remove';
+                    TrustedHTML.setHTML(del, `<svg viewBox="0 0 24 24" width="14" height="14"><path d="M18 6L6 18M6 6l12 12" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/></svg>`);
+                    del.onclick = (e) => {
+                        e.preventDefault(); e.stopPropagation();
+                        const items = self._parseItems();
+                        items.splice(idx, 1);
+                        const newRaw = items.map(i => `${i.text} | ${i.url}`).join('\n');
+                        appState.settings.quickLinkItems = newRaw;
+                        settingsManager.save(appState.settings);
+                        self.rebuildMenus();
+                        showToast(`Removed "${item.text}"`, '#ef4444');
+                    };
+                    row.appendChild(del);
+                    menu.appendChild(row);
                 });
-                // Settings link — compact
+
+                // Divider
                 const divider = document.createElement('div');
-                divider.style.cssText = 'height:1px;background:rgba(255,255,255,0.06);margin:3px 0;';
+                divider.className = 'ytkit-ql-divider';
                 menu.appendChild(divider);
+
+                // Bottom row: Edit + Settings
+                const bottomRow = document.createElement('div');
+                bottomRow.className = 'ytkit-ql-bottom';
+
+                // Edit toggle
+                const editBtn = document.createElement('a');
+                editBtn.href = '#';
+                editBtn.className = 'ytkit-ql-item ytkit-ql-bottom-btn';
+                editBtn.title = 'Edit links';
+                editBtn.onclick = (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const isEditing = menu.classList.toggle('ytkit-ql-editing');
+                    if (isEditing) {
+                        // Show add form
+                        let addForm = menu.querySelector('.ytkit-ql-add-form');
+                        if (!addForm) {
+                            addForm = document.createElement('div');
+                            addForm.className = 'ytkit-ql-add-form';
+                            const nameInput = document.createElement('input');
+                            nameInput.type = 'text'; nameInput.placeholder = 'Label';
+                            nameInput.className = 'ytkit-ql-input';
+                            const urlInput = document.createElement('input');
+                            urlInput.type = 'text'; urlInput.placeholder = '/path or URL';
+                            urlInput.className = 'ytkit-ql-input';
+                            const addBtn = document.createElement('button');
+                            addBtn.className = 'ytkit-ql-add-btn';
+                            addBtn.textContent = 'Add';
+                            addBtn.onclick = (ev) => {
+                                ev.preventDefault(); ev.stopPropagation();
+                                const name = nameInput.value.trim();
+                                const url = urlInput.value.trim();
+                                if (!name || !url) return;
+                                const current = appState.settings.quickLinkItems || '';
+                                appState.settings.quickLinkItems = current + (current ? '\n' : '') + `${name} | ${url}`;
+                                settingsManager.save(appState.settings);
+                                self.rebuildMenus();
+                                showToast(`Added "${name}"`, '#22c55e');
+                            };
+                            addForm.appendChild(nameInput);
+                            addForm.appendChild(urlInput);
+                            addForm.appendChild(addBtn);
+                            divider.before(addForm);
+                        }
+                        addForm.style.display = '';
+                    } else {
+                        const addForm = menu.querySelector('.ytkit-ql-add-form');
+                        if (addForm) addForm.style.display = 'none';
+                    }
+                };
+                TrustedHTML.setHTML(editBtn, `<svg viewBox="0 0 24 24" class="ytkit-ql-icon"><path d="M16.474 5.408l2.118 2.117m-.756-3.982L12.109 9.27a2.118 2.118 0 00-.58 1.082L11 13l2.648-.53c.41-.082.786-.283 1.082-.579l5.727-5.727a1.853 1.853 0 10-2.621-2.621z"/><path d="M19 15v3a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg><span>Edit</span>`);
+                bottomRow.appendChild(editBtn);
+
+                // Settings
                 const gear = document.createElement('a');
                 gear.href = '#';
-                gear.className = 'ytkit-ql-item ytkit-ql-settings';
+                gear.className = 'ytkit-ql-item ytkit-ql-bottom-btn';
+                gear.title = 'YTKit Settings';
                 gear.onclick = (e) => { e.preventDefault(); document.body.classList.toggle('ytkit-panel-open'); };
                 TrustedHTML.setHTML(gear, `<svg viewBox="0 0 24 24" class="ytkit-ql-icon"><path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span>Settings</span>`);
-                menu.appendChild(gear);
+                bottomRow.appendChild(gear);
+
+                menu.appendChild(bottomRow);
                 parentEl.appendChild(menu);
 
                 // JS hover with delayed hide
@@ -6768,7 +6846,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
             init() {
                 const self = this;
-                self._styleEl = GM_addStyle(`#ytkit-ql-wrap{position:relative;display:inline-block} .ytkit-ql-drop{position:absolute;flex-direction:column;background:rgba(22,22,22,0.96);border:1px solid rgba(255,255,255,0.1);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.7);padding:4px 0;z-index:9999;min-width:180px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(4px);transition:opacity 0.25s ease,visibility 0.25s ease,transform 0.25s ease;display:flex} .ytkit-ql-drop.ytkit-ql-visible{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)} #ytkit-ql-menu{top:38px;left:0} #ytkit-po-drop{bottom:calc(100% + 6px);right:0} .ytkit-ql-item{display:flex;align-items:center;padding:7px 14px;color:#fff;text-decoration:none;font-size:13px;font-family:"Roboto","Arial",sans-serif;transition:background .15s;gap:10px} .ytkit-ql-item:hover{background:rgba(255,255,255,.08)} .ytkit-ql-icon{fill:#fff;width:18px;height:18px;flex-shrink:0} .ytkit-ql-settings{padding:5px 14px;opacity:0.4;font-size:11px} .ytkit-ql-settings .ytkit-ql-icon{width:14px;height:14px} .ytkit-ql-settings:hover{opacity:0.8}`);
+                self._styleEl = GM_addStyle(`#ytkit-ql-wrap{position:relative;display:inline-block} .ytkit-ql-drop{position:absolute;flex-direction:column;background:rgba(18,18,18,0.97);border:1px solid rgba(255,255,255,0.08);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,0.6);padding:3px 0;z-index:9999;min-width:160px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(4px);transition:opacity 0.2s ease,visibility 0.2s ease,transform 0.2s ease;display:flex} .ytkit-ql-drop.ytkit-ql-visible{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)} #ytkit-ql-menu{top:38px;left:0} #ytkit-po-drop{bottom:calc(100% + 6px);right:0} .ytkit-ql-row{display:flex;align-items:center} .ytkit-ql-item{display:flex;align-items:center;padding:5px 12px;color:#fff;text-decoration:none;font-size:12px;font-family:"Roboto","Arial",sans-serif;transition:background .12s;gap:8px;flex:1;min-width:0} .ytkit-ql-item:hover{background:rgba(255,255,255,.07)} .ytkit-ql-icon{fill:#fff;width:16px;height:16px;flex-shrink:0} .ytkit-ql-del{display:none;background:none;border:none;cursor:pointer;padding:4px 8px 4px 0;opacity:0.4;transition:opacity .15s} .ytkit-ql-del:hover{opacity:1} .ytkit-ql-editing .ytkit-ql-del{display:flex} .ytkit-ql-divider{height:1px;background:rgba(255,255,255,0.06);margin:2px 0} .ytkit-ql-bottom{display:flex;gap:0} .ytkit-ql-bottom-btn{opacity:0.4;font-size:11px;flex:1;justify-content:center} .ytkit-ql-bottom-btn .ytkit-ql-icon{width:13px;height:13px} .ytkit-ql-bottom-btn:hover{opacity:0.85} .ytkit-ql-editing .ytkit-ql-bottom-btn[title="Edit links"]{opacity:1;color:#3ea6ff} .ytkit-ql-add-form{display:flex;gap:4px;padding:4px 8px;align-items:center} .ytkit-ql-input{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:#fff;font-size:11px;padding:4px 6px;width:70px;outline:none;font-family:"Roboto","Arial",sans-serif} .ytkit-ql-input:focus{border-color:rgba(62,166,255,0.4)} .ytkit-ql-add-btn{background:#3ea6ff;border:none;color:#000;font-size:11px;font-weight:500;padding:4px 8px;border-radius:4px;cursor:pointer;font-family:"Roboto","Arial",sans-serif;white-space:nowrap} .ytkit-ql-add-btn:hover{background:#5bb8ff}`);
 
                 waitForElement('ytd-topbar-logo-renderer', (logo) => {
                     if (document.getElementById('ytkit-ql-wrap')) return;
