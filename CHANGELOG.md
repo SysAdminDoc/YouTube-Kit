@@ -4,6 +4,19 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.6.0] - Unified Theme System
+
+### Changed
+- **Theme-aware accents** — Watch Page Restyle, Refined Comments, Comment Enhancements, and reply box styling now follow the selected Color Theme instead of using hardcoded purple
+- **CSS custom properties** — Introduced `--ytkit-accent`, `--ytkit-accent-rgb`, and `--ytkit-accent-light` variables that all visual features share; defaults to purple when no theme is selected
+- **Cosmic comments** — The accent-tinted comment section background (previously Nyan Cat-exclusive) is now part of Refined Comments and adapts to any Color Theme
+- **Nyan Cat theme** — Updated to use the shared accent variable system; cosmic comments background now derives from accent color
+
+### How it works
+Selecting a Color Theme (e.g., Gruvbox, Nord, Tokyo Night) now automatically tints the Watch Page Restyle buttons/borders, Refined Comments thread lines/author names, and the comment section background to match the theme's accent color. No extra configuration needed.
+
+---
+
 ## [2.5.0] - Quality & Infrastructure
 
 ### Removed
