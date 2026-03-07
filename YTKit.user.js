@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      2.6.2
+// @version      2.6.3
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -141,8 +141,11 @@
         }
 
         // ── Deep Recursive Ad Pruner ──
+        var _pruneVisited = new W.WeakSet();
         function deepPruneAds(obj, depth) {
             if (!obj || typeof obj !== 'object' || (depth || 0) > 12) return false;
+            if (_pruneVisited.has(obj)) return false;
+            _pruneVisited.add(obj);
             // Skip trivially small objects (0-1 keys can't contain ad renderer pairs)
             var keys = W.Array.isArray(obj) ? null : W.Object.keys(obj);
             if (keys && keys.length < 2) return false;
@@ -186,6 +189,7 @@
         }
 
         function pruneObject(obj) {
+            _pruneVisited = new W.WeakSet();
             if (!obj || typeof obj !== 'object') return false;
             var pruned = false;
             for (var i = 0; i < PRUNE_KEYS.length; i++) { if (deleteNested(obj, PRUNE_KEYS[i])) pruned = true; }
@@ -942,7 +946,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.6.2';
+    const YTKIT_VERSION = '2.6.3';
 
     // ── Z-Index Hierarchy ──
     const Z = {
@@ -1038,10 +1042,10 @@
         _flush() {
             this._saveTimeout = null;
             const toSave = [...this._dirty];
-            this._dirty.clear();
             for (const key of toSave) {
                 try {
                     GM_setValue(key, this._cache[key]);
+                    this._dirty.delete(key);
                 } catch (e) {
                     console.error('[YTKit Storage] Failed to save:', key, e);
                 }
@@ -2168,10 +2172,11 @@
 
         load() {
             let savedSettings = StorageManager.get('ytSuiteSettings', {});
+            const storedVersion = savedSettings._settingsVersion;
             savedSettings = this._migrate(savedSettings);
             const merged = { ...this.defaults, ...savedSettings, _settingsVersion: this.SETTINGS_VERSION };
             // Persist migrated settings if version changed
-            if ((StorageManager.get('ytSuiteSettings', {}))._settingsVersion !== this.SETTINGS_VERSION) {
+            if (storedVersion !== this.SETTINGS_VERSION) {
                 this.save(merged);
             }
             return merged;
@@ -6528,7 +6533,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _copyURL() {
                 navigator.clipboard.writeText(window.location.href).then(() => {
                     showToast('URL copied to clipboard', '#22c55e');
-                });
+                }).catch(() => { showToast('Clipboard access denied', '#ef4444'); });
             },
 
             _copyURLAtTime() {
@@ -6539,7 +6544,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     url.searchParams.set('t', t + 's');
                     navigator.clipboard.writeText(url.toString()).then(() => {
                         showToast(`URL copied at ${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`, '#22c55e');
-                    });
+                    }).catch(() => { showToast('Clipboard access denied', '#ef4444'); });
                 } else {
                     this._copyURL();
                 }
@@ -6550,7 +6555,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (videoId) {
                     navigator.clipboard.writeText(videoId).then(() => {
                         showToast('Video ID copied: ' + videoId, '#22c55e');
-                    });
+                    }).catch(() => { showToast('Clipboard access denied', '#ef4444'); });
                 }
             },
 
@@ -9882,6 +9887,7 @@ pause
         doc.addEventListener('change', (e) => {
             if (e.target.matches('.ytkit-feature-cb')) {
                 const card = e.target.closest('[data-feature-id]');
+                if (!card) return;
                 const featureId = card.dataset.featureId;
                 const isEnabled = e.target.checked;
 
@@ -10020,6 +10026,7 @@ pause
         doc.addEventListener('input', (e) => {
             if (e.target.matches('.ytkit-input')) {
                 const card = e.target.closest('[data-feature-id]');
+                if (!card) return;
                 const featureId = card.dataset.featureId;
                 appState.settings[featureId] = e.target.value;
                 settingsManager.save(appState.settings);
@@ -10032,6 +10039,7 @@ pause
             // Select dropdown
             if (e.target.matches('.ytkit-select')) {
                 const card = e.target.closest('[data-feature-id]');
+                if (!card) return;
                 const featureId = card.dataset.featureId;
                 const feature = features.find(f => f.id === featureId);
 
@@ -10058,6 +10066,7 @@ pause
             // Range slider
             if (e.target.matches('.ytkit-range')) {
                 const card = e.target.closest('[data-feature-id]');
+                if (!card) return;
                 const featureId = card.dataset.featureId;
                 const feature = features.find(f => f.id === featureId);
                 const settingKey = feature?.settingKey || featureId;
@@ -10076,6 +10085,7 @@ pause
             // Color picker
             if (e.target.matches('[id^="ytkit-color-"]')) {
                 const card = e.target.closest('[data-feature-id]');
+                if (!card) return;
                 const featureId = card.dataset.featureId;
                 const feature = features.find(f => f.id === featureId);
                 const settingKey = feature?.settingKey || featureId;
@@ -10601,6 +10611,9 @@ pause
                     visited.add(f.id);
                     if (f.parentId && idMap.has(f.parentId)) {
                         visit(idMap.get(f.parentId));
+                    }
+                    if (f.dependsOn && idMap.has(f.dependsOn)) {
+                        visit(idMap.get(f.dependsOn));
                     }
                     sorted.push(f);
                 };
