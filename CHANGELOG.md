@@ -4,6 +4,14 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.6.6] - Comment Enhancements Cleanup
+
+### Removed
+- **Collapse replies button** — Removed the per-thread collapse/show replies toggle entirely
+- **Cold/warm heat indicators** — Heat indicators now only appear on comments with 1K+ likes (hot/fire tiers); removed the low-value cold (<100) and warm (100-999) tiers
+
+---
+
 ## [2.6.5] - Survey Spam Blocked
 
 ### Added
