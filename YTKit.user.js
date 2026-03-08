@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      2.6.6
+// @version      2.6.7
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -948,7 +948,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.6.6';
+    const YTKIT_VERSION = '2.6.7';
 
     // ── Z-Index Hierarchy ──
     const Z = {
@@ -2142,6 +2142,7 @@
             titleNormalization: false,
             watchProgress: false,
             disableSeekPreview: true,
+            disableAutoplay: true,
 
         },
 
@@ -7039,6 +7040,48 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
              .ytp-tooltip.ytp-preview .ytp-tooltip-image { display: none !important; }
              .ytp-storyboard-framepreview { display: none !important; }
              .ytp-inline-preview-ui { display: none !important; }`),
+
+        {
+            id: 'disableAutoplay',
+            name: 'Disable Autoplay Next',
+            description: 'Prevent YouTube from automatically playing the next video when the current one ends',
+            group: 'Video Player',
+            icon: 'circle-stop',
+            _handler: null,
+            _navRuleId: 'disableAutoplayNav',
+            _ensureOff() {
+                // Turn off YouTube's native autoplay toggle
+                const toggle = document.querySelector('.ytp-autonav-toggle-button');
+                if (toggle && toggle.getAttribute('aria-checked') === 'true') {
+                    toggle.click();
+                }
+            },
+            init() {
+                this._handler = () => {
+                    const vid = document.querySelector('video.html5-main-video');
+                    if (!vid) return;
+                    // Cancel any pending navigation by pausing immediately
+                    setTimeout(() => {
+                        if (vid.ended) vid.pause();
+                    }, 0);
+                };
+                this._ensureOff();
+                document.addEventListener('yt-navigate-finish', () => this._ensureOff());
+                const player = document.getElementById('movie_player');
+                if (player) player.addEventListener('ended', this._handler, true);
+                addNavigateRule(this._navRuleId, () => {
+                    this._ensureOff();
+                    const p = document.getElementById('movie_player');
+                    if (p) p.addEventListener('ended', this._handler, true);
+                });
+            },
+            destroy() {
+                const player = document.getElementById('movie_player');
+                if (player && this._handler) player.removeEventListener('ended', this._handler, true);
+                removeNavigateRule(this._navRuleId);
+                this._handler = null;
+            }
+        },
 
         // ─── Playback Features ───
         {

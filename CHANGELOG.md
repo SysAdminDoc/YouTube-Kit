@@ -4,6 +4,13 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.6.7] - Disable Autoplay Next
+
+### Added
+- **Disable Autoplay Next** — New feature (enabled by default) that prevents YouTube from automatically playing the next suggested video when the current one ends. Turns off YouTube's native autoplay toggle and cancels pending navigation on video end
+
+---
+
 ## [2.6.6] - Comment Enhancements Cleanup
 
 ### Removed

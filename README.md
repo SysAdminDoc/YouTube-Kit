@@ -5,7 +5,7 @@
 <h1 align="center">YTKit: YouTube Customization Suite</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.6.6-ff4e45?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.6.7-ff4e45?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/platform-Tampermonkey%20%7C%20Violentmonkey-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/YouTube-Desktop-ff0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube">
