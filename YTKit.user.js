@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      2.6.5
+// @version      2.6.6
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -948,7 +948,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.6.5';
+    const YTKIT_VERSION = '2.6.6';
 
     // ── Z-Index Hierarchy ──
     const Z = {
@@ -5084,25 +5084,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         margin-left: 4px; vertical-align: baseline;
                         font-weight: 600; letter-spacing: 0.02em;
                     }
-                    .ytkit-heat-cold { color: rgba(255,255,255,0.2); }
-                    .ytkit-heat-warm { color: #f59e0b; background: rgba(245,158,11,0.08); }
                     .ytkit-heat-hot { color: #ef4444; background: rgba(239,68,68,0.1); }
                     .ytkit-heat-fire { color: #ff6b6b; background: rgba(255,107,107,0.12); text-shadow: 0 0 6px rgba(255,107,107,0.3); }
-                    /* Collapse replies button */
-                    .ytkit-collapse-replies {
-                        display: inline-flex; align-items: center; gap: 4px;
-                        padding: 3px 8px; margin: 4px 0 2px 20px;
-                        font-size: 11px; font-weight: 500;
-                        color: rgba(var(--ytkit-accent-rgb),0.5); background: rgba(var(--ytkit-accent-rgb),0.04);
-                        border: none; border-radius: 4px; cursor: pointer;
-                        transition: all 0.15s;
-                    }
-                    .ytkit-collapse-replies:hover {
-                        color: rgba(var(--ytkit-accent-rgb),0.9); background: rgba(var(--ytkit-accent-rgb),0.1);
-                    }
-                    .ytkit-collapse-replies.collapsed + ytd-comment-replies-renderer {
-                        display: none !important;
-                    }
                 `;
                 this._styleElement = injectStyle(css, this.id, true);
 
@@ -5132,33 +5115,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                             else if (lower.includes('m')) count = parseFloat(lower) * 1000000;
                             else count = parseInt(voteText.replace(/,/g, ''), 10) || 0;
 
-                            if (count > 0) {
+                            if (count >= 1000) {
                                 const heat = document.createElement('span');
                                 heat.className = 'ytkit-heat-indicator';
                                 if (count >= 10000) { heat.classList.add('ytkit-heat-fire'); heat.textContent = voteText; }
-                                else if (count >= 1000) { heat.classList.add('ytkit-heat-hot'); heat.textContent = voteText; }
-                                else if (count >= 100) { heat.classList.add('ytkit-heat-warm'); heat.textContent = voteText; }
-                                else { heat.classList.add('ytkit-heat-cold'); heat.textContent = voteText; }
+                                else { heat.classList.add('ytkit-heat-hot'); heat.textContent = voteText; }
                                 const timeEl = comment.querySelector('#published-time-text, .published-time-text');
                                 if (timeEl && !comment.querySelector('.ytkit-heat-indicator')) timeEl.after(heat);
                             }
                         }
                     });
 
-                    // Collapse-all-replies toggle per thread
-                    document.querySelectorAll('ytd-comment-thread-renderer:not([data-ytkit-collapse])').forEach(thread => {
-                        thread.dataset.ytkitCollapse = '1';
-                        const repliesRenderer = thread.querySelector('ytd-comment-replies-renderer');
-                        if (!repliesRenderer) return;
-                        const btn = document.createElement('button');
-                        btn.className = 'ytkit-collapse-replies';
-                        btn.textContent = 'Collapse replies';
-                        btn.addEventListener('click', () => {
-                            btn.classList.toggle('collapsed');
-                            btn.textContent = btn.classList.contains('collapsed') ? 'Show replies' : 'Collapse replies';
-                        });
-                        repliesRenderer.before(btn);
-                    });
                 };
 
                 addMutationRule(this.id, processCommentEnhancements);
@@ -5168,8 +5135,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._styleElement?.remove(); this._styleElement = null;
                 document.querySelectorAll('[data-ytkit-enhanced]').forEach(el => delete el.dataset.ytkitEnhanced);
                 document.querySelectorAll('[data-ytkit-creator]').forEach(el => delete el.dataset.ytkitCreator);
-                document.querySelectorAll('[data-ytkit-collapse]').forEach(el => delete el.dataset.ytkitCollapse);
-                document.querySelectorAll('.ytkit-heat-indicator, .ytkit-collapse-replies').forEach(el => el.remove());
+                document.querySelectorAll('.ytkit-heat-indicator').forEach(el => el.remove());
             }
         },
         cssFeature('hideLiveChatEngagement', 'Hide Chat Engagement', 'Remove engagement prompts in live chat', 'Clutter', 'message-circle-off',
