@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      2.6.4
+// @version      2.6.5
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -669,6 +669,8 @@
         'yt-slimline-survey-view-model',
         'lockup-attachments-view-model:has(yt-slimline-survey-view-model)',
         '.ytSlimlineSurveyViewModelHost',
+        'ytd-inline-survey-renderer',
+        'ytd-single-option-survey-renderer',
         '.ytwTopLandscapeImageLayoutViewModelHost',
         '.ytwFeedAdMetadataViewModelHost',
         '.ytwAdButtonViewModelHost',
@@ -946,7 +948,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.6.4';
+    const YTKIT_VERSION = '2.6.5';
 
     // ── Z-Index Hierarchy ──
     const Z = {
