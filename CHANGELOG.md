@@ -4,6 +4,13 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.6.5] - Survey Spam Blocked
+
+### Added
+- **Survey cosmetic hiding** — Block `ytd-inline-survey-renderer` and `ytd-single-option-survey-renderer` spam popups via the ad blocker cosmetic selector list
+
+---
+
 ## [2.6.4] - Seek Preview Fix
 
 ### Fixed
