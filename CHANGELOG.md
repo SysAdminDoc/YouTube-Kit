@@ -4,6 +4,89 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.7.5] - Feature Cleanup
+
+### Removed
+
+- **Playback category** — Removed entire Playback settings group and all 5 features:
+  - Mousewheel Speed Control (Shift+scroll speed adjust)
+  - Video Screenshot (S key frame capture)
+  - Return YouTube Dislike (API-based dislike counts)
+  - Cinema Mode (dim overlay with C key)
+  - A-B Loop (bracket-key loop points)
+- **Fit to Window** — Removed redundant player sizing feature (Theater Split handles this)
+- **RYD API connection** — Removed `@connect returnyoutubedislikeapi.com` from userscript header
+- **Conflict rules** — Removed fitPlayerToWindow vs stickyVideo conflict entries
+
+### Changed
+
+- **Expand Video Width** — Simplified CSS selector (no longer excludes removed fit-to-window class)
+
+---
+
+## [2.7.4] - Userscript Research & Hardening
+
+### Changed
+
+- **Shorts redirect** — Switched from `location.href` to `location.replace()` so redirected Shorts don't create back-button history entries (pattern from popular redirect scripts)
+- **SPA navigation** — Added `yt-page-data-updated` as backup event alongside `yt-navigate-finish`, catching edge cases where navigation finish fires before DOM is ready (pattern from YouTube Alchemy)
+- **Return YouTube Dislike formatting** — Replaced manual K/M/B formatter with `Intl.NumberFormat` compact notation for locale-aware dislike counts (e.g. "1,2K" in French, "1.2K" in English)
+- **Return YouTube Dislike button detection** — Replaced single CSS selector with multi-layout fallback chain (6 selectors) that handles YouTube's segmented button, toggle button, and menu container layouts (pattern from official RYD script)
+
+### Fixed
+
+- **v2.7.2** — Added Disable Seek Preview as CSS-only feature
+- **v2.7.3** — Upgraded Disable Seek Preview to full JS+CSS feature with MutationObserver tooltip detection and mousemove gesture blocking (CSS-only approach was insufficient)
+
+---
+
+## [2.7.1] - Debloat & Build Pipeline
+
+### Changed
+
+- **Color theme compression** — Replaced 21-property theme objects with comma-separated hex strings + `_getTheme()` decompressor, cutting theme data by ~60%
+- **Theater Split deduplication** — Extracted `_setStyles`, `_removeStyles`, `_setupChat` helpers; simplified live/VOD/standard branching (~43 lines saved)
+- **Settings sidebar deduplication** — Extracted `makeNavBtn` and `addDragReorder` helpers for sidebar button creation (~65 lines saved)
+
+### Added
+
+- **build.js** — Node.js build script that strips comments and collapses whitespace for production builds (25% size reduction: 607KB -> 455KB)
+
+---
+
+## [2.7.0] - Progress Bar & Seek Fix
+
+### Fixed
+
+- **Seek bar completely broken** — Removed all CSS dimension overrides (height, margin-top, width) on YouTube's progress bar container, progress bar, and progress list that were breaking YouTube's internal seek coordinate calculations
+- **SponsorBlock blocking manual seeks** — Skip loop running at 60fps was fighting with user scrubbing, immediately bouncing playback out of sponsor segments during drag. Added mousedown/mouseup detection on progress bar to pause skip loop while scrubbing, plus 800ms grace period after release
+- **Video going black on window un-maximize** — Added resize event listener to Theater Split overlay that forces video GPU re-composite via will-change toggle when window geometry changes
+- **Theater Split fighting with player controls** — Removed CSS overrides that forced width/left on .ytp-chrome-bottom and .ytp-progress-bar-container, and removed forcePlayerSize code that kept stripping/re-setting those values
+
+### Changed
+
+- **Nyan Cat theme scrubber** — Kept cat.gif on scrubber handle but removed all dimension overrides (width, height, margins) that broke seek hit detection
+- **Removed starfall scrubber pull indicator** — Decorative overlay that contributed to progress bar dimension misalignment
+- **Settings panel padding** — Added small breathing room (4px) to sidebar, nav buttons, feature cards, pane headers, footer, and search container so elements don't ride on borders
+
+---
+
+## [2.6.9] - Ultra-Condensed Settings Panel
+
+### Changed
+
+- **Zero-padding layout** — Header, sidebar, nav buttons, feature cards, pane headers, and footer all use zero vertical padding for maximum density
+- **Responsive breakpoints updated** — All three breakpoints (900px, 700px, 480px) adjusted to match condensed dimensions
+
+### Removed
+
+- **Logo icon** — Removed the red YouTube logo from the settings header
+- **Pane icons** — Removed category icon badges from all pane headers (regular, Ad Blocker, Video Hider)
+- **Status badges** — Removed Active/Off/Enabled/Crashed state badges from feature cards
+- **Recently changed section** — Removed the recently changed pills, tracking function, and event dispatch
+
+---
+
 ## [2.6.7] - Disable Autoplay Next
 
 ### Added

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      2.6.7
+// @version      2.8.0
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -19,7 +19,6 @@
 // @connect      sponsor.ajay.app
 // @connect      raw.githubusercontent.com
 // @connect      cobalt.meowing.de
-// @connect      returnyoutubedislikeapi.com
 // @connect      meowing.de
 // @updateURL    https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js
 // @downloadURL  https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js
@@ -239,18 +238,6 @@
             apply: function(target, thisArg, args) {
                 const req = args[0];
                 const url = typeof req === 'string' ? req : (req instanceof W.Request ? req.url : '');
-                try {
-                    if (url.indexOf('/youtubei/v1/player') !== -1 || url.indexOf('/youtubei/v1/get_watch') !== -1) {
-                        const init = args[1];
-                        if (init && init.body && typeof init.body === 'string') {
-                            const b = origParse(init.body);
-                            if (b && b.context && b.context.client && b.context.client.clientName === 'WEB') {
-                                b.context.client.clientScreen = 'CHANNEL';
-                                args[1] = W.Object.assign({}, init, { body: W.JSON.stringify(b) });
-                            }
-                        }
-                    }
-                } catch(e) {}
                 if (!matchesIntercept(url)) return W.Reflect.apply(target, thisArg, args);
                 return W.Reflect.apply(target, thisArg, args).then(function(resp) {
                     if (!resp || !resp.ok) return resp;
@@ -274,15 +261,6 @@
             return origXHROpen.apply(this, arguments);
         });
         safeOverride(W.XMLHttpRequest.prototype, 'send', function(body) {
-            if (this._ytab_modify && body && typeof body === 'string') {
-                try {
-                    const b = origParse(body);
-                    if (b && b.context && b.context.client && b.context.client.clientName === 'WEB') {
-                        b.context.client.clientScreen = 'CHANNEL';
-                        body = W.JSON.stringify(b);
-                    }
-                } catch(e) {}
-            }
             if (!matchesIntercept(this._ytab_url)) return origXHRSend.call(this, body);
             const xhr = this;
             xhr.addEventListener('readystatechange', function() {
@@ -948,7 +926,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.6.7';
+    const YTKIT_VERSION = '2.8.0';
 
     // ── Z-Index Hierarchy ──
     const Z = {
@@ -1947,6 +1925,9 @@
         // Primary: yt-navigate-finish (covers 99.9% of YouTube SPA navigations)
         document.addEventListener('yt-navigate-finish', debouncedRunNavigateRules);
 
+        // Backup: yt-page-data-updated fires when YouTube refreshes page data (catches edge cases yt-navigate-finish misses)
+        document.addEventListener('yt-page-data-updated', debouncedRunNavigateRules);
+
         // Fallback: popstate for browser back/forward
         window.addEventListener('popstate', debouncedRunNavigateRules);
 
@@ -2046,7 +2027,6 @@
             hideMembersOnly: true,
             hideNewsHome: true,
             hidePlaylistsHome: true,
-            fitPlayerToWindow: false,
             hideRelatedVideos: true,
             expandVideoWidth: true,
             floatingLogoOnWatch: true,
@@ -2073,12 +2053,6 @@
             hideQualityPopup: true,
             hideMerchShelf: true,
             hideAiSummary: true,
-            autoResumePosition: true,
-            gpuContextRecovery: true,
-            autoResumeThreshold: 15, // seconds from start before saving position
-            autoSkipStillWatching: true,
-            playbackSpeedPresets: false,
-            defaultPlaybackSpeed: 1,
 
             hideDescriptionExtras: true,
             hideHashtags: true,
@@ -2132,17 +2106,10 @@
             sidebarOrder: null,
 
             // v2.4.0 features
-            mousewheelSpeed: true,
             // mousewheelVolume removed in v2.5.0 (interfered with page scrolling)
-            videoScreenshot: true,
-            returnYoutubeDislike: true,
-            cinemaMode: false,
-            abLoop: false,
             forceH264: false,
             titleNormalization: false,
             watchProgress: false,
-            disableSeekPreview: true,
-            disableAutoplay: true,
 
         },
 
@@ -2398,43 +2365,12 @@
 
     // ─── Conflict Detection Map ───
     const CONFLICT_MAP = {
-        fitPlayerToWindow: { conflicts: ['stickyVideo'], reason: 'Both control player dimensions' },
-        stickyVideo: { conflicts: ['fitPlayerToWindow'], reason: 'Theater Split overrides Fit Player' },
         hideRelatedVideos: { conflicts: [], note: 'expandVideoWidth depends on this' },
         hideSidebar: { conflicts: ['hiddenChatElementsManager'], reason: 'Sidebar hidden removes chat access' },
         removeAllShorts: { conflicts: ['redirectShorts'], reason: 'Removed shorts cannot be redirected' },
     };
 
-    // ─── Recently Changed Tracking ───
-    const _recentlyChanged = [];
-    const MAX_RECENT = 6;
-    function trackRecentChange(featureId, enabled) {
-        const idx = _recentlyChanged.findIndex(r => r.id === featureId);
-        if (idx !== -1) _recentlyChanged.splice(idx, 1);
-        _recentlyChanged.unshift({ id: featureId, enabled, time: Date.now() });
-        if (_recentlyChanged.length > MAX_RECENT) _recentlyChanged.length = MAX_RECENT;
-        // Update the recently changed section if panel is open
-        document.dispatchEvent(new CustomEvent('ytkit-recent-changed'));
-    }
 
-    // ─── Feature State Helper ───
-    function getFeatureStatus(f) {
-        if (f._arrayKey) return { status: 'sub', label: '', color: '' };
-        if (f.type === 'select' || f.type === 'color' || f.type === 'range' || f.type === 'textarea' || f.type === 'info') return { status: 'config', label: '', color: '' };
-        const isEnabled = appState.settings[f.id];
-        if (!isEnabled) return { status: 'off', label: 'Off', color: '#71717a' };
-        const crashCount = typeof _featureCrashCounts !== 'undefined' ? (_featureCrashCounts[f.id] || 0) : 0;
-        if (crashCount >= 3) return { status: 'crashed', label: 'Crashed', color: '#ef4444' };
-        if (f.dependsOn && !appState.settings[f.dependsOn]) {
-            const dep = features.find(df => df.id === f.dependsOn);
-            return { status: 'dep', label: 'Needs: ' + (dep?.name || f.dependsOn), color: '#f59e0b' };
-        }
-        if (f.pages && f.pages.length > 0 && !f.pages.includes(appState.currentPage)) {
-            return { status: 'wrong-page', label: 'Wrong page', color: '#f59e0b' };
-        }
-        if (f._initialized) return { status: 'active', label: 'Active', color: '#22c55e' };
-        return { status: 'enabled', label: 'Enabled', color: '#3b82f6' };
-    }
 
     // ─── Feature Preview Descriptions ───
     const FEATURE_PREVIEWS = {
@@ -2448,7 +2384,6 @@
         chatStyleComments: 'Comments get compact card layout with inline vote badges',
         removeAllShorts: 'All shorts links and shelf renderers hidden site-wide',
         redirectShorts: 'Shorts URLs rewritten to /watch?v= for standard player',
-        fitPlayerToWindow: 'Player goes position:absolute, 100vw x 100vh, masthead hidden',
         stickyVideo: 'Full-screen player with scroll-triggered side-by-side comments',
         hideRelatedVideos: 'Secondary panel hidden, primary stretches to full width',
         expandVideoWidth: 'Primary column gets max-width:none when sidebar is hidden',
@@ -2456,21 +2391,20 @@
         skipSponsors: 'SponsorBlock API integration with auto-skip by category',
         autoMaxResolution: 'Forces highest available resolution on video load',
         autoExpandComments: 'Removes comment truncation, clicks Read More automatically',
-        autoResumePosition: 'Saves playback position, resumes on revisit (>15s threshold)',
         commentEnhancements: 'Highlights creator replies, shows like heat, collapse toggle',
     };
 
     const features = [
         // ─── Interface ───
-        cssFeature('hideCreateButton', 'Hide Create Button', 'Remove the "Create" button from the header toolbar', 'Interface', 'plus-circle',
+        cssFeature('hideCreateButton', 'Hide Create Button', 'Remove the "Create" button from the header toolbar', 'Home / Subscriptions', 'plus-circle',
             'ytd-masthead ytd-button-renderer:has(button[aria-label="Create"])'),
-        cssFeature('hideVoiceSearch', 'Hide Voice Search', 'Remove the microphone icon from the search bar', 'Interface', 'mic-off',
+        cssFeature('hideVoiceSearch', 'Hide Voice Search', 'Remove the microphone icon from the search bar', 'Home / Subscriptions', 'mic-off',
             '#voice-search-button'),
         {
             id: 'logoToSubscriptions',
             name: 'Logo → Subscriptions',
             description: 'Clicking the YouTube logo goes to your subscriptions feed',
-            group: 'Interface',
+            group: 'Home / Subscriptions',
             icon: 'home',
             _styleEl: null,
             _relinkLogo() {
@@ -2491,13 +2425,13 @@
                 if (logoLink) logoLink.href = '/';
             }
         },
-        cssFeature('widenSearchBar', 'Widen Search Bar', 'Expand the search bar to use more available space', 'Interface', 'search',
+        cssFeature('widenSearchBar', 'Widen Search Bar', 'Expand the search bar to use more available space', 'Home / Subscriptions', 'search',
             `ytd-masthead yt-searchbox { margin-left: -180px; margin-right: -300px; }`),
         {
             id: 'subscriptionsGrid',
             name: 'Subscriptions Grid',
             description: 'Use a denser grid layout on the subscriptions page',
-            group: 'Interface',
+            group: 'Home / Subscriptions',
             icon: 'layout-grid',
             pages: [PageTypes.SUBSCRIPTIONS],
             _styleElement: null,
@@ -2511,7 +2445,7 @@
             id: 'homepageGridAlign',
             name: 'Homepage Grid Align',
             description: 'Force uniform thumbnail grid on the homepage — prevents misaligned rows caused by variable title/metadata heights',
-            group: 'Interface',
+            group: 'Home / Subscriptions',
             icon: 'layout-grid',
             pages: [PageTypes.HOME],
             _styleElement: null,
@@ -2525,7 +2459,7 @@
             id: 'styledFilterChips',
             name: 'Styled Filter Chips',
             description: 'Uniform, polished filter chips on the homepage with glassmorphism and smooth hover effects',
-            group: 'Interface',
+            group: 'Theme',
             icon: 'sliders-horizontal',
             pages: [PageTypes.HOME],
             _styleElement: null,
@@ -2539,7 +2473,7 @@
             id: 'hideSidebar',
             name: 'Hide Sidebar',
             description: 'Remove the left navigation sidebar completely',
-            group: 'Interface',
+            group: 'Home / Subscriptions',
             icon: 'sidebar',
             _styleElement: null,
             init() {
@@ -2558,7 +2492,7 @@
             id: 'uiStyleManager',
             name: 'UI Style',
             description: 'Choose rounded or square UI elements',
-            group: 'Appearance',
+            group: 'Theme',
             icon: 'square',
             type: 'select',
             options: {
@@ -2573,7 +2507,7 @@
                 if (style === 'square') {
                     const css = `
                         /* Nuclear squarify — broad selector with surgical exclusions */
-                        *:not(.ytp-spinner-circle):not(.ytp-spinner-dot):not(.ytp-ce-covering-overlay):not(svg):not(circle):not(path):not(use) {
+                        *:not(.ytp-spinner-circle):not(.ytp-spinner-dot):not(.ytp-ce-covering-overlay):not(.ytp-scrubber-button):not(.html5-scrubber-button):not(svg):not(circle):not(path):not(use) {
                             border-radius: 0 !important;
                         }
                     `;
@@ -2587,7 +2521,7 @@
             id: 'colorThemeManager',
             name: 'Color Theme',
             description: 'Apply a color palette across YouTube (dark mode only)',
-            group: 'Appearance',
+            group: 'Theme',
             icon: 'palette',
             type: 'select',
             options: {
@@ -2615,61 +2549,23 @@
                 return '#' + [r,g,b].map(c => c.toString(16).padStart(2,'0')).join('');
             },
 
-            _themes: {
-                'catppuccin-mocha': {
-                    base: '#1e1e2e', mantle: '#181825', crust: '#11111b',
-                    surface0: '#313244', surface1: '#45475a', surface2: '#585b70',
-                    text: '#cdd6f4', subtext0: '#a6adc8', subtext1: '#bac2de',
-                    overlay0: '#6c7086', overlay1: '#7f849c', overlay2: '#9399b2',
-                    accent: '#cba6f7', red: '#f38ba8', green: '#a6e3a1',
-                    blue: '#89b4fa', sapphire: '#74c7ec', peach: '#fab387',
-                    yellow: '#f9e2af', teal: '#94e2d5', lavender: '#b4befe'
-                },
-                'styled-dark': {
-                    base: '#090909', mantle: '#0c0c0c', crust: '#050505',
-                    surface0: '#121212', surface1: '#151515', surface2: '#202020',
-                    text: '#cccccc', subtext0: '#aaaaaa', subtext1: '#888888',
-                    overlay0: '#353535', overlay1: '#454545', overlay2: '#555555',
-                    accent: '#3ea6ff', red: '#ff0000', green: '#0c8a1d',
-                    blue: '#1563d7', sapphire: '#157ef5', peach: '#ff6600',
-                    yellow: '#d6e22b', teal: '#00bfa5', lavender: '#7f9cf3'
-                },
-                'dracula': {
-                    base: '#282a36', mantle: '#21222c', crust: '#191a21',
-                    surface0: '#343746', surface1: '#3e4154', surface2: '#4a4d62',
-                    text: '#f8f8f2', subtext0: '#bfbfbf', subtext1: '#a0a0a0',
-                    overlay0: '#6272a4', overlay1: '#7283b5', overlay2: '#8294c6',
-                    accent: '#bd93f9', red: '#ff5555', green: '#50fa7b',
-                    blue: '#8be9fd', sapphire: '#6272a4', peach: '#ffb86c',
-                    yellow: '#f1fa8c', teal: '#8be9fd', lavender: '#bd93f9'
-                },
-                'nord': {
-                    base: '#2e3440', mantle: '#272c36', crust: '#242933',
-                    surface0: '#3b4252', surface1: '#434c5e', surface2: '#4c566a',
-                    text: '#eceff4', subtext0: '#d8dee9', subtext1: '#c0c8d8',
-                    overlay0: '#616e88', overlay1: '#6e7d99', overlay2: '#7b8ca6',
-                    accent: '#88c0d0', red: '#bf616a', green: '#a3be8c',
-                    blue: '#81a1c1', sapphire: '#5e81ac', peach: '#d08770',
-                    yellow: '#ebcb8b', teal: '#8fbcbb', lavender: '#b48ead'
-                },
-                'gruvbox': {
-                    base: '#282828', mantle: '#1d2021', crust: '#141617',
-                    surface0: '#3c3836', surface1: '#504945', surface2: '#665c54',
-                    text: '#ebdbb2', subtext0: '#d5c4a1', subtext1: '#bdae93',
-                    overlay0: '#7c6f64', overlay1: '#8c7e73', overlay2: '#a89984',
-                    accent: '#fe8019', red: '#fb4934', green: '#b8bb26',
-                    blue: '#83a598', sapphire: '#458588', peach: '#d65d0e',
-                    yellow: '#fabd2f', teal: '#8ec07c', lavender: '#d3869b'
-                },
-                'tokyo-night': {
-                    base: '#1a1b26', mantle: '#16161e', crust: '#12121a',
-                    surface0: '#24283b', surface1: '#2f3447', surface2: '#3b4261',
-                    text: '#c0caf5', subtext0: '#a9b1d6', subtext1: '#9aa5ce',
-                    overlay0: '#565f89', overlay1: '#626a94', overlay2: '#6e76a0',
-                    accent: '#7aa2f7', red: '#f7768e', green: '#9ece6a',
-                    blue: '#7dcfff', sapphire: '#2ac3de', peach: '#ff9e64',
-                    yellow: '#e0af68', teal: '#73daca', lavender: '#bb9af7'
-                }
+            // Theme palettes: keys=[base,mantle,crust,surface0,surface1,surface2,text,subtext0,subtext1,overlay0,overlay1,overlay2,accent,red,green,blue,sapphire,peach,yellow,teal,lavender]
+            _themeKeys: ['base','mantle','crust','surface0','surface1','surface2','text','subtext0','subtext1','overlay0','overlay1','overlay2','accent','red','green','blue','sapphire','peach','yellow','teal','lavender'],
+            _themeData: {
+                'catppuccin-mocha': '1e1e2e,181825,11111b,313244,45475a,585b70,cdd6f4,a6adc8,bac2de,6c7086,7f849c,9399b2,cba6f7,f38ba8,a6e3a1,89b4fa,74c7ec,fab387,f9e2af,94e2d5,b4befe',
+                'styled-dark': '090909,0c0c0c,050505,121212,151515,202020,cccccc,aaaaaa,888888,353535,454545,555555,3ea6ff,ff0000,0c8a1d,1563d7,157ef5,ff6600,d6e22b,00bfa5,7f9cf3',
+                'dracula': '282a36,21222c,191a21,343746,3e4154,4a4d62,f8f8f2,bfbfbf,a0a0a0,6272a4,7283b5,8294c6,bd93f9,ff5555,50fa7b,8be9fd,6272a4,ffb86c,f1fa8c,8be9fd,bd93f9',
+                'nord': '2e3440,272c36,242933,3b4252,434c5e,4c566a,eceff4,d8dee9,c0c8d8,616e88,6e7d99,7b8ca6,88c0d0,bf616a,a3be8c,81a1c1,5e81ac,d08770,ebcb8b,8fbcbb,b48ead',
+                'gruvbox': '282828,1d2021,141617,3c3836,504945,665c54,ebdbb2,d5c4a1,bdae93,7c6f64,8c7e73,a89984,fe8019,fb4934,b8bb26,83a598,458588,d65d0e,fabd2f,8ec07c,d3869b',
+                'tokyo-night': '1a1b26,16161e,12121a,24283b,2f3447,3b4261,c0caf5,a9b1d6,9aa5ce,565f89,626a94,6e76a0,7aa2f7,f7768e,9ece6a,7dcfff,2ac3de,ff9e64,e0af68,73daca,bb9af7',
+            },
+            _getTheme(name) {
+                const data = this._themeData[name];
+                if (!data) return null;
+                const vals = data.split(',');
+                const t = {};
+                this._themeKeys.forEach((k, i) => t[k] = '#' + vals[i]);
+                return t;
             },
 
             // Raw CSS themes (decorative/cosmetic themes that bypass the variable system)
@@ -2688,48 +2584,9 @@
 
 /* Nyan Cat scrubber */
 .html5-scrubber-button, .ytp-scrubber-button {
-    background: url("https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/refs/heads/main/assets/cat.gif") !important;
-    width: 34px !important;
-    height: 21px !important;
+    background: url("https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/refs/heads/main/assets/cat.gif") no-repeat center / contain !important;
     border: none !important;
-    margin-left: -18px !important;
-    margin-top: 0px !important;
 }
-.ytp-progress-bar-container:hover .ytp-scrubber-button,
-.ytp-progress-bar-container:hover .ytp-load-progress {
-    image-rendering: pixelated;
-}
-.html5-progress-bar-container, .ytp-progress-bar-container {
-    height: 12px !important;
-}
-.html5-progress-bar, .ytp-progress-bar {
-    margin-top: 12px !important;
-}
-.html5-progress-list, .ytp-progress-list,
-.video-ads .html5-progress-list.html5-ad-progress-list,
-.video-ads .ytp-progress-list.ytp-ad-progress-list {
-    height: 12px !important;
-}
-
-/* Starfall scrubber pull indicator */
-.ytp-scrubber-pull-indicator::after {
-    display: block;
-    position: inherit;
-    content: '';
-    top: -13px;
-    left: -13px;
-    opacity: 1;
-    width: 40px;
-    height: 40px;
-    border: none;
-    background-image: url(https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/refs/heads/main/assets/starfall.gif);
-    background-repeat: no-repeat;
-    background-position: center;
-    background-size: 100%;
-    transform: rotate(94deg);
-    border-radius: 81px;
-}
-div.ytp-scrubber-pull-indicator { background-color: transparent; }
 
 /* Volume slider */
 .ytp-volume-slider-track { background: #0C4177 !important; }
@@ -2978,24 +2835,25 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     return;
                 }
                 // Variable-based color themes
-                if (!this._themes[theme]) return;
-                const css = this._buildCSS(this._themes[theme]);
+                const t = this._getTheme(theme);
+                if (!t) return;
+                const css = this._buildCSS(t);
                 this._styleElement = injectStyle(css, this.id, true);
             },
 
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
         },
-        cssFeature('noAmbientMode', 'Disable Ambient Mode', 'Turn off the glowing background effect that matches video colors', 'Appearance', 'sun-dim',
+        cssFeature('noAmbientMode', 'Disable Ambient Mode', 'Turn off the glowing background effect that matches video colors', 'Theme', 'sun-dim',
             `#cinematics, #cinematics-container,
                     .ytp-autonav-endscreen-upnext-cinematics,
                     #player-container.ytd-watch-flexy::before { display: none !important; }`),
-        cssFeature('compactLayout', 'Compact Layout', 'Reduce spacing and padding for a denser interface', 'Appearance', 'minimize',
+        cssFeature('compactLayout', 'Compact Layout', 'Reduce spacing and padding for a denser interface', 'Theme', 'minimize',
             `ytd-rich-grid-renderer { --ytd-rich-grid-row-padding: 0 !important; }
                     ytd-rich-item-renderer { margin-bottom: 8px !important; }
                     #contents.ytd-rich-grid-renderer { padding-top: 8px !important; }
                     ytd-two-column-browse-results-renderer { padding: 8px !important; }
                     ytd-watch-flexy[flexy] #primary.ytd-watch-flexy { padding-top: 12px !important; }`),
-        cssFeature('thinScrollbar', 'Thin Scrollbar', 'Use a slim, unobtrusive scrollbar', 'Appearance', 'grip-vertical',
+        cssFeature('thinScrollbar', 'Thin Scrollbar', 'Use a slim, unobtrusive scrollbar', 'Theme', 'grip-vertical',
             `*::-webkit-scrollbar { width: 5px !important; height: 5px !important; }
                     *::-webkit-scrollbar-track { background: transparent !important; }
                     *::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2) !important; border-radius: 10px !important; }
@@ -3005,7 +2863,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'watchPageRestyle',
             name: 'Watch Page Restyle',
             description: 'Polished layout for video title, description, and metadata with glassmorphism accents',
-            group: 'Appearance',
+            group: 'Theme',
             icon: 'layout',
             _styleElement: null,
             init() {
@@ -3020,7 +2878,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'chatStyleComments',
             name: 'Refined Comments',
             description: 'Polished card-based comment layout with avatars and clean thread lines',
-            group: 'Appearance',
+            group: 'Theme',
             icon: 'message-square',
             _styleElement: null,
             _observer: null,
@@ -3172,7 +3030,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'removeAllShorts',
             name: 'Remove Shorts',
             description: 'Hide all Shorts videos from feeds and recommendations',
-            group: 'Content',
+            group: 'Home / Subscriptions',
             icon: 'video-off',
             _styleElement: null,
             _observer: null,
@@ -3247,35 +3105,35 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'redirectShorts',
             name: 'Redirect Shorts',
             description: 'Open Shorts in the standard video player',
-            group: 'Content',
+            group: 'Home / Subscriptions',
             icon: 'external-link',
             init() {
                 const redirectRule = () => {
                     if (window.location.pathname.startsWith('/shorts/')) {
-                        window.location.href = window.location.href.replace('/shorts/', '/watch?v=');
+                        window.location.replace(window.location.href.replace('/shorts/', '/watch?v='));
                     }
                 };
                 addNavigateRule(this.id, redirectRule);
             },
             destroy() { removeNavigateRule(this.id); }
         },
-        cssFeature('disablePlayOnHover', 'Disable Hover Preview', 'Stop videos from playing when hovering over thumbnails', 'Content', 'pause',
+        cssFeature('disablePlayOnHover', 'Disable Hover Preview', 'Stop videos from playing when hovering over thumbnails', 'Home / Subscriptions', 'pause',
             `ytd-video-preview, #preview, #mouseover-overlay,
                     ytd-moving-thumbnail-renderer,
                     ytd-thumbnail-overlay-loading-preview-renderer {
                         display: none !important;
                     }`),
-        cssFeature('fullWidthSubscriptions', 'Full-Width Subscriptions', 'Expand the subscription grid to fill the page', 'Content', 'maximize',
+        cssFeature('fullWidthSubscriptions', 'Full-Width Subscriptions', 'Expand the subscription grid to fill the page', 'Home / Subscriptions', 'maximize',
             `ytd-browse[page-subtype="subscriptions"] #grid-container.ytd-two-column-browse-results-renderer {
                         max-width: 100% !important;
                     }`),
-        cssFeature('hideSubscriptionOptions', 'Hide Layout Options', 'Remove the "Latest" header and view toggles on subscriptions', 'Content', 'layout',
+        cssFeature('hideSubscriptionOptions', 'Hide Layout Options', 'Remove the "Latest" header and view toggles on subscriptions', 'Home / Subscriptions', 'layout',
             'ytd-browse[page-subtype="subscriptions"] ytd-rich-section-renderer:has(.grid-subheader)'),
         {
             id: 'videosPerRow',
             name: 'Videos Per Row',
             description: 'Set how many video thumbnails per row (0 = dynamic based on window width)',
-            group: 'Content',
+            group: 'Home / Subscriptions',
             icon: 'grid',
             type: 'select',
             options: { '0': 'Dynamic', '3': '3', '4': '4', '5': '5', '6': '6', '7': '7', '8': '8' },
@@ -3300,17 +3158,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 document.removeEventListener('ytkit-settings-changed', this._settingsHandler);
             }
         },
-        cssFeature('hidePaidContentOverlay', 'Hide Promotion Badges', 'Remove "Includes paid promotion" overlays on thumbnails and watch pages', 'Content', 'badge',
+        cssFeature('hidePaidContentOverlay', 'Hide Promotion Badges', 'Remove "Includes paid promotion" overlays on thumbnails and watch pages', 'Watch Page', 'badge',
             `ytd-paid-content-overlay-renderer, ytm-paid-content-overlay-renderer,
                     .YtmPaidContentOverlayHost, .ytmPaidContentOverlayHost,
                     .ytp-paid-content-overlay, .ytp-paid-content-overlay-link`),
-        cssFeature('hideInfoPanels', 'Hide Info Panels', 'Remove Wikipedia/context info boxes that appear below videos (FEMA, COVID, etc.)', 'Content', 'info-off',
+        cssFeature('hideInfoPanels', 'Hide Info Panels', 'Remove Wikipedia/context info boxes that appear below videos (FEMA, COVID, etc.)', 'Watch Page', 'info-off',
             `#clarify-box,#clarify-box.attached-message,ytd-info-panel-container-renderer,ytd-info-panel-content-renderer,ytd-watch-flexy #clarify-box,ytd-watch-flexy ytd-info-panel-container-renderer,ytd-clarification-renderer,.ytd-info-panel-container-renderer,.ytp-info-panel-preview{display:none !important;}`),
         {
             id: 'redirectToVideosTab',
             name: 'Channels → Videos Tab',
             description: 'Open channel pages directly on the Videos tab',
-            group: 'Content',
+            group: 'Home / Subscriptions',
             icon: 'folder-video',
             _mousedownListener: null,
             init() {
@@ -3337,23 +3195,23 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 removeNavigateRule('channelRedirectorNav');
             }
         },
-        cssFeature('hidePlayables', 'Hide Playables', 'Hide YouTube Playables gaming content from feeds', 'Content', 'gamepad',
+        cssFeature('hidePlayables', 'Hide Playables', 'Hide YouTube Playables gaming content from feeds', 'Home / Subscriptions', 'gamepad',
             `ytd-rich-section-renderer:has([is-playables]) { display: none !important; }`),
-        cssFeature('hideMembersOnly', 'Hide Members Only', 'Hide members-only content from channels', 'Content', 'lock',
+        cssFeature('hideMembersOnly', 'Hide Members Only', 'Hide members-only content from channels', 'Home / Subscriptions', 'lock',
             `ytd-badge-supported-renderer:has([aria-label*="Members only"]),
                     ytd-rich-item-renderer:has([aria-label*="Members only"]),
                     ytd-video-renderer:has([aria-label*="Members only"]) { display: none !important; }`),
-        cssFeature('hideNewsHome', 'Hide News Section', 'Hide news sections from the homepage', 'Content', 'newspaper',
+        cssFeature('hideNewsHome', 'Hide News Section', 'Hide news sections from the homepage', 'Home / Subscriptions', 'newspaper',
             `ytd-rich-section-renderer:has([is-news]),
                     ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[type="news"]) { display: none !important; }`),
-        cssFeature('hidePlaylistsHome', 'Hide Playlist Shelves', 'Hide playlist sections from the homepage', 'Content', 'list-x',
+        cssFeature('hidePlaylistsHome', 'Hide Playlist Shelves', 'Hide playlist sections from the homepage', 'Home / Subscriptions', 'list-x',
             `ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-playlist]),
                     ytd-rich-section-renderer:has([is-mixes]) { display: none !important; }`),
         {
             id: 'hiddenWatchElementsManager',
             name: 'Hide Watch Page Elements',
             description: 'Choose which elements to hide below videos',
-            group: 'Content',
+            group: 'Watch Page',
             icon: 'eye-off',
             isParent: true,
             _styleElement: null,
@@ -3435,12 +3293,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
                 // Auto-generated Content sub-features
-        ...([['joinButton','Join Button','Hide join/membership button'],['askButton','Ask Button','Hide Ask AI button'],['saveButton','Save Button','Hide save to playlist button'],['moreActions','More Actions (...)','Hide more actions menu button'],['askAISection','Ask AI Section','Hide AI section in description'],['podcastSection','Podcast/Course Section','Hide podcast/course section in description'],['transcriptSection','Transcript Section','Hide transcript section in description'],['channelInfoCards','Channel Info Cards','Hide channel info cards in description']].map(([v,n,d])=>({id:'wpHide_'+v,name:n,description:d,group:'Content',icon:'eye-off',isSubFeature:true,parentId:'hiddenWatchElementsManager',_arrayKey:'hiddenWatchElements',_arrayValue:v,init(){},destroy(){}}))),
+        ...([['joinButton','Join Button','Hide join/membership button'],['askButton','Ask Button','Hide Ask AI button'],['saveButton','Save Button','Hide save to playlist button'],['moreActions','More Actions (...)','Hide more actions menu button'],['askAISection','Ask AI Section','Hide AI section in description'],['podcastSection','Podcast/Course Section','Hide podcast/course section in description'],['transcriptSection','Transcript Section','Hide transcript section in description'],['channelInfoCards','Channel Info Cards','Hide channel info cards in description']].map(([v,n,d])=>({id:'wpHide_'+v,name:n,description:d,group:'Watch Page',icon:'eye-off',isSubFeature:true,parentId:'hiddenWatchElementsManager',_arrayKey:'hiddenWatchElements',_arrayValue:v,init(){},destroy(){}}))),
                                                                 {
             id: 'cleanShareUrls',
             name: 'Clean Share URLs',
             description: 'Strip tracking params (si, pp, feature) from copied/shared YouTube links',
-            group: 'Content',
+            group: 'Watch Page',
             icon: 'link',
             _observer: null,
             _clipboardHandler: null,
@@ -3506,51 +3364,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
         // ─── Video Player ───
-        {
-            id: 'fitPlayerToWindow',
-            name: 'Fit to Window',
-            description: 'Make the player fill your entire browser window',
-            group: 'Video Player',
-            icon: 'fullscreen',
-            _styleElement: null,
-            _ruleId: 'fitPlayerToWindowRule',
-            applyStyles() {
-                // Theater Split takes full control on watch pages — skip this feature
-                if (appState.settings.stickyVideo && window.location.pathname.startsWith('/watch')) return;
-                const isWatchPage = window.location.pathname.startsWith('/watch');
-                document.documentElement.classList.toggle('yt-suite-fit-to-window', isWatchPage);
-                document.body.classList.toggle('yt-suite-fit-to-window', isWatchPage);
-                if (isWatchPage) {
-                    setTimeout(() => {
-                        const watchFlexy = document.querySelector('ytd-watch-flexy:not([theater])');
-                        if (watchFlexy) document.querySelector('button.ytp-size-button')?.click();
-                    }, 500);
-                }
-            },
-            init() {
-                this._styleElement = document.createElement('style');
-                this._styleElement.id = `yt-suite-style-${this.id}`;
-                this._styleElement.textContent = `html.yt-suite-fit-to-window,body.yt-suite-fit-to-window{overflow-y:auto !important;height:auto !important;} body.yt-suite-fit-to-window #movie_player{position:absolute !important;top:0 !important;left:0 !important;width:100% !important;height:100vh !important;z-index:9999 !important;background-color:#000 !important;} body.yt-suite-fit-to-window #movie_player .html5-video-container{width:100% !important;height:100% !important;} body.yt-suite-fit-to-window #movie_player video.html5-main-video{width:100% !important;height:100% !important;left:0 !important;top:0 !important;object-fit:contain !important;} html.yt-suite-fit-to-window{padding-top:calc(100vh) !important;} html.yt-suite-fit-to-window ytd-masthead{display:none !important;} body.yt-suite-fit-to-window #page-manager{margin-top:0 !important;}`;
-                document.head.appendChild(this._styleElement);
-                addNavigateRule(this._ruleId, () => this.applyStyles());
-            },
-            destroy() {
-                document.documentElement.classList.remove('yt-suite-fit-to-window');
-                document.body.classList.remove('yt-suite-fit-to-window');
-                this._styleElement?.remove();
-                removeNavigateRule(this._ruleId);
-                if (document.querySelector('ytd-watch-flexy[theater]')) {
-                    document.querySelector('button.ytp-size-button')?.click();
-                }
-            }
-        },
-        cssFeature('hideRelatedVideos', 'Hide Related Videos', 'Remove the related videos panel on watch pages', 'Video Player', 'panel-right',
+        cssFeature('hideRelatedVideos', 'Hide Related Videos', 'Remove the related videos panel on watch pages', 'Watch Page', 'panel-right',
             `ytd-watch-flexy #secondary { display: none !important; } ytd-watch-flexy #primary { max-width: none !important; }`, { isParent: true }),
         {
             id: 'expandVideoWidth',
             name: 'Expand Video Width',
             description: 'Stretch the video to fill the space when sidebar is hidden',
-            group: 'Video Player',
+            group: 'Watch Page',
             icon: 'arrows-horizontal',
             isSubFeature: true,
             parentId: 'hideRelatedVideos',
@@ -3559,7 +3379,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (appState.settings.hideRelatedVideos) {
                     this._styleElement = document.createElement('style');
                     this._styleElement.id = 'yt-suite-expand-width';
-                    this._styleElement.textContent = `ytd-watch-flexy:not(.yt-suite-fit-to-window) #primary { max-width: none !important; }`;
+                    this._styleElement.textContent = `ytd-watch-flexy #primary { max-width: none !important; }`;
                     document.head.appendChild(this._styleElement);
                 }
             },
@@ -3569,7 +3389,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'floatingLogoOnWatch',
             name: 'YTKit Player Controls',
             description: 'Replace native player right-controls with YouTube logo (quick links dropdown) and YTKit settings gear',
-            group: 'Video Player',
+            group: 'Watch Page',
             icon: 'youtube',
             _ruleId: 'floatingLogoRule',
             _styleEl: null,
@@ -3634,13 +3454,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._cleanup();
             }
         },
-        cssFeature('hideDescriptionRow', 'Hide Description', 'Remove the video description panel below the player', 'Video Player', 'file-minus',
+        cssFeature('hideDescriptionRow', 'Hide Description', 'Remove the video description panel below the player', 'Watch Page', 'file-minus',
             'ytd-watch-metadata #bottom-row'),
         {
             id: 'stickyVideo',
             name: 'Theater Split',
             description: 'Fullscreen video on watch pages. Scroll down to reveal comments side-by-side. Scroll back to top to return to fullscreen.',
-            group: 'Video Player',
+            group: 'Watch Page',
             icon: 'picture-in-picture-2',
             pages: [PageTypes.WATCH],
 
@@ -3663,6 +3483,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _rightTouchMoveHandler: null,
             _rightTouchStartY: 0,
             _mastheadDisplay: undefined,
+            _windowResizeHandler: null,
             _playerResizeObs: null,
             _videoType: 'standard',        // 'live' | 'vod' | 'standard'
             _positionedEls: [],            // elements we CSS-positioned over right panel
@@ -3678,49 +3499,47 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _getBelow()   { return document.querySelector('#below') || document.querySelector('ytd-watch-metadata')?.parentElement; },
             _getChatEl()  { return VideoTypeDetector.getChatEl(); },
 
-            // Nudge YouTube's player to recalculate control bar layout
+            // Nudge YouTube's player to recalculate control bar layout and re-composite video.
+            // Chrome loses the video rendering layer when a position:fixed container resizes
+            // (maximize/restore, monitor move). Force Chrome to fully recreate the video
+            // surface by removing the element from the render tree and re-adding it.
             _triggerPlayerResize() {
                 clearTimeout(this._resizeTimer);
                 this._resizeTimer = setTimeout(() => {
-                    const cb = document.querySelector('#movie_player .ytp-chrome-bottom');
-                    if (cb) { cb.style.removeProperty('width'); cb.style.removeProperty('left'); }
+                    const vid = document.querySelector('#ytkit-split-left video.html5-main-video');
+                    if (vid) {
+                        const wasPaused = vid.paused;
+                        const parent = vid.parentNode;
+                        const next = vid.nextSibling;
+                        parent.removeChild(vid);
+                        // Synchronous reflow — forces Chrome to tear down the surface
+                        void parent.offsetHeight;
+                        parent.insertBefore(vid, next);
+                        if (!wasPaused) vid.play().catch(() => {});
+                    }
                     window.dispatchEvent(new Event('resize'));
-                }, 100);
+                }, 50);
             },
 
-            // Position an element over the right panel area via CSS fixed positioning.
-            // Keeps element in original DOM so YT's IntersectionObserver fires.
             _positionOverRight(el, rightPct, topOffset, heightStr) {
                 if (!el) return;
-                el.style.setProperty('position', 'fixed', 'important');
-                el.style.setProperty('top', topOffset || '0', 'important');
-                el.style.setProperty('right', '0', 'important');
-                el.style.setProperty('width', `calc(${rightPct}% - 6px)`, 'important');
-                el.style.setProperty('max-width', 'none', 'important');
-                el.style.setProperty('height', heightStr || '100vh', 'important');
-                el.style.setProperty('margin', '0', 'important');
-                el.style.setProperty('overflow-y', 'auto', 'important');
-                el.style.setProperty('overflow-x', 'hidden', 'important');
-                el.style.setProperty('z-index', '10001', 'important');
-                el.style.setProperty('background', '#0f0f0f', 'important');
-                el.style.setProperty('padding', '0', 'important');
-                el.style.setProperty('box-sizing', 'border-box', 'important');
-                el.style.setProperty('visibility', 'visible', 'important');
-                el.style.setProperty('pointer-events', 'auto', 'important');
-                el.style.setProperty('display', 'block', 'important');
-                el.style.setProperty('scrollbar-width', 'thin', 'important');
-                el.style.setProperty('scrollbar-color', 'rgba(255,255,255,0.15) transparent', 'important');
+                this._setStyles(el, {
+                    position:'fixed', top:topOffset||'0', right:'0',
+                    width:`calc(${rightPct}% - 6px)`, 'max-width':'none',
+                    height:heightStr||'100vh', margin:'0',
+                    'overflow-y':'auto', 'overflow-x':'hidden',
+                    'z-index':'10001', background:'#0f0f0f', padding:'0',
+                    'box-sizing':'border-box', visibility:'visible',
+                    'pointer-events':'auto', display:'block',
+                    'scrollbar-width':'thin', 'scrollbar-color':'rgba(255,255,255,0.15) transparent'
+                });
                 this._positionedEls.push(el);
             },
 
-            // Clear all positioning styles from an element
             _unpositionEl(el) {
-                if (!el) return;
-                const props = ['position','top','right','width','max-width','height','margin',
+                this._removeStyles(el, ['position','top','right','width','max-width','height','margin',
                     'overflow-y','overflow-x','z-index','background','padding','box-sizing',
-                    'visibility','pointer-events','display','scrollbar-width','scrollbar-color',
-                    'border-radius'];
-                props.forEach(p => el.style.removeProperty(p));
+                    'visibility','pointer-events','display','scrollbar-width','scrollbar-color','border-radius']);
             },
 
             // Clean up all positioned elements
@@ -3730,42 +3549,38 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._scrollTarget = null;
             },
 
-            // Force chat frame internals (iframe, container) to fill parent
-            _forceChatFill(chatEl) {
-                if (!chatEl) return;
-                const showHide = chatEl.querySelector('#show-hide-button');
-                if (showHide) showHide.style.setProperty('display', 'none', 'important');
-                const container = chatEl.querySelector('#container');
-                if (container) {
-                    container.style.setProperty('width', '100%', 'important');
-                    container.style.setProperty('height', '100%', 'important');
-                    container.style.setProperty('max-height', 'none', 'important');
-                    container.style.setProperty('min-height', '0', 'important');
-                    container.style.setProperty('border-radius', '0', 'important');
-                }
-                const iframe = chatEl.querySelector('iframe');
-                if (iframe) {
-                    iframe.style.setProperty('width', '100%', 'important');
-                    iframe.style.setProperty('height', '100%', 'important');
-                    iframe.style.setProperty('min-height', '0', 'important');
-                    iframe.style.setProperty('border', 'none', 'important');
-                    iframe.style.setProperty('border-radius', '0', 'important');
-                }
+            // Bulk set/remove style properties with !important
+            _setStyles(el, props) {
+                if (!el) return;
+                for (const [k, v] of Object.entries(props)) el.style.setProperty(k, v, 'important');
+            },
+            _removeStyles(el, props) {
+                if (!el) return;
+                props.forEach(p => el.style.removeProperty(p));
             },
 
-            // Restore chat frame internals
+            // Force/restore chat frame internals
+            _forceChatFill(chatEl) {
+                if (!chatEl) return;
+                const fill = {width:'100%',height:'100%'};
+                this._setStyles(chatEl.querySelector('#show-hide-button'), {display:'none'});
+                this._setStyles(chatEl.querySelector('#container'), {...fill,'max-height':'none','min-height':'0','border-radius':'0'});
+                this._setStyles(chatEl.querySelector('iframe'), {...fill,'min-height':'0',border:'none','border-radius':'0'});
+            },
             _restoreChatFill(chatEl) {
                 if (!chatEl) return;
-                const showHide = chatEl.querySelector('#show-hide-button');
-                if (showHide) showHide.style.removeProperty('display');
-                const container = chatEl.querySelector('#container');
-                if (container) {
-                    ['width','height','max-height','min-height','border-radius'].forEach(p => container.style.removeProperty(p));
-                }
-                const iframe = chatEl.querySelector('iframe');
-                if (iframe) {
-                    ['width','height','min-height','border','border-radius'].forEach(p => iframe.style.removeProperty(p));
-                }
+                this._removeStyles(chatEl.querySelector('#show-hide-button'), ['display']);
+                this._removeStyles(chatEl.querySelector('#container'), ['width','height','max-height','min-height','border-radius']);
+                this._removeStyles(chatEl.querySelector('iframe'), ['width','height','min-height','border','border-radius']);
+            },
+
+            // Position chat element over the right split panel
+            _setupChat(chatEl, rightPct, top, height) {
+                if (!chatEl) { this._waitForChat(rightPct, top, height); return; }
+                this._positionOverRight(chatEl, rightPct, top, height);
+                chatEl.removeAttribute('collapsed');
+                this._setStyles(chatEl, {width:`calc(${rightPct}% - 2px)`,padding:'0 8px 0 0','border-radius':'0'});
+                this._forceChatFill(chatEl);
             },
 
             // Wait for chat frame via MutationObserver (replaces 10s polling loop)
@@ -3972,11 +3787,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         const ytdP = mp.closest('ytd-player');
                         const innerCont = ytdP?.querySelector('#container');
                         if (innerCont) { innerCont.style.setProperty('width','100%','important'); innerCont.style.setProperty('height','100%','important'); innerCont.style.setProperty('padding-bottom','0','important'); }
-                        const chromeBottom = mp.querySelector('.ytp-chrome-bottom');
-                        if (chromeBottom) {
-                            chromeBottom.style.removeProperty('width');
-                            chromeBottom.style.removeProperty('left');
-                        }
                     });
                 };
                 forcePlayerSize();
@@ -4095,6 +3905,27 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._splitWrapper.addEventListener('touchstart', this._touchHandler, { passive: true, capture: true });
                 this._splitWrapper.addEventListener('touchmove', this._touchMoveHandler, { passive: true, capture: true });
 
+                // Re-composite video on window resize, monitor change, or un-maximize
+                this._windowResizeHandler = () => { if (this._isActive) this._triggerPlayerResize(); };
+                window.addEventListener('resize', this._windowResizeHandler);
+
+                // Click-to-pause: reparenting breaks YouTube's native click handler.
+                // Re-implement it on the video container inside the split overlay.
+                this._clickToPauseHandler = (e) => {
+                    // Only handle clicks directly on the video or its transparent container
+                    const t = e.target;
+                    if (!t.closest('.html5-video-container') && t.tagName !== 'VIDEO') return;
+                    // Ignore clicks on controls, overlays, or interactive elements
+                    if (t.closest('.ytp-chrome-bottom, .ytp-chrome-top, .ytp-ce-element, .ytp-cards-teaser, .ytp-ad-overlay-container, .ytp-settings-menu, .ytp-popup, button, a, [role="button"]')) return;
+                    const vid = document.querySelector('video.html5-main-video');
+                    if (!vid) return;
+                    if (vid.paused) vid.play().catch(() => {});
+                    else vid.pause();
+                };
+                const mp = document.getElementById('movie_player');
+                if (mp) mp.addEventListener('click', this._clickToPauseHandler);
+                this._clickToPauseMp = mp;
+
                 DebugManager.log('Theater', 'Overlay mounted');
             },
 
@@ -4139,46 +3970,21 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 // Elements stay in original DOM (no reparenting) so YT's IO works.
                 if (type === 'live') {
-                    // LIVE: Chat frame fills right panel
-                    if (chatEl) {
-                        this._positionOverRight(chatEl, rightPct, '0', '100vh');
-                        chatEl.removeAttribute('collapsed');
-                        // Tight layout: minimal left gap (2px divider clearance), 8px right breathing room
-                        chatEl.style.setProperty('width', `calc(${rightPct}% - 2px)`, 'important');
-                        chatEl.style.setProperty('padding', '0 8px 0 0', 'important');
-                        chatEl.style.setProperty('border-radius', '0', 'important');
-                        this._forceChatFill(chatEl);
-                        this._scrollTarget = chatEl;
-                    } else {
-                        this._waitForChat(rightPct, '0', '100vh');
-                    }
+                    this._setupChat(chatEl, rightPct, '0', '100vh');
+                    this._scrollTarget = chatEl;
                 } else if (type === 'vod') {
-                    // VOD: Chat replay on top (45vh), title+desc+comments below (55vh)
-                    if (chatEl) {
-                        this._positionOverRight(chatEl, rightPct, '0', '45vh');
-                        chatEl.removeAttribute('collapsed');
-                        chatEl.style.setProperty('width', `calc(${rightPct}% - 2px)`, 'important');
-                        chatEl.style.setProperty('border-bottom', '2px solid rgba(255,255,255,0.1)', 'important');
-                        chatEl.style.setProperty('padding', '0 8px 0 0', 'important');
-                        chatEl.style.setProperty('border-radius', '0', 'important');
-                        this._forceChatFill(chatEl);
-                    } else {
-                        this._waitForChat(rightPct, '0', '45vh');
-                    }
+                    this._setupChat(chatEl, rightPct, '0', '45vh');
+                    if (chatEl) chatEl.style.setProperty('border-bottom', '2px solid rgba(255,255,255,0.1)', 'important');
                     if (below) {
-                        const belowTop = chatEl ? '45vh' : '0';
-                        const belowH   = chatEl ? '55vh' : '100vh';
-                        this._positionOverRight(below, rightPct, belowTop, belowH);
-                        below.style.setProperty('width', `calc(${rightPct}% - 2px)`, 'important');
-                        below.style.setProperty('padding', '0 8px 60px 2px', 'important');
+                        const hasChat = !!chatEl;
+                        this._positionOverRight(below, rightPct, hasChat ? '45vh' : '0', hasChat ? '55vh' : '100vh');
+                        this._setStyles(below, {width:`calc(${rightPct}% - 2px)`,padding:'0 8px 60px 2px'});
                     }
                     this._scrollTarget = chatEl || below;
                 } else {
-                    // STANDARD: #below fills right panel (title, desc, comments)
                     if (below) {
                         this._positionOverRight(below, rightPct, '0', '100vh');
-                        below.style.setProperty('width', `calc(${rightPct}% - 2px)`, 'important');
-                        below.style.setProperty('padding', '0 8px 60px 2px', 'important');
+                        this._setStyles(below, {width:`calc(${rightPct}% - 2px)`,padding:'0 8px 60px 2px'});
                         this._scrollTarget = below;
                     }
                 }
@@ -4313,6 +4119,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._wheelHandler = null;
                 this._touchHandler = null;
                 this._touchMoveHandler = null;
+                if (this._windowResizeHandler) {
+                    window.removeEventListener('resize', this._windowResizeHandler);
+                    this._windowResizeHandler = null;
+                }
+                if (this._clickToPauseMp && this._clickToPauseHandler) {
+                    this._clickToPauseMp.removeEventListener('click', this._clickToPauseHandler);
+                    this._clickToPauseHandler = null;
+                    this._clickToPauseMp = null;
+                }
                 if (!keepClass) {
                     const masth = document.querySelector('ytd-masthead, #masthead');
                     if (masth && this._mastheadDisplay !== undefined) {
@@ -4417,7 +4232,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             init() {
-                const css = `html.ytkit-split-active ytd-watch-flexy{display:block!important;overflow:visible!important;} html.ytkit-split-active ytd-watch-flexy #columns{max-width:100%!important;} html.ytkit-split-active ytd-masthead,html.ytkit-split-active #masthead-container{display:none!important;} html.ytkit-split-active #page-manager{margin-top:0!important;} html.ytkit-split-active ytd-app{--ytd-masthead-height:0px;} html.ytkit-split-active body{padding-top:0!important;} #ytkit-split-left,#ytkit-split-left #player-container,#ytkit-split-left #player-container-inner,#ytkit-split-left #player-theater-container,#ytkit-split-left ytd-player{width:100%!important;max-width:none!important;height:100%!important;min-height:0!important;padding:0!important;margin:0!important;} #ytkit-split-left #movie_player{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;position:relative!important;left:auto!important;top:auto!important;} #ytkit-split-left .html5-video-container{width:100%!important;height:100%!important;} #ytkit-split-left .ytp-chrome-bottom{width:calc(100% - 24px)!important;left:12px!important;} #ytkit-split-left .ytp-progress-bar-container{width:100%!important;} #ytkit-split-left .ytp-chrome-controls{width:100%!important;} #ytkit-split-left video.html5-main-video{width:100%!important;height:100%!important;object-fit:contain!important;left:0!important;top:0!important;} #ytkit-split-left ytd-player > #container,#ytkit-split-left #player-container-inner #player{width:100%!important;height:100%!important;padding-bottom:0!important;} html.ytkit-split-active ytd-watch-flexy[flexy-header-flipper_] #player-container,html.ytkit-split-active ytd-watch-flexy[theater] #player-container,html.ytkit-split-active ytd-watch-flexy #player-container{width:100%!important;max-width:none!important;} #ytkit-split-right::-webkit-scrollbar{width:5px;} #ytkit-split-right::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.14);border-radius:3px;} #ytkit-split-right::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.28);} .ytkit-divider-pip{opacity:0;transition:opacity 0.2s ease;} #ytkit-split-divider:hover .ytkit-divider-pip{opacity:1;} html.ytkit-split-active #below[style*="position:fixed"],html.ytkit-split-active #below[style*="position:fixed"]{scrollbar-width:thin!important;scrollbar-color:rgba(255,255,255,0.12) transparent!important;font-size:13px!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata{margin:-12px 0 0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata .item{padding:0!important;margin:0!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata #title{font-size:15px!important;line-height:1.3!important;margin-bottom:2px!important;} html.ytkit-split-active #below[style*="position"] #owner{margin:2px 0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] #actions{flex-wrap:wrap!important;max-width:100%!important;margin:0!important;padding:2px 0!important;gap:4px!important;} html.ytkit-split-active #below[style*="position"] #actions ytd-menu-renderer,html.ytkit-split-active #below[style*="position"] #top-level-buttons-computed{flex-wrap:wrap!important;gap:2px!important;} html.ytkit-split-active #below[style*="position"] #actions button,html.ytkit-split-active #below[style*="position"] #actions ytd-button-renderer,html.ytkit-split-active #below[style*="position"] #actions ytd-toggle-button-renderer{transform:scale(0.88)!important;transform-origin:center!important;} html.ytkit-split-active #below[style*="position"] ytd-text-inline-expander,html.ytkit-split-active #below[style*="position"] ytd-text-inline-expander > div{padding:0!important;margin:0!important;max-width:100%!important;word-break:break-word!important;font-size:12px!important;line-height:1.4!important;} html.ytkit-split-active #below[style*="position"] #description-inline-expander{margin:4px 0!important;padding:6px 8px!important;background:rgba(255,255,255,0.04)!important;border-radius:6px!important;} html.ytkit-split-active #below[style*="position"] ytd-comments{margin:0!important;padding:0 0 40px!important;} html.ytkit-split-active #below[style*="position"] ytd-comments-header-renderer,html.ytkit-split-active #below[style*="position"] ytd-comments-header-renderer > div{padding:0!important;margin:0!important;} html.ytkit-split-active #below[style*="position"] #count.ytd-comments-header-renderer{font-size:13px!important;margin:6px 0 2px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-simplebox-renderer{padding:0!important;margin:0 0 4px!important;transform:scale(0.92)!important;transform-origin:top left!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-thread-renderer{margin:0!important;padding:6px 4px!important;border-bottom:1px solid rgba(255,255,255,0.06)!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-thread-renderer:last-child{border-bottom:none!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer{margin:0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail{width:24px!important;height:24px!important;margin-right:8px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail img,html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail yt-img-shadow{width:24px!important;height:24px!important;border-radius:50%!important;} html.ytkit-split-active #below[style*="position"] #header-author{margin-bottom:1px!important;} html.ytkit-split-active #below[style*="position"] #author-text{font-size:12px!important;} html.ytkit-split-active #below[style*="position"] #published-time-text{font-size:11px!important;} html.ytkit-split-active #below[style*="position"] #content-text{font-size:13px!important;line-height:1.35!important;margin:0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] #action-buttons{margin-top:2px!important;} html.ytkit-split-active #below[style*="position"] #action-buttons ytd-toggle-button-renderer,html.ytkit-split-active #below[style*="position"] #action-buttons #reply-button-end{transform:scale(0.85)!important;transform-origin:left center!important;} html.ytkit-split-active #below[style*="position"] #action-buttons #vote-count-middle{font-size:11px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-replies-renderer{margin-left:28px!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-replies-renderer #expander-contents{padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-item-section-renderer,html.ytkit-split-active #below[style*="position"] ytd-item-section-renderer > #contents{padding:0!important;margin:0!important;max-width:100%!important;box-sizing:border-box!important;} html.ytkit-split-active #below[style*="position"] yt-formatted-string{max-width:100%!important;word-break:break-word!important;} html.ytkit-split-active #ytkit-split-right{border:none!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position:fixed"],html.ytkit-split-active ytd-live-chat-frame[style*="position:fixed"],html.ytkit-split-active #chat[style*="position:fixed"],html.ytkit-split-active #chat[style*="position:fixed"]{scrollbar-width:thin!important;scrollbar-color:rgba(255,255,255,0.15) transparent!important;margin:0!important;max-width:none!important;border-radius:0!important;padding:0 6px 0 0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] iframe,html.ytkit-split-active #chat[style*="position"] iframe{width:100%!important;height:100%!important;min-height:0!important;border:none!important;border-radius:0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] #container,html.ytkit-split-active #chat[style*="position"] #container{width:100%!important;height:100%!important;max-height:none!important;min-height:0!important;border-radius:0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] #show-hide-button,html.ytkit-split-active #chat[style*="position"] #show-hide-button{display:none!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"],html.ytkit-split-active #chat[style*="position"]{min-height:0!important;max-height:none!important;} #ytkit-split-close{position:absolute;bottom:16px;right:16px;z-index:25;width:30px;height:30px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);color:rgba(255,255,255,0.55);display:none;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.15s;} #ytkit-split-close:hover{background:rgba(220,38,38,0.75);color:#fff;opacity:1!important;} #ytkit-split-collapse-strip{position:fixed;top:0;right:0;height:24px;z-index:10002;cursor:n-resize;background:transparent;transition:background 0.2s;pointer-events:auto;} #ytkit-split-collapse-strip:hover{background:linear-gradient(180deg,rgba(255,255,255,0.06) 0%,transparent 100%);} #ytkit-split-collapse-strip::after{content:'';display:block;width:24px;height:2px;background:rgba(255,255,255,0.12);border-radius:1px;margin:8px auto 0;opacity:0;transition:opacity 0.2s;} #ytkit-split-collapse-strip:hover::after{opacity:1;}  `;
+                const css = `html.ytkit-split-active ytd-watch-flexy{display:block!important;overflow:visible!important;} html.ytkit-split-active ytd-watch-flexy #columns{max-width:100%!important;} html.ytkit-split-active ytd-masthead,html.ytkit-split-active #masthead-container{display:none!important;} html.ytkit-split-active #page-manager{margin-top:0!important;} html.ytkit-split-active ytd-app{--ytd-masthead-height:0px;} html.ytkit-split-active body{padding-top:0!important;} #ytkit-split-left,#ytkit-split-left #player-container,#ytkit-split-left #player-container-inner,#ytkit-split-left #player-theater-container,#ytkit-split-left ytd-player{width:100%!important;max-width:none!important;height:100%!important;min-height:0!important;padding:0!important;margin:0!important;} #ytkit-split-left #movie_player{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;position:relative!important;left:auto!important;top:auto!important;} #ytkit-split-left .html5-video-container{width:100%!important;height:100%!important;} #ytkit-split-left video.html5-main-video{width:100%!important;height:100%!important;object-fit:contain!important;left:0!important;top:0!important;} #ytkit-split-left ytd-player > #container,#ytkit-split-left #player-container-inner #player{width:100%!important;height:100%!important;padding-bottom:0!important;} html.ytkit-split-active ytd-watch-flexy[flexy-header-flipper_] #player-container,html.ytkit-split-active ytd-watch-flexy[theater] #player-container,html.ytkit-split-active ytd-watch-flexy #player-container{width:100%!important;max-width:none!important;} #ytkit-split-right::-webkit-scrollbar{width:5px;} #ytkit-split-right::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.14);border-radius:3px;} #ytkit-split-right::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.28);} .ytkit-divider-pip{opacity:0;transition:opacity 0.2s ease;} #ytkit-split-divider:hover .ytkit-divider-pip{opacity:1;} html.ytkit-split-active #below[style*="position:fixed"],html.ytkit-split-active #below[style*="position:fixed"]{scrollbar-width:thin!important;scrollbar-color:rgba(255,255,255,0.12) transparent!important;font-size:13px!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata{margin:-12px 0 0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata .item{padding:0!important;margin:0!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata #title{font-size:15px!important;line-height:1.3!important;margin-bottom:2px!important;} html.ytkit-split-active #below[style*="position"] #owner{margin:2px 0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] #actions{flex-wrap:wrap!important;max-width:100%!important;margin:0!important;padding:2px 0!important;gap:4px!important;} html.ytkit-split-active #below[style*="position"] #actions ytd-menu-renderer,html.ytkit-split-active #below[style*="position"] #top-level-buttons-computed{flex-wrap:wrap!important;gap:2px!important;} html.ytkit-split-active #below[style*="position"] #actions button,html.ytkit-split-active #below[style*="position"] #actions ytd-button-renderer,html.ytkit-split-active #below[style*="position"] #actions ytd-toggle-button-renderer{transform:scale(0.88)!important;transform-origin:center!important;} html.ytkit-split-active #below[style*="position"] ytd-text-inline-expander,html.ytkit-split-active #below[style*="position"] ytd-text-inline-expander > div{padding:0!important;margin:0!important;max-width:100%!important;word-break:break-word!important;font-size:12px!important;line-height:1.4!important;} html.ytkit-split-active #below[style*="position"] #description-inline-expander{margin:4px 0!important;padding:6px 8px!important;background:rgba(255,255,255,0.04)!important;border-radius:6px!important;} html.ytkit-split-active #below[style*="position"] ytd-comments{margin:0!important;padding:0 0 40px!important;} html.ytkit-split-active #below[style*="position"] ytd-comments-header-renderer,html.ytkit-split-active #below[style*="position"] ytd-comments-header-renderer > div{padding:0!important;margin:0!important;} html.ytkit-split-active #below[style*="position"] #count.ytd-comments-header-renderer{font-size:13px!important;margin:6px 0 2px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-simplebox-renderer{padding:0!important;margin:0 0 4px!important;transform:scale(0.92)!important;transform-origin:top left!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-thread-renderer{margin:0!important;padding:6px 4px!important;border-bottom:1px solid rgba(255,255,255,0.06)!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-thread-renderer:last-child{border-bottom:none!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer{margin:0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail{width:24px!important;height:24px!important;margin-right:8px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail img,html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail yt-img-shadow{width:24px!important;height:24px!important;border-radius:50%!important;} html.ytkit-split-active #below[style*="position"] #header-author{margin-bottom:1px!important;} html.ytkit-split-active #below[style*="position"] #author-text{font-size:12px!important;} html.ytkit-split-active #below[style*="position"] #published-time-text{font-size:11px!important;} html.ytkit-split-active #below[style*="position"] #content-text{font-size:13px!important;line-height:1.35!important;margin:0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] #action-buttons{margin-top:2px!important;} html.ytkit-split-active #below[style*="position"] #action-buttons ytd-toggle-button-renderer,html.ytkit-split-active #below[style*="position"] #action-buttons #reply-button-end{transform:scale(0.85)!important;transform-origin:left center!important;} html.ytkit-split-active #below[style*="position"] #action-buttons #vote-count-middle{font-size:11px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-replies-renderer{margin-left:28px!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-replies-renderer #expander-contents{padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-item-section-renderer,html.ytkit-split-active #below[style*="position"] ytd-item-section-renderer > #contents{padding:0!important;margin:0!important;max-width:100%!important;box-sizing:border-box!important;} html.ytkit-split-active #below[style*="position"] yt-formatted-string{max-width:100%!important;word-break:break-word!important;} html.ytkit-split-active #ytkit-split-right{border:none!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position:fixed"],html.ytkit-split-active ytd-live-chat-frame[style*="position:fixed"],html.ytkit-split-active #chat[style*="position:fixed"],html.ytkit-split-active #chat[style*="position:fixed"]{scrollbar-width:thin!important;scrollbar-color:rgba(255,255,255,0.15) transparent!important;margin:0!important;max-width:none!important;border-radius:0!important;padding:0 6px 0 0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] iframe,html.ytkit-split-active #chat[style*="position"] iframe{width:100%!important;height:100%!important;min-height:0!important;border:none!important;border-radius:0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] #container,html.ytkit-split-active #chat[style*="position"] #container{width:100%!important;height:100%!important;max-height:none!important;min-height:0!important;border-radius:0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] #show-hide-button,html.ytkit-split-active #chat[style*="position"] #show-hide-button{display:none!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"],html.ytkit-split-active #chat[style*="position"]{min-height:0!important;max-height:none!important;} #ytkit-split-close{position:absolute;bottom:16px;right:16px;z-index:25;width:30px;height:30px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);color:rgba(255,255,255,0.55);display:none;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.15s;} #ytkit-split-close:hover{background:rgba(220,38,38,0.75);color:#fff;opacity:1!important;} #ytkit-split-collapse-strip{position:fixed;top:0;right:0;height:24px;z-index:10002;cursor:n-resize;background:transparent;transition:background 0.2s;pointer-events:auto;} #ytkit-split-collapse-strip:hover{background:linear-gradient(180deg,rgba(255,255,255,0.06) 0%,transparent 100%);} #ytkit-split-collapse-strip::after{content:'';display:block;width:24px;height:2px;background:rgba(255,255,255,0.12);border-radius:1px;margin:8px auto 0;opacity:0;transition:opacity 0.2s;} #ytkit-split-collapse-strip:hover::after{opacity:1;}  `;
                 this._styleEl = injectStyle(css, this.id, true);
                 addNavigateRule(this._navRuleId, () => this._activate());
                 DebugManager.log('Theater', 'Theater Split initialized');
@@ -4521,7 +4336,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'skipSponsors',
             name: 'Skip Sponsors',
             description: 'Automatically skip sponsored segments using SponsorBlock API',
-            group: 'SponsorBlock',
+            group: 'Ad Blocker',
             icon: 'skip-forward',
             isParent: true,
             _state: {
@@ -4644,7 +4459,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         this._state.rafSkipId = null;
                         return;
                     }
-                    if (!this._state.video.paused) {
+                    if (!this._state.video.paused && !this._state._seekGrace && !this._state._userScrubbing) {
                         const currentTime = this._state.video.currentTime;
                         for (const seg of this._state.skippableSegments) {
                             const [startTime, endTime] = seg.segment;
@@ -4726,6 +4541,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._state._pauseHandler = null;
                     this._state._seekedHandler = null;
                 }
+                if (this._state._scrubDown) {
+                    document.removeEventListener('mousedown', this._state._scrubDown, true);
+                    document.removeEventListener('mouseup', this._state._scrubUp, true);
+                    this._state._scrubDown = null;
+                    this._state._scrubUp = null;
+                }
+                this._state._userScrubbing = false;
+                clearTimeout(this._state._seekGraceTimer);
+                this._state._seekGrace = false;
                 this._state.videoID = null;
                 this._state.segments = [];
                 this._state.skippableSegments = [];
@@ -4802,7 +4626,36 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         this._state.video = video;
                         this._state._playHandler = () => this._startRAFSkipLoop();
                         this._state._pauseHandler = () => this._stopRAFSkipLoop();
-                        this._state._seekedHandler = () => { this._state.lastSkippedUUID = null; };
+                        this._state._seekedHandler = () => {
+                            // Pause skip detection briefly after manual seek so the user
+                            // can land wherever they want without being bounced out
+                            this._state._seekGrace = true;
+                            clearTimeout(this._state._seekGraceTimer);
+                            this._state._seekGraceTimer = setTimeout(() => {
+                                this._state._seekGrace = false;
+                                this._state.lastSkippedUUID = null;
+                            }, 800);
+                        };
+                        // Detect when user is scrubbing the progress bar — pause skip loop entirely
+                        this._state._scrubDown = (e) => {
+                            if (e.target.closest('.ytp-progress-bar, .ytp-scrubber-container, .ytp-progress-bar-container')) {
+                                this._state._userScrubbing = true;
+                            }
+                        };
+                        this._state._scrubUp = () => {
+                            if (this._state._userScrubbing) {
+                                this._state._userScrubbing = false;
+                                // Grace period after releasing scrub
+                                this._state._seekGrace = true;
+                                clearTimeout(this._state._seekGraceTimer);
+                                this._state._seekGraceTimer = setTimeout(() => {
+                                    this._state._seekGrace = false;
+                                    this._state.lastSkippedUUID = null;
+                                }, 800);
+                            }
+                        };
+                        document.addEventListener('mousedown', this._state._scrubDown, true);
+                        document.addEventListener('mouseup', this._state._scrubUp, true);
                         video.addEventListener("play", this._state._playHandler);
                         video.addEventListener("pause", this._state._pauseHandler);
                         video.addEventListener("seeked", this._state._seekedHandler);
@@ -4841,17 +4694,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._styleElement?.remove();
             }
         },
-        cssFeature('hideSponsorBlockLabels', 'Hide SponsorBlock Labels', 'Hide the category labels added by SponsorBlock', 'SponsorBlock', 'tag-off',
+        cssFeature('hideSponsorBlockLabels', 'Hide SponsorBlock Labels', 'Hide the category labels added by SponsorBlock', 'Ad Blocker', 'tag-off',
             '[id^="ytkit-sb-label-"]', { isSubFeature: true, parentId: 'skipSponsors' }),
                 // Auto-generated SponsorBlock sub-features
-        ...([['sponsor','Skip: Sponsor','Paid promotion, paid referrals, direct advertisements'],['selfpromo','Skip: Self Promotion','Unpaid self-promotion: merch, channel plugs, social media links'],['interaction','Skip: Interaction Reminder','Subscribe, like, comment reminders and engagement prompts'],['intro','Skip: Intro','Intro animation, title card, or cold open with no content'],['outro','Skip: Outro','End cards, credits, outros with no new content'],['music_offtopic','Skip: Off-Topic Music','Non-music sections in music videos (e.g. talking, behind-the-scenes)'],['preview','Skip: Preview/Recap','Preview of upcoming content or recap of previous episodes'],['filler','Skip: Filler','Tangential scenes, off-topic jokes, or filler with no value']].map(([v,n,d])=>({id:'sbCat_'+v,name:n,description:d,group:'SponsorBlock',icon:'list',isSubFeature:true,parentId:'skipSponsors',_arrayKey:'sponsorBlockCategories',_arrayValue:v,init(){},destroy(){}}))),
+        ...([['sponsor','Skip: Sponsor','Paid promotion, paid referrals, direct advertisements'],['selfpromo','Skip: Self Promotion','Unpaid self-promotion: merch, channel plugs, social media links'],['interaction','Skip: Interaction Reminder','Subscribe, like, comment reminders and engagement prompts'],['intro','Skip: Intro','Intro animation, title card, or cold open with no content'],['outro','Skip: Outro','End cards, credits, outros with no new content'],['music_offtopic','Skip: Off-Topic Music','Non-music sections in music videos (e.g. talking, behind-the-scenes)'],['preview','Skip: Preview/Recap','Preview of upcoming content or recap of previous episodes'],['filler','Skip: Filler','Tangential scenes, off-topic jokes, or filler with no value']].map(([v,n,d])=>({id:'sbCat_'+v,name:n,description:d,group:'Ad Blocker',icon:'list',isSubFeature:true,parentId:'skipSponsors',_arrayKey:'sponsorBlockCategories',_arrayValue:v,init(){},destroy(){}}))),
 
         // ─── Quality ───
         {
             id: 'autoMaxResolution',
             name: 'Auto Quality',
             description: 'Automatically select preferred video quality (max, 4K, 1440p, 1080p, 720p, 480p)',
-            group: 'Quality',
+            group: 'Watch Page',
             icon: 'sparkles',
             isParent: true,
             type: 'select',
@@ -4919,7 +4772,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'useEnhancedBitrate',
             name: 'Enhanced Bitrate',
             description: 'Request higher bitrate streams when available',
-            group: 'Quality',
+            group: 'Watch Page',
             icon: 'gauge',
             isSubFeature: true,
             parentId: 'autoMaxResolution',
@@ -4941,7 +4794,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hideQualityPopup',
             name: 'Hide Quality Popup',
             description: 'Suppress the quality selection popup during auto-selection',
-            group: 'Quality',
+            group: 'Watch Page',
             icon: 'eye-off',
             isSubFeature: true,
             parentId: 'autoMaxResolution',
@@ -4950,33 +4803,33 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         },
 
         // ─── Clutter ───
-        cssFeature('hideMerchShelf', 'Hide Merch Shelf', 'Remove merchandise promotions below videos', 'Clutter', 'shopping-bag',
+        cssFeature('hideMerchShelf', 'Hide Merch Shelf', 'Remove merchandise promotions below videos', 'Watch Page', 'shopping-bag',
             'ytd-merch-shelf-renderer'),
-        cssFeature('hideAiSummary', 'Hide AI Summary', 'Remove AI-generated summaries and Ask AI buttons', 'Clutter', 'bot-off',
+        cssFeature('hideAiSummary', 'Hide AI Summary', 'Remove AI-generated summaries and Ask AI buttons', 'Watch Page', 'bot-off',
             `ytd-engagement-panel-section-list-renderer[target-id*="ai"],
                     ytd-engagement-panel-section-list-renderer[target-id*="summary"],
                     tp-yt-paper-button[aria-label*="AI"], tp-yt-paper-button[aria-label*="Ask"],
                     ytd-info-panel-content-renderer:has([icon="info_outline"]),
                     [class*="ai-summary"], [class*="aiSummary"],
                     ytd-reel-shelf-renderer:has([is-ask-ai]) { display: none !important; }`),
-        cssFeature('hideDescriptionExtras', 'Hide Description Extras', 'Remove extra elements in the description area', 'Clutter', 'file-x',
+        cssFeature('hideDescriptionExtras', 'Hide Description Extras', 'Remove extra elements in the description area', 'Watch Page', 'file-x',
             'ytd-video-description-transcript-section-renderer, ytd-structured-description-content-renderer > *:not(ytd-text-inline-expander)'),
-        cssFeature('hideHashtags', 'Hide Hashtags', 'Remove hashtag links above video titles', 'Clutter', 'hash',
+        cssFeature('hideHashtags', 'Hide Hashtags', 'Remove hashtag links above video titles', 'Watch Page', 'hash',
             'ytd-watch-metadata .super-title, ytd-video-primary-info-renderer .super-title'),
-        cssFeature('hidePinnedComments', 'Hide Pinned Comments', 'Remove pinned comments from the comments section', 'Clutter', 'pin-off',
+        cssFeature('hidePinnedComments', 'Hide Pinned Comments', 'Remove pinned comments from the comments section', 'Watch Page', 'pin-off',
             `ytd-comment-thread-renderer:has(ytd-pinned-comment-badge-renderer) { display: none !important; }
                     ytd-pinned-comment-badge-renderer { display: none !important; }`),
-        cssFeature('hideCommentActionMenu', 'Hide Comment Actions', 'Remove action menu from individual comments', 'Clutter', 'more-horizontal',
+        cssFeature('hideCommentActionMenu', 'Hide Comment Actions', 'Remove action menu from individual comments', 'Watch Page', 'more-horizontal',
             '#action-menu.ytd-comment-view-model, #action-menu.ytd-comment-renderer'),
-        cssFeature('condenseComments', 'Condense Comments', 'Reduce spacing between comments for a tighter layout', 'Clutter', 'minimize-2',
+        cssFeature('condenseComments', 'Condense Comments', 'Reduce spacing between comments for a tighter layout', 'Watch Page', 'minimize-2',
             `ytd-comment-thread-renderer.style-scope.ytd-item-section-renderer{margin-top:5px !important;margin-bottom:1px !important;} ytd-comment-thread-renderer.style-scope.ytd-comment-replies-renderer{padding-top:0px !important;padding-bottom:0px !important;margin-top:0px !important;margin-bottom:0px !important;}`),
-        cssFeature('hideCommentTeaser', 'Hide Comment Teaser', 'Remove the "Scroll for comments" prompt on watch pages', 'Clutter', 'message-square-off',
+        cssFeature('hideCommentTeaser', 'Hide Comment Teaser', 'Remove the "Scroll for comments" prompt on watch pages', 'Watch Page', 'message-square-off',
             'ytd-comments-entry-point-header-renderer, ytd-comments-entry-point-teaser-renderer'),
         {
             id: 'autoExpandComments',
             name: 'Auto-Expand Comments',
             description: 'Automatically expand truncated comments so full text is always visible',
-            group: 'Clutter',
+            group: 'Watch Page',
             icon: 'fullscreen',
             pages: [PageTypes.WATCH],
             _styleElement: null,
@@ -5062,7 +4915,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'commentEnhancements',
             name: 'Comment Enhancements',
             description: 'Highlight creator/OP replies, show like heat indicators, and add collapse-all-replies toggle per thread',
-            group: 'Clutter',
+            group: 'Watch Page',
             icon: 'message-square',
             pages: [PageTypes.WATCH],
             _styleElement: null,
@@ -5139,17 +4992,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 document.querySelectorAll('.ytkit-heat-indicator').forEach(el => el.remove());
             }
         },
-        cssFeature('hideLiveChatEngagement', 'Hide Chat Engagement', 'Remove engagement prompts in live chat', 'Clutter', 'message-circle-off',
+        cssFeature('hideLiveChatEngagement', 'Hide Chat Engagement', 'Remove engagement prompts in live chat', 'Live Chat', 'message-circle-off',
             'yt-live-chat-viewer-engagement-message-renderer,yt-live-chat-toast-renderer'),
-        cssFeature('hidePaidPromotionWatch', 'Hide Paid Promotion', 'Remove "paid promotion" labels on watch pages', 'Clutter', 'dollar-sign',
+        cssFeature('hidePaidPromotionWatch', 'Hide Paid Promotion', 'Remove "paid promotion" labels on watch pages', 'Watch Page', 'dollar-sign',
             '.ytp-paid-content-overlay'),
-        cssFeature('hideChannelJoinButton', 'Hide Channel Join Button', 'Remove the Join/membership button on channel pages', 'Clutter', 'dollar-sign',
+        cssFeature('hideChannelJoinButton', 'Hide Channel Join Button', 'Remove the Join/membership button on channel pages', 'Watch Page', 'dollar-sign',
             '.ytFlexibleActionsViewModelAction:has(button[aria-label="Join this channel"])'),
         {
             id: 'hideVideoEndContent',
             name: 'Hide Video End Content',
             description: 'Remove end cards, end screen, and video grid when videos finish',
-            group: 'Clutter',
+            group: 'Watch Page',
             icon: 'square-x',
             _styleElement: null,
             init() {
@@ -5162,7 +5015,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
         },
-        cssFeature('hideFundraiser', 'Hide Fundraisers', 'Remove fundraiser and donation badges', 'Clutter', 'heart-off',
+        cssFeature('hideFundraiser', 'Hide Fundraisers', 'Remove fundraiser and donation badges', 'Watch Page', 'heart-off',
             `ytd-donation-shelf-renderer,
                     ytd-button-renderer[button-next]:has([aria-label*="Donate"]),
                     .ytp-donation-shelf { display: none !important; }`),
@@ -5229,7 +5082,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hiddenActionButtonsManager',
             name: 'Hide Action Buttons',
             description: 'Choose which action buttons to hide below videos',
-            group: 'Action Buttons',
+            group: 'Watch Page',
             icon: 'eye-off',
             isParent: true,
             _styleElement: null,
@@ -5254,7 +5107,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
         },
                 // Auto-generated Action Buttons sub-features
-        ...([['like','Like Button','Hide like button below videos'],['dislike','Dislike Button','Hide dislike button below videos'],['share','Share Button','Hide share button below videos'],['ask','Ask/AI Button','Hide Ask or AI button below videos'],['clip','Clip Button','Hide clip button below videos'],['thanks','Thanks Button','Hide thanks button below videos'],['save','Save Button','Hide save button below videos'],['sponsor','Join/Sponsor Button','Hide join/sponsor button below videos'],['moreActions','More Actions (...)','Hide more actions button below videos']].map(([v,n,d])=>({id:'abHide_'+v,name:n,description:d,group:'Action Buttons',icon:'eye-off',isSubFeature:true,parentId:'hiddenActionButtonsManager',_arrayKey:'hiddenActionButtons',_arrayValue:v,init(){},destroy(){}}))),
+        ...([['like','Like Button','Hide like button below videos'],['dislike','Dislike Button','Hide dislike button below videos'],['share','Share Button','Hide share button below videos'],['ask','Ask/AI Button','Hide Ask or AI button below videos'],['clip','Clip Button','Hide clip button below videos'],['thanks','Thanks Button','Hide thanks button below videos'],['save','Save Button','Hide save button below videos'],['sponsor','Join/Sponsor Button','Hide join/sponsor button below videos'],['moreActions','More Actions (...)','Hide more actions button below videos']].map(([v,n,d])=>({id:'abHide_'+v,name:n,description:d,group:'Watch Page',icon:'eye-off',isSubFeature:true,parentId:'hiddenActionButtonsManager',_arrayKey:'hiddenActionButtons',_arrayValue:v,init(){},destroy(){}}))),
                                                                         {
             id: 'replaceWithCobaltDownloader',
             name: 'Web Download Button',
@@ -5355,11 +5208,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hiddenPlayerControlsManager',
             name: 'Hide Player Controls',
             description: 'Choose which player control buttons to hide',
-            group: 'Player Controls',
+            group: 'Watch Page',
             icon: 'eye-off',
             isParent: true,
             _styleElement: null,
             _selectors: {
+                ytLogo: '.ytp-youtube-button',
+                settings: '.ytp-settings-button',
                 sponsorBlock: '.ytp-sb-button, .ytp-sponsorblock-button',
                 next: '.ytp-next-button',
                 autoplay: '.ytp-autonav-toggle-button-container',
@@ -5380,7 +5235,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
         },
                 // Auto-generated Player Controls sub-features
-        ...([['sponsorBlock','SponsorBlock Button','Hide SponsorBlock button from player'],['next','Next Video Button','Hide next video button from player'],['autoplay','Autoplay Toggle','Hide autoplay toggle from player'],['subtitles','Subtitles Button','Hide subtitles button from player'],['captions','Captions Display','Hide captions overlay on video'],['miniplayer','Miniplayer Button','Hide miniplayer button from player'],['pip','Picture-in-Picture','Hide PiP button from player'],['theater','Theater Mode Button','Hide theater mode button from player'],['fullscreen','Fullscreen Button','Hide fullscreen button from player']].map(([v,n,d])=>({id:'pcHide_'+v,name:n,description:d,group:'Player Controls',icon:'eye-off',isSubFeature:true,parentId:'hiddenPlayerControlsManager',_arrayKey:'hiddenPlayerControls',_arrayValue:v,init(){},destroy(){}}))),
+        ...([['ytLogo','YouTube Logo','Hide YouTube logo from player controls'],['settings','Settings Gear','Hide settings gear from player controls'],['sponsorBlock','SponsorBlock Button','Hide SponsorBlock button from player'],['next','Next Video Button','Hide next video button from player'],['autoplay','Autoplay Toggle','Hide autoplay toggle from player'],['subtitles','Subtitles Button','Hide subtitles button from player'],['captions','Captions Display','Hide captions overlay on video'],['miniplayer','Miniplayer Button','Hide miniplayer button from player'],['pip','Picture-in-Picture','Hide PiP button from player'],['theater','Theater Mode Button','Hide theater mode button from player'],['fullscreen','Fullscreen Button','Hide fullscreen button from player']].map(([v,n,d])=>({id:'pcHide_'+v,name:n,description:d,group:'Watch Page',icon:'eye-off',isSubFeature:true,parentId:'hiddenPlayerControlsManager',_arrayKey:'hiddenPlayerControls',_arrayValue:v,init(){},destroy(){}}))),
                                                                         // Individual player control features removed - now consolidated in hiddenPlayerControlsManager
 
         // ─── Downloads (YTYT-Downloader Integration) ───
@@ -5441,7 +5296,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hideCollaborations',
             name: 'Hide Collaborations',
             description: 'Hide videos from channels you\'re not subscribed to in your subscriptions feed',
-            group: 'Content',
+            group: 'Home / Subscriptions',
             icon: 'users-x',
             _subscriptions: [],
             _observer: null,
@@ -5547,7 +5402,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hideVideosFromHome',
             name: 'Video Hider',
             description: 'Hide videos/channels from feeds. Includes keyword filter, duration filter, and channel blocking.',
-            group: 'Video Hider',
+            group: 'Home / Subscriptions',
             icon: 'eye-off',
             isParent: true,
             _styleElement: null,
@@ -6605,237 +6460,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
 
-        // ─── Auto-Resume Last Position ───
-        {
-            id: 'autoResumePosition',
-            name: 'Auto-Resume Position',
-            description: 'Resume videos from where you left off (saves position for partially watched videos)',
-            group: 'Video Player',
-            icon: 'play',
-            _ruleId: 'autoResumeRule',
-            _saveInterval: null,
-            _storageKey: 'ytkit_resume_positions',
-            _getPositions() {
-                try { return JSON.parse(GM_getValue(this._storageKey, '{}')); } catch { return {}; }
-            },
-            _setPositions(p) { GM_setValue(this._storageKey, JSON.stringify(p)); },
-            init() {
-                const self = this;
-                const threshold = appState.settings.autoResumeThreshold || 15;
 
-                const tryResume = () => {
-                    if (!window.location.pathname.startsWith('/watch')) return;
-                    const videoId = getVideoId();
-                    if (!videoId) return;
-                    const positions = self._getPositions();
-                    const saved = positions[videoId];
-                    if (!saved || saved < threshold) return;
-                    const video = document.querySelector('video.html5-main-video');
-                    if (!video || video.currentTime > threshold) return;
-                    if (!isFinite(video.duration)) return; // Skip live streams
-                    video.currentTime = saved;
-                    showToast(`Resumed from ${Math.floor(saved / 60)}:${String(Math.floor(saved % 60)).padStart(2, '0')}`, '#3b82f6', { duration: 2 });
-                    // Remove position after resuming
-                    delete positions[videoId];
-                    self._setPositions(positions);
-                };
 
-                addNavigateRule(this._ruleId, () => waitForPageContent(tryResume));
-
-                // Save position every 10 seconds
-                this._saveInterval = setInterval(() => {
-                    if (!window.location.pathname.startsWith('/watch')) return;
-                    const video = document.querySelector('video.html5-main-video');
-                    if (!video || video.paused || video.duration < 60 || !isFinite(video.duration)) return;
-                    const videoId = getVideoId();
-                    if (!videoId) return;
-                    // Don't save if near start or near end (within 10%)
-                    if (video.currentTime < threshold || video.currentTime > video.duration * 0.9) return;
-                    const positions = self._getPositions();
-                    positions[videoId] = Math.floor(video.currentTime);
-                    // Keep only last 200 entries
-                    const keys = Object.keys(positions);
-                    if (keys.length > 200) { keys.slice(0, keys.length - 200).forEach(k => delete positions[k]); }
-                    self._setPositions(positions);
-                }, 10000);
-            },
-            destroy() {
-                removeNavigateRule(this._ruleId);
-                if (this._saveInterval) clearInterval(this._saveInterval);
-            }
-        },
-        {
-            id: 'autoResumeThreshold',
-            name: 'Resume Threshold',
-            description: 'Seconds into a video before saving resume position',
-            group: 'Video Player',
-            icon: 'clock',
-            isSubFeature: true,
-            parentId: 'autoResumePosition',
-            type: 'range',
-            settingKey: 'autoResumeThreshold',
-            min: 5,
-            max: 120,
-            step: 5,
-            formatValue: (v) => `${v}s`,
-            init() {},
-            destroy() {}
-        },
-        // ─── GPU Context Recovery (monitor switch fix) ───
-        {
-            id: 'gpuContextRecovery',
-            name: 'Monitor Switch Fix',
-            description: 'Fixes black video on non-primary monitors by disabling Chromium hardware video overlays (mixed-DPI multi-monitor setups)',
-            group: 'Video Player',
-            icon: 'monitor',
-            _styleEl: null,
-
-            init() {
-                // Chrome on Windows uses DirectComposition hardware overlays for <video>.
-                // The overlay renders directly on the display, bypassing normal compositing.
-                // On mixed-DPI multi-monitor setups, this only works on the primary display —
-                // secondary monitors at different scaling get a black rectangle.
-                //
-                // Overriding the video element to use CSS-based sizing with object-fit: contain
-                // forces Chrome out of the hardware overlay path because overlays cannot perform
-                // CSS object-fit calculations. Falls back to normal GPU compositing which works
-                // on all displays regardless of DPI.
-                this._styleEl = GM_addStyle([
-                    '#movie_player .html5-video-container { width: 100% !important; height: 100% !important; }',
-                    '#movie_player video.html5-main-video { width: 100% !important; height: 100% !important; left: 0 !important; top: 0 !important; object-fit: contain !important; }'
-                ].join('\n'));
-            },
-            destroy() {
-                if (this._styleEl) { this._styleEl.remove(); this._styleEl = null; }
-            }
-        },
-
-        // ─── Auto-Skip "Still Watching?" (YouTube NonStop) ───
-        {
-            id: 'autoSkipStillWatching',
-            name: 'Auto-Skip "Still Watching?"',
-            description: 'Automatically dismiss the "Video paused. Continue watching?" popup and prevent YouTube inactivity pauses',
-            group: 'Video Player',
-            icon: 'skip-forward',
-            _checkInterval: null,
-            _origPause: null,
-            _patchedVideo: null,
-            init() {
-                const dismissPopup = () => {
-                    const confirmButton = document.querySelector(
-                        'yt-confirm-dialog-renderer #confirm-button, ' +
-                        '.ytp-pause-overlay-container button, ' +
-                        'ytd-popup-container yt-confirm-dialog-renderer button.yt-spec-button-shape-next--filled, ' +
-                        'tp-yt-paper-dialog #confirm-button, ' +
-                        'ytd-enforcement-message-view-model button'
-                    );
-                    if (confirmButton) {
-                        const dialogText = confirmButton.closest('yt-confirm-dialog-renderer, tp-yt-paper-dialog')?.textContent?.toLowerCase() || '';
-                        if (dialogText.includes('still watching') || dialogText.includes('continue watching') || dialogText.includes('video paused')) {
-                            confirmButton.click();
-                            showToast('Auto-dismissed "Still watching?" popup', '#22c55e');
-                            DebugManager.log('StillWatching', 'Dismissed popup');
-                        }
-                    }
-                    const pauseOverlay = document.querySelector('.ytp-pause-overlay');
-                    if (pauseOverlay && pauseOverlay.style.display !== 'none') {
-                        const playButton = document.querySelector('.ytp-play-button');
-                        if (playButton) {
-                            playButton.click();
-                            showToast('Auto-resumed playback', '#22c55e');
-                        }
-                    }
-                    // Proactive: simulate user activity to prevent the popup from appearing
-                    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-                };
-                this._checkInterval = setInterval(dismissPopup, 2000);
-                addMutationRule(this.id, () => setTimeout(dismissPopup, 100));
-            },
-            destroy() {
-                if (this._checkInterval) clearInterval(this._checkInterval);
-                removeMutationRule(this.id);
-            }
-        },
-
-        // ─── Playback Speed Presets ───
-        {
-            id: 'playbackSpeedPresets',
-            name: 'Speed Presets',
-            description: 'Quick buttons for 1x, 1.25x, 1.5x, 1.75x, 2x speeds on the player controls',
-            group: 'Video Player',
-            icon: 'gauge',
-            _styleElement: null,
-            _container: null,
-
-            _createSpeedButton(speed, isActive) {
-                const btn = document.createElement('button');
-                btn.className = 'ytkit-speed-btn' + (isActive ? ' active' : '');
-                btn.textContent = speed === 1 ? '1x' : speed + 'x';
-                btn.dataset.speed = speed;
-                btn.onclick = (e) => {
-                    e.stopPropagation();
-                    const video = document.querySelector('video.html5-main-video');
-                    if (video) {
-                        video.playbackRate = speed;
-                        document.querySelectorAll('.ytkit-speed-btn').forEach(b => b.classList.remove('active'));
-                        btn.classList.add('active');
-                        appState.settings.defaultPlaybackSpeed = speed;
-                        settingsManager.save(appState.settings);
-                    }
-                };
-                return btn;
-            },
-
-            _applySpeed(video) {
-                const targetSpeed = appState.settings.defaultPlaybackSpeed || 1;
-                video.playbackRate = targetSpeed;
-                document.querySelectorAll('.ytkit-speed-btn').forEach(b => {
-                    b.classList.toggle('active', Math.abs(parseFloat(b.dataset.speed) - targetSpeed) < 0.01);
-                });
-            },
-
-            _injectSpeedControls() {
-                if (!window.location.pathname.startsWith('/watch')) return;
-                if (document.querySelector('.ytkit-speed-controls')) return;
-                const player = cachedQuery('.ytp-right-controls');
-                if (!player) return;
-                const container = document.createElement('div');
-                container.className = 'ytkit-speed-controls';
-                const defaultSpeed = appState.settings.defaultPlaybackSpeed || 1;
-                [1, 1.25, 1.5, 1.75, 2].forEach(speed => {
-                    container.appendChild(this._createSpeedButton(speed, Math.abs(defaultSpeed - speed) < 0.01));
-                });
-                player.insertBefore(container, player.firstChild);
-                this._container = container;
-                const video = cachedQuery('video.html5-main-video');
-                if (video) setTimeout(() => this._applySpeed(video), 500);
-            },
-
-            init() {
-                const css = `
-                    .ytkit-speed-controls { display:flex;align-items:center;gap:2px;margin-right:8px; }
-                    .ytkit-speed-btn { background:rgba(255,255,255,0.1);border:none;color:#fff;padding:4px 8px;border-radius:4px;font-size:11px;cursor:pointer;transition:all 0.15s;font-weight:500; }
-                    .ytkit-speed-btn:hover { background:rgba(255,255,255,0.2); }
-                    .ytkit-speed-btn.active { background:#c00;color:#fff; }
-                `;
-                this._styleElement = injectStyle(css, this.id, true);
-                addNavigateRule(this.id, () => setTimeout(() => this._injectSpeedControls(), 1000));
-                setTimeout(() => this._injectSpeedControls(), 1000);
-            },
-
-            destroy() {
-                this._styleElement?.remove();
-                removeNavigateRule(this.id);
-                document.querySelector('.ytkit-speed-controls')?.remove();
-            }
-        },
 
         // ALCHEMY-INSPIRED FEATURES
         {
             id: 'quickLinkMenu',
             name: 'Logo Quick Links',
             description: 'Hover over the YouTube logo to reveal a customizable dropdown menu',
-            group: 'Interface',
+            group: 'Home / Subscriptions',
             icon: 'menu',
             _wrapper: null,
             _styleEl: null,
@@ -7009,7 +6642,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'quickLinkEditor',
             name: 'Edit Quick Links',
             description: 'Customize the logo dropdown menu. One link per line: Label | URL',
-            group: 'Interface',
+            group: 'Home / Subscriptions',
             icon: 'menu',
             isSubFeature: true,
             parentId: 'quickLinkMenu',
@@ -7035,444 +6668,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
 
-        cssFeature('disableSeekPreview', 'Disable Seek Preview', 'Hide the large video frame preview that appears when hovering/clicking the progress bar (fixes seek issues)', 'Video Player', 'eye-off',
-            `.ytp-tooltip.ytp-preview .ytp-tooltip-bg { display: none !important; }
-             .ytp-tooltip.ytp-preview .ytp-tooltip-image { display: none !important; }
-             .ytp-storyboard-framepreview { display: none !important; }
-             .ytp-inline-preview-ui { display: none !important; }`),
-
-        {
-            id: 'disableAutoplay',
-            name: 'Disable Autoplay Next',
-            description: 'Prevent YouTube from automatically playing the next video when the current one ends',
-            group: 'Video Player',
-            icon: 'circle-stop',
-            _handler: null,
-            _navRuleId: 'disableAutoplayNav',
-            _ensureOff() {
-                // Turn off YouTube's native autoplay toggle
-                const toggle = document.querySelector('.ytp-autonav-toggle-button');
-                if (toggle && toggle.getAttribute('aria-checked') === 'true') {
-                    toggle.click();
-                }
-            },
-            init() {
-                this._handler = () => {
-                    const vid = document.querySelector('video.html5-main-video');
-                    if (!vid) return;
-                    // Cancel any pending navigation by pausing immediately
-                    setTimeout(() => {
-                        if (vid.ended) vid.pause();
-                    }, 0);
-                };
-                this._ensureOff();
-                document.addEventListener('yt-navigate-finish', () => this._ensureOff());
-                const player = document.getElementById('movie_player');
-                if (player) player.addEventListener('ended', this._handler, true);
-                addNavigateRule(this._navRuleId, () => {
-                    this._ensureOff();
-                    const p = document.getElementById('movie_player');
-                    if (p) p.addEventListener('ended', this._handler, true);
-                });
-            },
-            destroy() {
-                const player = document.getElementById('movie_player');
-                if (player && this._handler) player.removeEventListener('ended', this._handler, true);
-                removeNavigateRule(this._navRuleId);
-                this._handler = null;
-            }
-        },
-
-        // ─── Playback Features ───
-        {
-            id: 'mousewheelSpeed',
-            name: 'Mousewheel Speed Control',
-            description: 'Hold Shift + scroll on the video player to adjust playback speed (0.25x - 4x)',
-            group: 'Playback',
-            icon: 'gauge',
-            _handler: null,
-            _overlay: null,
-            _overlayTimer: null,
-            _showOverlay(text) {
-                if (!this._overlay) {
-                    this._overlay = document.createElement('div');
-                    this._overlay.className = 'ytkit-speed-overlay';
-                    this._overlay.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fff;padding:6px 16px;border-radius:6px;font-size:18px;font-weight:700;font-family:"Roboto",sans-serif;z-index:100;pointer-events:none;opacity:0;transition:opacity 0.15s;';
-                }
-                const player = document.querySelector('#movie_player');
-                if (player && !player.contains(this._overlay)) player.appendChild(this._overlay);
-                this._overlay.textContent = text;
-                this._overlay.style.opacity = '1';
-                clearTimeout(this._overlayTimer);
-                this._overlayTimer = setTimeout(() => { if (this._overlay) this._overlay.style.opacity = '0'; }, 800);
-            },
-            init() {
-                this._handler = (e) => {
-                    if (!e.shiftKey) return;
-                    const player = document.querySelector('#movie_player');
-                    if (!player || !player.contains(e.target)) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const video = document.querySelector('video.html5-main-video');
-                    if (!video) return;
-                    const delta = e.deltaY < 0 ? 0.25 : -0.25;
-                    const newSpeed = Math.min(4, Math.max(0.25, Math.round((video.playbackRate + delta) * 100) / 100));
-                    video.playbackRate = newSpeed;
-                    this._showOverlay(newSpeed + 'x');
-                    // Sync speed preset buttons if present
-                    document.querySelectorAll('.ytkit-speed-btn').forEach(b => {
-                        b.classList.toggle('active', Math.abs(parseFloat(b.dataset.speed) - newSpeed) < 0.01);
-                    });
-                };
-                document.addEventListener('wheel', this._handler, { passive: false, capture: true });
-            },
-            destroy() {
-                if (this._handler) document.removeEventListener('wheel', this._handler, true);
-                this._overlay?.remove();
-                this._overlay = null;
-                clearTimeout(this._overlayTimer);
-            }
-        },
-        {
-            id: 'videoScreenshot',
-            name: 'Video Screenshot',
-            description: 'Press S while watching to capture the current video frame as PNG (copies to clipboard + downloads)',
-            group: 'Playback',
-            icon: 'camera',
-            _handler: null,
-            init() {
-                this._handler = (e) => {
-                    if (e.key !== 's' && e.key !== 'S') return;
-                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-                    if (e.ctrlKey || e.altKey || e.metaKey) return;
-                    if (!window.location.pathname.startsWith('/watch')) return;
-                    const video = document.querySelector('video.html5-main-video');
-                    if (!video || video.readyState < 2) return;
-                    e.preventDefault();
-                    const canvas = document.createElement('canvas');
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    // Copy to clipboard
-                    canvas.toBlob(blob => {
-                        if (blob) {
-                            try {
-                                navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(() => {
-                                    showToast('Screenshot copied to clipboard', '#22c55e');
-                                }).catch(() => {
-                                    showToast('Screenshot saved (clipboard blocked)', '#f59e0b');
-                                });
-                            } catch(e) {
-                                showToast('Screenshot saved', '#22c55e');
-                            }
-                            // Also trigger download
-                            const url = URL.createObjectURL(blob);
-                            const a = Object.assign(document.createElement('a'), {
-                                href: url,
-                                download: `ytkit-screenshot-${getVideoId() || 'video'}-${Math.floor(video.currentTime)}s.png`
-                            });
-                            a.click();
-                            URL.revokeObjectURL(url);
-                        }
-                    }, 'image/png');
-                };
-                document.addEventListener('keydown', this._handler);
-            },
-            destroy() {
-                if (this._handler) document.removeEventListener('keydown', this._handler);
-                this._handler = null;
-            }
-        },
-        {
-            id: 'returnYoutubeDislike',
-            name: 'Return YouTube Dislike',
-            description: 'Show dislike counts on videos using the Return YouTube Dislike API',
-            group: 'Playback',
-            icon: 'thumbs-down',
-            _lastVideoId: null,
-            _styleElement: null,
-            pages: ['watch'],
-
-            async _fetchDislikes(videoId) {
-                return new Promise((resolve) => {
-                    GM.xmlHttpRequest({
-                        method: 'GET',
-                        url: `https://returnyoutubedislikeapi.com/votes?videoId=${videoId}`,
-                        headers: { Accept: 'application/json' },
-                        timeout: 5000,
-                        onload: (r) => {
-                            if (r.status === 200) {
-                                try { resolve(JSON.parse(r.responseText)); } catch { resolve(null); }
-                            } else { resolve(null); }
-                        },
-                        onerror: () => resolve(null),
-                        ontimeout: () => resolve(null),
-                    });
-                });
-            },
-
-            _formatCount(n) {
-                if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
-                if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-                if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-                return String(n);
-            },
-
-            async _updateDislikeCount() {
-                const videoId = getVideoId();
-                if (!videoId || videoId === this._lastVideoId) return;
-                this._lastVideoId = videoId;
-
-                const data = await this._fetchDislikes(videoId);
-                if (!data || data.dislikes === undefined) return;
-
-                // Find the dislike button and add count
-                const dislikeBtn = document.querySelector('dislike-button-view-model button, ytd-toggle-button-renderer:has(button[aria-label*="islike"]) button, segmented-like-dislike-button-view-model .YtSegmentedLikeDislikeButtonViewModelSegmentedButtonsWrapper button:last-child');
-                if (!dislikeBtn) return;
-
-                // Remove existing YTKit dislike count
-                dislikeBtn.querySelector('.ytkit-dislike-count')?.remove();
-
-                const span = document.createElement('span');
-                span.className = 'ytkit-dislike-count';
-                span.textContent = this._formatCount(data.dislikes);
-                span.style.cssText = 'margin-left:6px;font-size:12px;font-weight:500;';
-                dislikeBtn.appendChild(span);
-
-                // Also show the like/dislike ratio bar
-                this._showRatioBar(data.likes, data.dislikes);
-            },
-
-            _showRatioBar(likes, dislikes) {
-                document.querySelector('.ytkit-ryd-bar')?.remove();
-                const total = likes + dislikes;
-                if (total === 0) return;
-                const likePercent = (likes / total) * 100;
-                const bar = document.createElement('div');
-                bar.className = 'ytkit-ryd-bar';
-                bar.style.cssText = `width:100%;height:3px;border-radius:2px;margin-top:4px;background:#666;overflow:hidden;`;
-                const fill = document.createElement('div');
-                fill.style.cssText = `width:${likePercent}%;height:100%;background:#3ea6ff;border-radius:2px;transition:width 0.3s;`;
-                bar.appendChild(fill);
-                // Insert below the like/dislike buttons
-                const container = document.querySelector('segmented-like-dislike-button-view-model, ytd-segmented-like-dislike-button-renderer, #top-level-buttons-computed');
-                if (container) {
-                    container.style.position = container.style.position || 'relative';
-                    container.appendChild(bar);
-                }
-            },
-
-            init() {
-                this._styleElement = injectStyle('.ytkit-dislike-count { font-variant-numeric: tabular-nums; }', this.id, true);
-                this._updateDislikeCount();
-                addNavigateRule('rydUpdate', () => {
-                    this._lastVideoId = null;
-                    setTimeout(() => this._updateDislikeCount(), 1500);
-                });
-            },
-            destroy() {
-                removeNavigateRule('rydUpdate');
-                document.querySelector('.ytkit-dislike-count')?.remove();
-                document.querySelector('.ytkit-ryd-bar')?.remove();
-                this._styleElement?.remove();
-                this._lastVideoId = null;
-            }
-        },
-        {
-            id: 'cinemaMode',
-            name: 'Cinema Mode',
-            description: 'Dims everything except the video player for a theater-like experience (toggle with C key)',
-            group: 'Playback',
-            icon: 'tv',
-            _handler: null,
-            _overlay: null,
-            _active: false,
-
-            _toggle() {
-                if (!window.location.pathname.startsWith('/watch')) return;
-                this._active = !this._active;
-                if (this._active) {
-                    if (!this._overlay) {
-                        this._overlay = document.createElement('div');
-                        this._overlay.className = 'ytkit-cinema-overlay';
-                        this._overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:${Z.BUTTONS - 1};pointer-events:none;opacity:0;transition:opacity 0.4s ease;`;
-                        document.body.appendChild(this._overlay);
-                    }
-                    requestAnimationFrame(() => { this._overlay.style.opacity = '1'; });
-                    // Elevate player above overlay
-                    const player = document.querySelector('#movie_player');
-                    if (player) {
-                        player.style.position = 'relative';
-                        player.style.zIndex = String(Z.BUTTONS);
-                    }
-                    showToast('Cinema Mode ON', '#a78bfa', { duration: 1.5 });
-                } else {
-                    if (this._overlay) this._overlay.style.opacity = '0';
-                    const player = document.querySelector('#movie_player');
-                    if (player) {
-                        player.style.position = '';
-                        player.style.zIndex = '';
-                    }
-                    showToast('Cinema Mode OFF', '#71717a', { duration: 1.5 });
-                }
-            },
-
-            init() {
-                this._handler = (e) => {
-                    if (e.key !== 'c' && e.key !== 'C') return;
-                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-                    if (e.ctrlKey || e.altKey || e.metaKey) return;
-                    this._toggle();
-                };
-                document.addEventListener('keydown', this._handler);
-                // Disable on navigation away from watch page
-                addNavigateRule('cinemaModeNav', () => {
-                    if (this._active && !window.location.pathname.startsWith('/watch')) {
-                        this._active = false;
-                        if (this._overlay) this._overlay.style.opacity = '0';
-                        const player = document.querySelector('#movie_player');
-                        if (player) { player.style.position = ''; player.style.zIndex = ''; }
-                    }
-                });
-            },
-            destroy() {
-                if (this._handler) document.removeEventListener('keydown', this._handler);
-                this._handler = null;
-                removeNavigateRule('cinemaModeNav');
-                if (this._overlay) { this._overlay.remove(); this._overlay = null; }
-                const player = document.querySelector('#movie_player');
-                if (player) { player.style.position = ''; player.style.zIndex = ''; }
-                this._active = false;
-            }
-        },
-        {
-            id: 'abLoop',
-            name: 'A-B Loop',
-            description: 'Press [ to set loop start, ] to set loop end, then \\ to toggle loop on/off. Visual markers on progress bar.',
-            group: 'Playback',
-            icon: 'repeat',
-            _handler: null,
-            _loopA: null,
-            _loopB: null,
-            _loopActive: false,
-            _rafId: null,
-            _markers: null,
-            _styleElement: null,
-
-            _updateMarkers() {
-                document.querySelector('.ytkit-ab-markers')?.remove();
-                const video = document.querySelector('video.html5-main-video');
-                const progressBar = document.querySelector('.ytp-progress-bar');
-                if (!video || !progressBar || !video.duration) return;
-                const duration = video.duration;
-                const container = document.createElement('div');
-                container.className = 'ytkit-ab-markers';
-                container.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:41;';
-                if (this._loopA !== null) {
-                    const markerA = document.createElement('div');
-                    markerA.style.cssText = `position:absolute;top:-2px;bottom:-2px;width:3px;background:#22c55e;left:${(this._loopA / duration) * 100}%;border-radius:1px;`;
-                    markerA.title = 'Loop Start: ' + this._formatTime(this._loopA);
-                    container.appendChild(markerA);
-                }
-                if (this._loopB !== null) {
-                    const markerB = document.createElement('div');
-                    markerB.style.cssText = `position:absolute;top:-2px;bottom:-2px;width:3px;background:#ef4444;left:${(this._loopB / duration) * 100}%;border-radius:1px;`;
-                    markerB.title = 'Loop End: ' + this._formatTime(this._loopB);
-                    container.appendChild(markerB);
-                }
-                if (this._loopA !== null && this._loopB !== null && this._loopActive) {
-                    const region = document.createElement('div');
-                    region.style.cssText = `position:absolute;top:0;height:100%;background:rgba(34,197,94,0.2);left:${(this._loopA / duration) * 100}%;width:${((this._loopB - this._loopA) / duration) * 100}%;`;
-                    container.appendChild(region);
-                }
-                progressBar.appendChild(container);
-                this._markers = container;
-            },
-
-            _formatTime(s) {
-                const m = Math.floor(s / 60);
-                const sec = Math.floor(s % 60);
-                return m + ':' + String(sec).padStart(2, '0');
-            },
-
-            _startLoop() {
-                this._stopLoop();
-                const check = () => {
-                    const video = document.querySelector('video.html5-main-video');
-                    if (video && this._loopActive && this._loopA !== null && this._loopB !== null) {
-                        if (video.currentTime >= this._loopB) {
-                            video.currentTime = this._loopA;
-                        }
-                    }
-                    if (this._loopActive) this._rafId = requestAnimationFrame(check);
-                };
-                this._rafId = requestAnimationFrame(check);
-            },
-
-            _stopLoop() {
-                if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
-            },
-
-            init() {
-                this._handler = (e) => {
-                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-                    if (e.ctrlKey || e.altKey || e.metaKey) return;
-                    if (!window.location.pathname.startsWith('/watch')) return;
-                    const video = document.querySelector('video.html5-main-video');
-                    if (!video) return;
-
-                    if (e.key === '[') {
-                        this._loopA = video.currentTime;
-                        showToast('Loop Start: ' + this._formatTime(this._loopA), '#22c55e', { duration: 1.5 });
-                        this._updateMarkers();
-                    } else if (e.key === ']') {
-                        this._loopB = video.currentTime;
-                        if (this._loopA !== null && this._loopB <= this._loopA) {
-                            showToast('Loop end must be after start', '#ef4444', { duration: 2 });
-                            this._loopB = null;
-                            return;
-                        }
-                        showToast('Loop End: ' + this._formatTime(this._loopB), '#ef4444', { duration: 1.5 });
-                        this._updateMarkers();
-                    } else if (e.key === '\\') {
-                        if (this._loopA === null || this._loopB === null) {
-                            showToast('Set loop points first: [ for start, ] for end', '#f59e0b', { duration: 3 });
-                            return;
-                        }
-                        this._loopActive = !this._loopActive;
-                        if (this._loopActive) {
-                            this._startLoop();
-                            showToast('A-B Loop ON (' + this._formatTime(this._loopA) + ' - ' + this._formatTime(this._loopB) + ')', '#22c55e', { duration: 2 });
-                        } else {
-                            this._stopLoop();
-                            showToast('A-B Loop OFF', '#71717a', { duration: 1.5 });
-                        }
-                        this._updateMarkers();
-                    }
-                };
-                document.addEventListener('keydown', this._handler);
-                // Reset on navigation
-                addNavigateRule('abLoopNav', () => {
-                    this._loopA = null; this._loopB = null; this._loopActive = false;
-                    this._stopLoop();
-                    document.querySelector('.ytkit-ab-markers')?.remove();
-                });
-            },
-            destroy() {
-                if (this._handler) document.removeEventListener('keydown', this._handler);
-                this._handler = null;
-                this._stopLoop();
-                removeNavigateRule('abLoopNav');
-                document.querySelector('.ytkit-ab-markers')?.remove();
-                this._loopA = null; this._loopB = null; this._loopActive = false;
-            }
-        },
         {
             id: 'forceH264',
             name: 'Force H.264 Codec',
             description: 'Prefer H.264 (AVC) over VP9/AV1 for lower CPU usage on older hardware. May reduce max quality.',
-            group: 'Quality',
+            group: 'Watch Page',
             icon: 'cpu',
             _origCanPlayType: null,
 
@@ -7501,7 +6701,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'titleNormalization',
             name: 'Normalize Clickbait Titles',
             description: 'Convert ALL CAPS titles to Title Case. Reduces clickbait without changing meaning.',
-            group: 'Content',
+            group: 'Home / Subscriptions',
             icon: 'type',
             _observer: null,
 
@@ -7558,7 +6758,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'watchProgress',
             name: 'Watch Progress Indicators',
             description: 'Show colored progress bars on video thumbnails based on your watch history (saved locally)',
-            group: 'Content',
+            group: 'Home / Subscriptions',
             icon: 'bar-chart',
             _styleElement: null,
             _storageKey: 'ytkit-watch-progress',
@@ -7882,10 +7082,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             { type: 'line', x1: 1, y1: 1, x2: 23, y2: 23 }
         ], _S),
 
-        'moon': () => createSVG('0 0 24 24', [
-            { type: 'path', d: 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' }
-        ], _S),
-
         'square': () => createSVG('0 0 24 24', [
             { type: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 2 }
         ], _S),
@@ -8075,24 +7271,40 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             { type: 'path', d: 'M12 15l3.5-5' },
             { type: 'circle', cx: 12, cy: 15, r: 2 },
             { type: 'path', d: 'M2 12a10 10 0 0120 0' }
+        ], _S),
+        'palette': () => createSVG('0 0 24 24', [
+            { type: 'path', d: 'M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10a2.5 2.5 0 002.5-2.5c0-.61-.23-1.21-.64-1.67A1.5 1.5 0 0115 16h1.5a10 10 0 00-4.5-18z' },
+            { type: 'circle', cx: 7.5, cy: 11.5, r: 1.5 },
+            { type: 'circle', cx: 12, cy: 7.5, r: 1.5 },
+            { type: 'circle', cx: 16.5, cy: 11.5, r: 1.5 }
+        ], _S),
+        'cpu': () => createSVG('0 0 24 24', [
+            { type: 'rect', x: 4, y: 4, width: 16, height: 16, rx: 2 },
+            { type: 'rect', x: 9, y: 9, width: 6, height: 6 },
+            { type: 'line', x1: 9, y1: 1, x2: 9, y2: 4 }, { type: 'line', x1: 15, y1: 1, x2: 15, y2: 4 },
+            { type: 'line', x1: 9, y1: 20, x2: 9, y2: 23 }, { type: 'line', x1: 15, y1: 20, x2: 15, y2: 23 },
+            { type: 'line', x1: 20, y1: 9, x2: 23, y2: 9 }, { type: 'line', x1: 20, y1: 14, x2: 23, y2: 14 },
+            { type: 'line', x1: 1, y1: 9, x2: 4, y2: 9 }, { type: 'line', x1: 1, y1: 14, x2: 4, y2: 14 }
+        ], _S),
+        'type': () => createSVG('0 0 24 24', [
+            { type: 'polyline', points: '4 7 4 4 20 4 20 7' },
+            { type: 'line', x1: 9, y1: 20, x2: 15, y2: 20 },
+            { type: 'line', x1: 12, y1: 4, x2: 12, y2: 20 }
+        ], _S),
+        'bar-chart': () => createSVG('0 0 24 24', [
+            { type: 'line', x1: 12, y1: 20, x2: 12, y2: 10 },
+            { type: 'line', x1: 18, y1: 20, x2: 18, y2: 4 },
+            { type: 'line', x1: 6, y1: 20, x2: 6, y2: 16 }
         ], _S)
     };
 
     const CATEGORY_CONFIG = {
-        'Interface': { icon: 'interface', color: '#60a5fa' },
-        'Appearance': { icon: 'appearance', color: '#f472b6' },
-        'Content': { icon: 'content', color: '#34d399' },
-        'Video Player': { icon: 'player', color: '#a78bfa' },
-        'Playback': { icon: 'gauge', color: '#fb923c' },
+        'Watch Page': { icon: 'player', color: '#a78bfa' },
+        'Home / Subscriptions': { icon: 'interface', color: '#60a5fa' },
+        'Theme': { icon: 'appearance', color: '#f472b6' },
         'Ad Blocker': { icon: 'shield', color: '#10b981' },
-        'SponsorBlock': { icon: 'sponsor', color: '#22d3ee' },
-        'Quality': { icon: 'quality', color: '#facc15' },
-        'Clutter': { icon: 'clutter', color: '#f87171' },
         'Live Chat': { icon: 'livechat', color: '#4ade80' },
-        'Action Buttons': { icon: 'actions', color: '#c084fc' },
-        'Player Controls': { icon: 'controls', color: '#38bdf8' },
         'Downloads': { icon: 'downloads', color: '#f97316' },
-        'Video Hider': { icon: 'eye-off', color: '#ef4444' },
     };
 
     function injectSettingsButton() {
@@ -8140,16 +7352,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
     function buildSettingsPanel() {
         if (document.getElementById('ytkit-settings-panel')) return;
 
-        const categoryOrder = ['Interface', 'Appearance', 'Content', 'Video Hider', 'Video Player', 'Playback', 'Ad Blocker', 'SponsorBlock', 'Quality', 'Clutter', 'Live Chat', 'Action Buttons', 'Player Controls', 'Downloads'];
+        const categoryOrder = ['Watch Page', 'Home / Subscriptions', 'Theme', 'Ad Blocker', 'Live Chat', 'Downloads'];
 
         // Group labels: maps first category of each group → label text
-        const categoryGroupLabels = {
-            'Interface':       'Interface',
-            'Content':         'Content',
-            'Video Player':    'Player',
-            'Ad Blocker':      'Filtering',
-            'Live Chat':       'Controls',
-        };
+        const categoryGroupLabels = {};
         const featuresByCategory = categoryOrder.reduce((acc, cat) => ({...acc, [cat]: []}), {});
         features.forEach(f => { if (f.group && featuresByCategory[f.group]) featuresByCategory[f.group].push(f); });
 
@@ -8170,10 +7376,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         const brand = document.createElement('div');
         brand.className = 'ytkit-brand';
 
-        const logoWrap = document.createElement('div');
-        logoWrap.className = 'ytkit-logo';
-        logoWrap.appendChild(ICONS.ytLogo());
-
         const title = document.createElement('h1');
         title.className = 'ytkit-title';
         const titleYT = document.createElement('span');
@@ -8189,7 +7391,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         badge.className = 'ytkit-badge';
         badge.textContent = 'PRO';
 
-        brand.appendChild(logoWrap);
         brand.appendChild(title);
         brand.appendChild(badge);
 
@@ -8229,132 +7430,35 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         divider.className = 'ytkit-sidebar-divider';
         sidebar.appendChild(divider);
 
-        categoryOrder.forEach((cat, index) => {
-            // Insert group label before first category of each group
-            if (categoryGroupLabels[cat]) {
-                const groupLabel = document.createElement('div');
-                groupLabel.className = 'ytkit-nav-group-label';
-                groupLabel.textContent = categoryGroupLabels[cat];
-                if (index > 0) groupLabel.style.marginTop = '10px';
-                sidebar.appendChild(groupLabel);
-            }
-
-            // Special handling for Ad Blocker sidebar
-            if (cat === 'Ad Blocker') {
-                const config = CATEGORY_CONFIG[cat];
-                const catId = cat.replace(/ /g, '-');
-                const btn = document.createElement('button');
-                btn.className = 'ytkit-nav-btn';
-                btn.dataset.tab = catId;
-
-                const iconWrap = document.createElement('span');
-                iconWrap.className = 'ytkit-nav-icon';
-                iconWrap.style.setProperty('--cat-color', config.color);
-                iconWrap.appendChild((ICONS.shield || ICONS.settings)());
-
-                const labelSpan = document.createElement('span');
-                labelSpan.className = 'ytkit-nav-label';
-                labelSpan.textContent = cat;
-
-                const countSpan = document.createElement('span');
-                countSpan.className = 'ytkit-nav-count';
-                const st = _rw.__ytab?.stats;
-                countSpan.textContent = st ? `${st.blocked}` : '0';
-                countSpan.title = 'Ads blocked this session';
-                // Live update — store reference so it can be cleared when panel is destroyed
-                const _adCountInterval = setInterval(() => {
-                    // Stop updating if the element has been removed from the DOM
-                    if (!countSpan.isConnected) { clearInterval(_adCountInterval); return; }
-                    const s = _rw.__ytab?.stats;
-                    if (s) countSpan.textContent = `${s.blocked}`;
-                }, 3000);
-
-                const arrowSpan = document.createElement('span');
-                arrowSpan.className = 'ytkit-nav-arrow';
-                arrowSpan.appendChild(ICONS.chevronRight());
-
-                btn.appendChild(iconWrap);
-                btn.appendChild(labelSpan);
-                btn.appendChild(countSpan);
-                btn.appendChild(arrowSpan);
-                sidebar.appendChild(btn);
-                return;
-            }
-
-            // Special handling for Video Hider sidebar
-            if (cat === 'Video Hider') {
-                const config = CATEGORY_CONFIG[cat];
-                const catId = 'Video-Hider';
-                const btn = document.createElement('button');
-                btn.className = 'ytkit-nav-btn';
-                btn.dataset.tab = catId;
-
-                const iconWrap = document.createElement('span');
-                iconWrap.className = 'ytkit-nav-icon';
-                iconWrap.style.setProperty('--cat-color', config.color);
-                const iconFn = ICONS['eye-off'] || ICONS.settings;
-                iconWrap.appendChild(iconFn());
-
-                const labelSpan = document.createElement('span');
-                labelSpan.className = 'ytkit-nav-label';
-                labelSpan.textContent = cat;
-
-                const countSpan = document.createElement('span');
-                countSpan.className = 'ytkit-nav-count';
-                const videoHiderFeature = features.find(f => f.id === 'hideVideosFromHome');
-                const videoCount = (typeof videoHiderFeature?._getHiddenVideos === 'function' ? videoHiderFeature._getHiddenVideos() : []).length;
-                const channelCount = (typeof videoHiderFeature?._getBlockedChannels === 'function' ? videoHiderFeature._getBlockedChannels() : []).length;
-                countSpan.textContent = `${videoCount + channelCount}`;
-                countSpan.title = 'Hidden videos + blocked channels';
-
-                const arrowSpan = document.createElement('span');
-                arrowSpan.className = 'ytkit-nav-arrow';
-                arrowSpan.appendChild(ICONS.chevronRight());
-
-                btn.appendChild(iconWrap);
-                btn.appendChild(labelSpan);
-                btn.appendChild(countSpan);
-                btn.appendChild(arrowSpan);
-                sidebar.appendChild(btn);
-                return;
-            }
-
-            const categoryFeatures = featuresByCategory[cat];
-            if (!categoryFeatures || categoryFeatures.length === 0) return;
-
-            const config = CATEGORY_CONFIG[cat] || { icon: 'settings', color: '#60a5fa' };
-            const catId = cat.replace(/ /g, '-');
-            const enabledCount = categoryFeatures.filter(f => !f.isSubFeature && appState.settings[f.id]).length;
-            const totalCount = categoryFeatures.filter(f => !f.isSubFeature).length;
-
+        // Helper: create a sidebar nav button
+        function makeNavBtn(cat, config, iconNode, countText, countTitle, extraClass) {
+            const catId = cat.replace(/[^a-zA-Z0-9]+/g, '-').replace(/-+$/, '');
             const btn = document.createElement('button');
-            btn.className = 'ytkit-nav-btn' + (index === 0 ? ' active' : '');
+            btn.className = 'ytkit-nav-btn' + (extraClass || '');
             btn.dataset.tab = catId;
-
             const iconWrap = document.createElement('span');
             iconWrap.className = 'ytkit-nav-icon';
             iconWrap.style.setProperty('--cat-color', config.color);
-            const iconFn = ICONS[config.icon] || ICONS.settings;
-            iconWrap.appendChild(iconFn());
-
+            iconWrap.appendChild(iconNode);
             const labelSpan = document.createElement('span');
             labelSpan.className = 'ytkit-nav-label';
             labelSpan.textContent = cat;
-
             const countSpan = document.createElement('span');
             countSpan.className = 'ytkit-nav-count';
-            countSpan.textContent = `${enabledCount}/${totalCount}`;
-
+            countSpan.textContent = countText;
+            if (countTitle) countSpan.title = countTitle;
             const arrowSpan = document.createElement('span');
             arrowSpan.className = 'ytkit-nav-arrow';
             arrowSpan.appendChild(ICONS.chevronRight());
-
             btn.appendChild(iconWrap);
             btn.appendChild(labelSpan);
             btn.appendChild(countSpan);
             btn.appendChild(arrowSpan);
+            return { btn, countSpan, catId };
+        }
 
-            // Drag-reorder support
+        // Helper: add drag-reorder support to a nav button
+        function addDragReorder(btn, catId) {
             btn.draggable = true;
             btn.addEventListener('dragstart', (e) => {
                 e.dataTransfer.setData('text/plain', catId);
@@ -8383,11 +7487,44 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const midY = rect.top + rect.height / 2;
                 if (e.clientY < midY) btn.before(draggedBtn);
                 else btn.after(draggedBtn);
-                // Persist order
                 const newOrder = Array.from(sidebar.querySelectorAll('.ytkit-nav-btn')).map(b => b.dataset.tab);
                 GM_setValue('ytkit_sidebar_order', JSON.stringify(newOrder));
             });
+        }
 
+        categoryOrder.forEach((cat, index) => {
+            // Insert group label before first category of each group
+            if (categoryGroupLabels[cat]) {
+                const groupLabel = document.createElement('div');
+                groupLabel.className = 'ytkit-nav-group-label';
+                groupLabel.textContent = categoryGroupLabels[cat];
+                if (index > 0) groupLabel.style.marginTop = '6px';
+                sidebar.appendChild(groupLabel);
+            }
+
+
+            // Ad Blocker sidebar — live ad count
+            if (cat === 'Ad Blocker') {
+                const config = CATEGORY_CONFIG[cat];
+                const st = _rw.__ytab?.stats;
+                const { btn, countSpan } = makeNavBtn(cat, config, (ICONS.shield || ICONS.settings)(), st ? `${st.blocked}` : '0', 'Ads blocked this session', index === 0 ? ' active' : '');
+                const _adCountInterval = setInterval(() => {
+                    if (!countSpan.isConnected) { clearInterval(_adCountInterval); return; }
+                    const s = _rw.__ytab?.stats;
+                    if (s) countSpan.textContent = `${s.blocked}`;
+                }, 3000);
+                sidebar.appendChild(btn);
+                return;
+            }
+
+            const categoryFeatures = featuresByCategory[cat];
+            if (!categoryFeatures || categoryFeatures.length === 0) return;
+
+            const config = CATEGORY_CONFIG[cat] || { icon: 'settings', color: '#60a5fa' };
+            const enabledCount = categoryFeatures.filter(f => !f.isSubFeature && appState.settings[f.id]).length;
+            const totalCount = categoryFeatures.filter(f => !f.isSubFeature).length;
+            const { btn, catId } = makeNavBtn(cat, config, (ICONS[config.icon] || ICONS.settings)(), `${enabledCount}/${totalCount}`, '', index === 0 ? ' active' : '');
+            addDragReorder(btn, catId);
             sidebar.appendChild(btn);
         });
 
@@ -8418,62 +7555,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         const content = document.createElement('div');
         content.className = 'ytkit-content';
 
-        // Recently Changed section
-        const recentSection = document.createElement('div');
-        recentSection.id = 'ytkit-recent-section';
-        recentSection.className = 'ytkit-recent-section';
-        recentSection.style.display = 'none';
-
-        function renderRecentSection() {
-            while (recentSection.firstChild) recentSection.firstChild.remove();
-            if (_recentlyChanged.length === 0) { recentSection.style.display = 'none'; return; }
-            recentSection.style.display = 'block';
-
-            const rHeader = document.createElement('div');
-            rHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
-            const rTitle = document.createElement('span');
-            rTitle.style.cssText = 'font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--ytkit-text-muted);';
-            rTitle.textContent = 'Recently Changed';
-            const rClear = document.createElement('button');
-            rClear.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);background:none;border:none;cursor:pointer;padding:2px 6px;border-radius:3px;transition:all 0.15s;';
-            rClear.textContent = 'Clear';
-            rClear.onmouseenter = () => { rClear.style.color = '#ef4444'; rClear.style.background = 'rgba(239,68,68,0.1)'; };
-            rClear.onmouseleave = () => { rClear.style.color = ''; rClear.style.background = ''; };
-            rClear.onclick = () => { _recentlyChanged.length = 0; renderRecentSection(); };
-            rHeader.appendChild(rTitle);
-            rHeader.appendChild(rClear);
-            recentSection.appendChild(rHeader);
-
-            const rGrid = document.createElement('div');
-            rGrid.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
-            _recentlyChanged.forEach(item => {
-                const feat = features.find(ff => ff.id === item.id);
-                if (!feat) return;
-                const pill = document.createElement('button');
-                pill.style.cssText = 'display:inline-flex;align-items:center;gap:5px;padding:5px 10px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid var(--ytkit-border);cursor:pointer;transition:all 0.15s;background:' + (item.enabled ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.06)') + ';color:' + (item.enabled ? '#22c55e' : '#ef4444') + ';';
-                const dot = document.createElement('span');
-                dot.style.cssText = 'width:5px;height:5px;border-radius:50%;background:' + (item.enabled ? '#22c55e' : '#ef4444') + ';';
-                pill.appendChild(dot);
-                const lbl = document.createElement('span');
-                lbl.textContent = feat.name;
-                lbl.style.color = 'var(--ytkit-text-secondary)';
-                pill.appendChild(lbl);
-                // Click to navigate to the feature's category
-                pill.onclick = () => {
-                    const catId = (feat.group || '').replace(/ /g, '-');
-                    const navBtn = document.querySelector('.ytkit-nav-btn[data-tab="' + catId + '"]');
-                    if (navBtn) navBtn.click();
-                };
-                pill.onmouseenter = () => { pill.style.borderColor = item.enabled ? '#22c55e' : '#ef4444'; };
-                pill.onmouseleave = () => { pill.style.borderColor = ''; };
-                rGrid.appendChild(pill);
-            });
-            recentSection.appendChild(rGrid);
-        }
-
-        document.addEventListener('ytkit-recent-changed', renderRecentSection);
-        renderRecentSection();
-
         //  Ad Blocker Custom Pane
         function buildAdBlockPane(config) {
             const adblockFeature = features.find(f => f.id === 'ytAdBlock');
@@ -8490,15 +7571,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             const paneTitle = document.createElement('div');
             paneTitle.className = 'ytkit-pane-title';
 
-            const paneIcon = document.createElement('span');
-            paneIcon.className = 'ytkit-pane-icon';
-            paneIcon.style.setProperty('--cat-color', config.color);
-            paneIcon.appendChild((ICONS.shield || ICONS.settings)());
-
             const paneTitleH2 = document.createElement('h2');
             paneTitleH2.textContent = 'Ad Blocker';
 
-            paneTitle.appendChild(paneIcon);
             paneTitle.appendChild(paneTitleH2);
 
             // Master toggle
@@ -8545,11 +7620,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             pane.appendChild(subGrid);
 
             // ── Shared styles for this pane ──
-            const sectionStyle = 'background:var(--ytkit-bg-elevated);border-radius:10px;padding:16px;margin-top:12px;';
-            const labelStyle = 'font-size:13px;font-weight:600;color:var(--ytkit-text);margin-bottom:8px;display:flex;align-items:center;gap:6px;';
-            const inputStyle = 'width:100%;background:var(--ytkit-bg-card);color:var(--ytkit-text);border:1px solid var(--ytkit-border);border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;outline:none;transition:border-color 0.2s;';
-            const btnStyle = `background:${config.color};color:#000;border:none;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:opacity 0.2s;`;
-            const btnSecStyle = 'background:var(--ytkit-bg-card);color:var(--ytkit-text);border:1px solid var(--ytkit-border);padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;transition:opacity 0.2s;';
+            const sectionStyle = 'background:var(--ytkit-bg-elevated);border-radius:8px;padding:12px;margin-top:8px;';
+            const labelStyle = 'font-size:12px;font-weight:600;color:var(--ytkit-text);margin-bottom:6px;display:flex;align-items:center;gap:5px;';
+            const inputStyle = 'width:100%;background:var(--ytkit-bg-card);color:var(--ytkit-text);border:1px solid var(--ytkit-border);border-radius:5px;padding:6px 8px;font-size:12px;font-family:inherit;outline:none;transition:border-color 0.2s;';
+            const btnStyle = `background:${config.color};color:#000;border:none;padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;transition:opacity 0.2s;`;
+            const btnSecStyle = 'background:var(--ytkit-bg-card);color:var(--ytkit-text);border:1px solid var(--ytkit-border);padding:5px 12px;border-radius:5px;font-size:11px;font-weight:500;cursor:pointer;transition:opacity 0.2s;';
 
             // ── Stats Section ──
             const statsSection = document.createElement('div');
@@ -8561,17 +7636,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             statsSection.appendChild(statsLabel);
 
             const statsGrid = document.createElement('div');
-            statsGrid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:10px;';
+            statsGrid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:8px;';
 
             function makeStat(label, valueGetter, color) {
                 const box = document.createElement('div');
-                box.style.cssText = 'background:var(--ytkit-bg-card);padding:12px;border-radius:8px;text-align:center;';
+                box.style.cssText = 'background:var(--ytkit-bg-card);padding:8px;border-radius:6px;text-align:center;';
                 const num = document.createElement('div');
-                num.style.cssText = `font-size:22px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;`;
+                num.style.cssText = `font-size:18px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;`;
                 num.textContent = valueGetter();
                 num.dataset.statKey = label;
                 const lbl = document.createElement('div');
-                lbl.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);margin-top:4px;';
+                lbl.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);margin-top:2px;';
                 lbl.textContent = label;
                 box.appendChild(num);
                 box.appendChild(lbl);
@@ -8641,10 +7716,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             // Info + Update row
             const infoRow = document.createElement('div');
-            infoRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-top:10px;';
+            infoRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-top:8px;';
 
             const filterInfo = document.createElement('div');
-            filterInfo.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
+            filterInfo.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);';
             const cachedTime = GM_getValue('ytab_filter_update_time', 0);
             const cachedCount = GM_getValue('ytab_cached_selector_count', 0);
             filterInfo.textContent = cachedTime
@@ -8698,12 +7773,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             // ── Bootstrap Status Indicator ──
             const statusRow = document.createElement('div');
-            statusRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:10px;padding:8px 10px;background:var(--ytkit-bg-card);border-radius:6px;';
+            statusRow.style.cssText = 'display:flex;align-items:center;gap:5px;margin-top:8px;padding:6px 8px;background:var(--ytkit-bg-card);border-radius:5px;';
             const statusDot = document.createElement('span');
             const isActive = !!_rw.__ytab?.active;
-            statusDot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${isActive ? config.color : '#ef4444'};flex-shrink:0;`;
+            statusDot.style.cssText = `width:6px;height:6px;border-radius:50%;background:${isActive ? config.color : '#ef4444'};flex-shrink:0;`;
             const statusText = document.createElement('span');
-            statusText.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
+            statusText.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);';
             statusText.textContent = isActive
                 ? 'Proxy engines active (installed at document-start)'
                 : 'Proxies not installed - enable Ad Blocker and reload page';
@@ -8714,7 +7789,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             // ── Live Ad-Block Stats ──
             if (isActive) {
                 const statsRow = document.createElement('div');
-                statsRow.style.cssText = 'display:flex;gap:12px;margin-top:8px;padding:8px 10px;background:var(--ytkit-bg-card);border-radius:6px;';
+                statsRow.style.cssText = 'display:flex;gap:10px;margin-top:6px;padding:6px 8px;background:var(--ytkit-bg-card);border-radius:5px;';
                 const abStats = _rw.__ytab?.stats || { blocked: 0, pruned: 0, ssapSkipped: 0 };
                 const statItems = [
                     { label: 'Blocked', value: abStats.blocked, color: '#22c55e' },
@@ -8758,13 +7833,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             customLabel.textContent = 'Custom Filters';
 
             const customHint = document.createElement('span');
-            customHint.style.cssText = 'font-weight:400;color:var(--ytkit-text-muted);font-size:11px;';
+            customHint.style.cssText = 'font-weight:400;color:var(--ytkit-text-muted);font-size:10px;';
             customHint.textContent = '(CSS selectors, one per line)';
             customLabel.appendChild(customHint);
             customSection.appendChild(customLabel);
 
             const customTextarea = document.createElement('textarea');
-            customTextarea.style.cssText = inputStyle + 'min-height:100px;resize:vertical;font-family:"Cascadia Code","Fira Code",monospace;font-size:12px;line-height:1.5;';
+            customTextarea.style.cssText = inputStyle + 'min-height:80px;resize:vertical;font-family:"Cascadia Code","Fira Code",monospace;font-size:11px;line-height:1.4;';
             customTextarea.value = (GM_getValue('ytab_custom_filters', '') || '').replace(/,\n/g, '\n').replace(/,/g, '\n');
             customTextarea.placeholder = 'ytd-merch-shelf-renderer\n.ytp-ad-overlay-slot\n#custom-ad-element';
             customTextarea.spellcheck = false;
@@ -8772,7 +7847,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             customSection.appendChild(customTextarea);
 
             const customBtnRow = document.createElement('div');
-            customBtnRow.style.cssText = 'display:flex;gap:8px;margin-top:10px;';
+            customBtnRow.style.cssText = 'display:flex;gap:6px;margin-top:8px;';
 
             const saveCustomBtn = document.createElement('button');
             saveCustomBtn.style.cssText = btnStyle;
@@ -8816,14 +7891,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             previewLabel.textContent = 'Active Filters Preview';
 
             const previewToggle = document.createElement('span');
-            previewToggle.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
+            previewToggle.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);';
             previewToggle.textContent = 'Show';
 
             previewHeader.appendChild(previewLabel);
             previewHeader.appendChild(previewToggle);
 
             const previewArea = document.createElement('pre');
-            previewArea.style.cssText = 'display:none;margin-top:10px;padding:10px;background:var(--ytkit-bg-card);border-radius:6px;font-size:11px;color:var(--ytkit-text-muted);font-family:"Cascadia Code","Fira Code",monospace;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6;';
+            previewArea.style.cssText = 'display:none;margin-top:8px;padding:8px;background:var(--ytkit-bg-card);border-radius:5px;font-size:10px;color:var(--ytkit-text-muted);font-family:"Cascadia Code","Fira Code",monospace;max-height:250px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.5;';
 
             function renderPreview() {
                 const remote = (GM_getValue('ytab_cached_selectors', '') || '').split(',\n').filter(Boolean);
@@ -8846,6 +7921,27 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             previewSection.appendChild(previewArea);
             pane.appendChild(previewSection);
 
+            // ── SponsorBlock & other Ad Blocker features ──
+            const otherAdFeatures = features.filter(f => f.group === 'Ad Blocker' && f.id !== 'ytAdBlock' && f.parentId !== 'ytAdBlock' && !f.isSubFeature);
+            if (otherAdFeatures.length > 0) {
+                const otherGrid = document.createElement('div');
+                otherGrid.className = 'ytkit-features-grid';
+                otherGrid.style.marginTop = '12px';
+                otherAdFeatures.forEach(f => {
+                    otherGrid.appendChild(buildFeatureCard(f, config.color));
+                    const children = features.filter(sf => sf.parentId === f.id);
+                    if (children.length > 0) {
+                        const subContainer = document.createElement('div');
+                        subContainer.className = 'ytkit-sub-features';
+                        subContainer.dataset.parentId = f.id;
+                        if (!appState.settings[f.id]) subContainer.style.display = 'none';
+                        children.forEach(sf => subContainer.appendChild(buildFeatureCard(sf, config.color, true)));
+                        otherGrid.appendChild(subContainer);
+                    }
+                });
+                pane.appendChild(otherGrid);
+            }
+
             return pane;
         }
 
@@ -8862,14 +7958,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             paneHeader.className = 'ytkit-pane-header';
             const paneTitle = document.createElement('div');
             paneTitle.className = 'ytkit-pane-title';
-            const paneIcon = document.createElement('span');
-            paneIcon.className = 'ytkit-pane-icon';
-            paneIcon.style.setProperty('--cat-color', config.color);
-            const paneIconFn = ICONS['eye-off'] || ICONS.settings;
-            paneIcon.appendChild(paneIconFn());
             const paneTitleH2 = document.createElement('h2');
             paneTitleH2.textContent = 'Video Hider';
-            paneTitle.appendChild(paneIcon);
             paneTitle.appendChild(paneTitleH2);
 
             // Enable toggle
@@ -8908,14 +7998,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             // Tab navigation
             const tabNav = document.createElement('div');
             tabNav.className = 'ytkit-vh-tabs';
-            tabNav.style.cssText = 'display:flex;gap:0;border-bottom:1px solid var(--ytkit-border);margin-bottom:20px;';
+            tabNav.style.cssText = 'display:flex;gap:0;border-bottom:1px solid var(--ytkit-border);margin-bottom:12px;';
             const tabs = ['Videos', 'Channels', 'Keywords', 'Settings'];
             tabs.forEach((tabName, i) => {
                 const tab = document.createElement('button');
                 tab.className = 'ytkit-vh-tab' + (i === 0 ? ' active' : '');
                 tab.dataset.tab = tabName.toLowerCase();
                 tab.textContent = tabName;
-                tab.style.cssText = 'flex:1;padding:12px 16px;background:transparent;border:none;color:var(--ytkit-text-muted);font-size:13px;font-weight:500;cursor:pointer;transition:all 0.2s;border-bottom:2px solid transparent;';
+                tab.style.cssText = 'flex:1;padding:8px 12px;background:transparent;border:none;color:var(--ytkit-text-muted);font-size:12px;font-weight:500;cursor:pointer;transition:all 0.2s;border-bottom:2px solid transparent;';
                 tab.onmouseenter = () => { if (!tab.classList.contains('active')) tab.style.color = 'var(--ytkit-text-secondary)'; };
                 tab.onmouseleave = () => { if (!tab.classList.contains('active')) tab.style.color = 'var(--ytkit-text-muted)'; };
                 tab.onclick = () => {
@@ -8945,41 +8035,41 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const videos = videoHiderFeature?._getHiddenVideos() || [];
                     if (videos.length === 0) {
                         const empty = document.createElement('div');
-                        empty.style.cssText = 'text-align:center;padding:60px 20px;color:var(--ytkit-text-muted);';
+                        empty.style.cssText = 'text-align:center;padding:40px 16px;color:var(--ytkit-text-muted);';
                         const emptyTitle = document.createElement('div');
-                        emptyTitle.style.cssText = 'font-size:15px;margin-bottom:8px;';
+                        emptyTitle.style.cssText = 'font-size:14px;margin-bottom:6px;';
                         emptyTitle.textContent = 'No hidden videos yet';
                         const emptyDesc = document.createElement('div');
-                        emptyDesc.style.cssText = 'font-size:13px;opacity:0.7;';
+                        emptyDesc.style.cssText = 'font-size:12px;opacity:0.7;';
                         emptyDesc.textContent = 'Click the X button on video thumbnails to hide them';
                         empty.appendChild(emptyTitle);
                         empty.appendChild(emptyDesc);
                         tabContent.appendChild(empty);
                     } else {
                         const grid = document.createElement('div');
-                        grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;';
+                        grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;';
                         videos.forEach(vid => {
                             const item = document.createElement('div');
-                            item.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px;background:var(--ytkit-bg-surface);border-radius:8px;border:1px solid var(--ytkit-border);';
+                            item.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px;background:var(--ytkit-bg-surface);border-radius:6px;border:1px solid var(--ytkit-border);';
                             const thumb = document.createElement('img');
                             thumb.src = `https://i.ytimg.com/vi/${vid}/mqdefault.jpg`;
-                            thumb.style.cssText = 'width:100px;height:56px;object-fit:cover;border-radius:4px;flex-shrink:0;';
+                            thumb.style.cssText = 'width:88px;height:50px;object-fit:cover;border-radius:4px;flex-shrink:0;';
                             thumb.onerror = () => { thumb.style.background = 'var(--ytkit-bg-elevated)'; };
                             const info = document.createElement('div');
                             info.style.cssText = 'flex:1;min-width:0;';
                             const vidId = document.createElement('div');
-                            vidId.style.cssText = 'font-size:12px;color:var(--ytkit-text-secondary);font-family:monospace;margin-bottom:4px;';
+                            vidId.style.cssText = 'font-size:11px;color:var(--ytkit-text-secondary);font-family:monospace;margin-bottom:2px;';
                             vidId.textContent = vid;
                             const link = document.createElement('a');
                             link.href = `https://youtube.com/watch?v=${vid}`;
                             link.target = '_blank';
-                            link.style.cssText = 'font-size:12px;color:var(--ytkit-accent);text-decoration:none;';
+                            link.style.cssText = 'font-size:11px;color:var(--ytkit-accent);text-decoration:none;';
                             link.textContent = 'View on YouTube';
                             info.appendChild(vidId);
                             info.appendChild(link);
                             const removeBtn = document.createElement('button');
                             removeBtn.textContent = 'Unhide';
-                            removeBtn.style.cssText = 'padding:6px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);color:var(--ytkit-text-secondary);border-radius:6px;cursor:pointer;font-size:12px;transition:all 0.2s;';
+                            removeBtn.style.cssText = 'padding:4px 10px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);color:var(--ytkit-text-secondary);border-radius:5px;cursor:pointer;font-size:11px;transition:all 0.2s;';
                             removeBtn.onmouseenter = () => { removeBtn.style.background = '#dc2626'; removeBtn.style.color = '#fff'; removeBtn.style.borderColor = '#dc2626'; };
                             removeBtn.onmouseleave = () => { removeBtn.style.background = 'var(--ytkit-bg-elevated)'; removeBtn.style.color = 'var(--ytkit-text-secondary)'; removeBtn.style.borderColor = 'var(--ytkit-border)'; };
                             removeBtn.onclick = () => {
@@ -8998,7 +8088,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         tabContent.appendChild(grid);
                         const clearBtn = document.createElement('button');
                         clearBtn.textContent = `Clear All Hidden Videos (${videos.length})`;
-                        clearBtn.style.cssText = 'margin-top:20px;padding:12px 24px;width:100%;background:#dc2626;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;transition:background 0.2s;';
+                        clearBtn.style.cssText = 'margin-top:12px;padding:8px 20px;width:100%;background:#dc2626;border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:background 0.2s;';
                         clearBtn.onmouseenter = () => { clearBtn.style.background = '#b91c1c'; };
                         clearBtn.onmouseleave = () => { clearBtn.style.background = '#dc2626'; };
                         clearBtn.onclick = () => {
@@ -9019,38 +8109,38 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const channels = videoHiderFeature?._getBlockedChannels() || [];
                     if (channels.length === 0) {
                         const empty = document.createElement('div');
-                        empty.style.cssText = 'text-align:center;padding:60px 20px;color:var(--ytkit-text-muted);';
+                        empty.style.cssText = 'text-align:center;padding:40px 16px;color:var(--ytkit-text-muted);';
                         const emptyTitle = document.createElement('div');
-                        emptyTitle.style.cssText = 'font-size:15px;margin-bottom:8px;';
+                        emptyTitle.style.cssText = 'font-size:14px;margin-bottom:6px;';
                         emptyTitle.textContent = 'No blocked channels yet';
                         const emptyDesc = document.createElement('div');
-                        emptyDesc.style.cssText = 'font-size:13px;opacity:0.7;';
+                        emptyDesc.style.cssText = 'font-size:12px;opacity:0.7;';
                         emptyDesc.textContent = 'Right-click the X button on thumbnails to block channels';
                         empty.appendChild(emptyTitle);
                         empty.appendChild(emptyDesc);
                         tabContent.appendChild(empty);
                     } else {
                         const list = document.createElement('div');
-                        list.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+                        list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
                         channels.forEach(ch => {
                             const item = document.createElement('div');
-                            item.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px;background:var(--ytkit-bg-surface);border-radius:8px;border:1px solid var(--ytkit-border);';
+                            item.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px;background:var(--ytkit-bg-surface);border-radius:6px;border:1px solid var(--ytkit-border);';
                             const icon = document.createElement('div');
-                            icon.style.cssText = 'width:40px;height:40px;border-radius:50%;background:var(--ytkit-bg-elevated);display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--ytkit-text-muted);';
+                            icon.style.cssText = 'width:32px;height:32px;border-radius:50%;background:var(--ytkit-bg-elevated);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--ytkit-text-muted);';
                             icon.textContent = (ch.name || ch.id || '?')[0].toUpperCase();
                             const info = document.createElement('div');
                             info.style.cssText = 'flex:1;';
                             const name = document.createElement('div');
-                            name.style.cssText = 'font-size:14px;color:var(--ytkit-text-primary);font-weight:500;';
+                            name.style.cssText = 'font-size:13px;color:var(--ytkit-text-primary);font-weight:500;';
                             name.textContent = ch.name || ch.id;
                             const handle = document.createElement('div');
-                            handle.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);';
+                            handle.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
                             handle.textContent = ch.id;
                             info.appendChild(name);
                             info.appendChild(handle);
                             const removeBtn = document.createElement('button');
                             removeBtn.textContent = 'Unblock';
-                            removeBtn.style.cssText = 'padding:6px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);color:var(--ytkit-text-secondary);border-radius:6px;cursor:pointer;font-size:12px;transition:all 0.2s;';
+                            removeBtn.style.cssText = 'padding:4px 10px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);color:var(--ytkit-text-secondary);border-radius:5px;cursor:pointer;font-size:11px;transition:all 0.2s;';
                             removeBtn.onmouseenter = () => { removeBtn.style.background = '#22c55e'; removeBtn.style.color = '#fff'; removeBtn.style.borderColor = '#22c55e'; };
                             removeBtn.onmouseleave = () => { removeBtn.style.background = 'var(--ytkit-bg-elevated)'; removeBtn.style.color = 'var(--ytkit-text-secondary)'; removeBtn.style.borderColor = 'var(--ytkit-border)'; };
                             removeBtn.onclick = () => {
@@ -9069,7 +8159,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         tabContent.appendChild(list);
                         const clearBtn = document.createElement('button');
                         clearBtn.textContent = `Unblock All Channels (${channels.length})`;
-                        clearBtn.style.cssText = 'margin-top:20px;padding:12px 24px;width:100%;background:#dc2626;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;transition:background 0.2s;';
+                        clearBtn.style.cssText = 'margin-top:12px;padding:8px 20px;width:100%;background:#dc2626;border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:background 0.2s;';
                         clearBtn.onmouseenter = () => { clearBtn.style.background = '#b91c1c'; };
                         clearBtn.onmouseleave = () => { clearBtn.style.background = '#dc2626'; };
                         clearBtn.onclick = () => {
@@ -9089,11 +8179,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 } else if (tab === 'keywords') {
                     const container = document.createElement('div');
                     const desc = document.createElement('div');
-                    desc.style.cssText = 'color:var(--ytkit-text-muted);font-size:13px;margin-bottom:16px;line-height:1.5;';
+                    desc.style.cssText = 'color:var(--ytkit-text-muted);font-size:12px;margin-bottom:12px;line-height:1.4;';
                     desc.textContent = 'Videos with titles containing these keywords will be automatically hidden. Separate multiple keywords with commas. Prefix with ! to whitelist. Start with / for regex.';
                     container.appendChild(desc);
                     const textarea = document.createElement('textarea');
-                    textarea.style.cssText = 'width:100%;min-height:150px;padding:12px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:8px;color:var(--ytkit-text-primary);font-size:13px;resize:vertical;font-family:inherit;';
+                    textarea.style.cssText = 'width:100%;min-height:100px;padding:8px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:6px;color:var(--ytkit-text-primary);font-size:12px;resize:vertical;font-family:inherit;';
                     textarea.placeholder = 'e.g., reaction, unboxing, prank, shorts';
                     textarea.value = appState.settings.hideVideosKeywordFilter || '';
                     textarea.onchange = async () => {
@@ -9103,23 +8193,23 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     };
                     container.appendChild(textarea);
                     const hint = document.createElement('div');
-                    hint.style.cssText = 'color:var(--ytkit-text-muted);font-size:11px;margin-top:8px;';
+                    hint.style.cssText = 'color:var(--ytkit-text-muted);font-size:10px;margin-top:6px;';
                     hint.textContent = 'Changes apply immediately. Keywords are case-insensitive.';
                     container.appendChild(hint);
                     tabContent.appendChild(container);
                 } else if (tab === 'settings') {
                     const container = document.createElement('div');
-                    container.style.cssText = 'display:flex;flex-direction:column;gap:24px;';
+                    container.style.cssText = 'display:flex;flex-direction:column;gap:16px;';
 
                     // Duration filter
                     const durSection = document.createElement('div');
-                    durSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:12px;padding:20px;';
+                    durSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:8px;padding:14px;';
                     const durTitle = document.createElement('div');
-                    durTitle.style.cssText = 'font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:8px;';
+                    durTitle.style.cssText = 'font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:6px;';
                     durTitle.textContent = 'Duration Filter';
                     durSection.appendChild(durTitle);
                     const durDesc = document.createElement('div');
-                    durDesc.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);margin-bottom:12px;';
+                    durDesc.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);margin-bottom:8px;';
                     durDesc.textContent = 'Automatically hide videos shorter than the specified duration.';
                     durSection.appendChild(durDesc);
                     const durRow = document.createElement('div');
@@ -9127,14 +8217,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const durInput = document.createElement('input');
                     durInput.type = 'number'; durInput.min = '0'; durInput.max = '60';
                     durInput.value = appState.settings.hideVideosDurationFilter || 0;
-                    durInput.style.cssText = 'width:80px;padding:8px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:6px;color:var(--ytkit-text-primary);font-size:14px;';
+                    durInput.style.cssText = 'width:70px;padding:6px 10px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:5px;color:var(--ytkit-text-primary);font-size:13px;';
                     durInput.onchange = async () => {
                         appState.settings.hideVideosDurationFilter = parseInt(durInput.value) || 0;
                         settingsManager.save(appState.settings);
                         videoHiderFeature?._processAllVideos();
                     };
                     const durLabel = document.createElement('span');
-                    durLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:13px;';
+                    durLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:12px;';
                     durLabel.textContent = 'minutes (0 = disabled)';
                     durRow.appendChild(durInput); durRow.appendChild(durLabel);
                     durSection.appendChild(durRow);
@@ -9142,19 +8232,19 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                     // Subscription Load Limiter
                     const limiterSection = document.createElement('div');
-                    limiterSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:12px;padding:20px;';
+                    limiterSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:8px;padding:14px;';
                     const limiterTitle = document.createElement('div');
-                    limiterTitle.style.cssText = 'font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:8px;';
+                    limiterTitle.style.cssText = 'font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:6px;';
                     limiterTitle.textContent = 'Subscription Page Load Limiter';
                     limiterSection.appendChild(limiterTitle);
                     const limiterDesc = document.createElement('div');
-                    limiterDesc.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);margin-bottom:16px;line-height:1.5;';
+                    limiterDesc.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);margin-bottom:10px;line-height:1.4;';
                     limiterDesc.textContent = "Prevents infinite scrolling when many consecutive videos are hidden.";
                     limiterSection.appendChild(limiterDesc);
                     const limiterToggleRow = document.createElement('div');
-                    limiterToggleRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding:12px;background:var(--ytkit-bg-elevated);border-radius:8px;';
+                    limiterToggleRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:8px;background:var(--ytkit-bg-elevated);border-radius:6px;';
                     const limiterToggleLabel = document.createElement('span');
-                    limiterToggleLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:13px;';
+                    limiterToggleLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:12px;';
                     limiterToggleLabel.textContent = 'Enable load limiter';
                     const limiterSwitch = document.createElement('div');
                     limiterSwitch.className = 'ytkit-switch' + (appState.settings.hideVideosSubsLoadLimit !== false ? ' active' : '');
@@ -9177,12 +8267,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const thresholdRow = document.createElement('div');
                     thresholdRow.style.cssText = 'display:flex;align-items:center;gap:12px;';
                     const thresholdLabel = document.createElement('span');
-                    thresholdLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:13px;flex:1;';
+                    thresholdLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:12px;flex:1;';
                     thresholdLabel.textContent = 'Stop after consecutive hidden batches:';
                     const thresholdInput = document.createElement('input');
                     thresholdInput.type = 'number'; thresholdInput.min = '1'; thresholdInput.max = '20';
                     thresholdInput.value = appState.settings.hideVideosSubsLoadThreshold || 3;
-                    thresholdInput.style.cssText = 'width:70px;padding:8px 12px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:6px;color:var(--ytkit-text-primary);font-size:14px;text-align:center;';
+                    thresholdInput.style.cssText = 'width:60px;padding:6px 10px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:5px;color:var(--ytkit-text-primary);font-size:13px;text-align:center;';
                     thresholdInput.onchange = async () => {
                         appState.settings.hideVideosSubsLoadThreshold = Math.max(1, Math.min(20, parseInt(thresholdInput.value) || 3));
                         thresholdInput.value = appState.settings.hideVideosSubsLoadThreshold;
@@ -9192,30 +8282,30 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     thresholdRow.appendChild(thresholdInput);
                     limiterSection.appendChild(thresholdRow);
                     const thresholdHint = document.createElement('div');
-                    thresholdHint.style.cssText = 'color:var(--ytkit-text-muted);font-size:11px;margin-top:8px;';
+                    thresholdHint.style.cssText = 'color:var(--ytkit-text-muted);font-size:10px;margin-top:6px;';
                     thresholdHint.textContent = 'Lower = stops faster, Higher = loads more before stopping (1-20)';
                     limiterSection.appendChild(thresholdHint);
                     container.appendChild(limiterSection);
 
                     // Stats
                     const statsSection = document.createElement('div');
-                    statsSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:12px;padding:20px;';
+                    statsSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:8px;padding:14px;';
                     const statsTitle = document.createElement('div');
-                    statsTitle.style.cssText = 'font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:12px;';
+                    statsTitle.style.cssText = 'font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:8px;';
                     statsTitle.textContent = 'Statistics';
                     statsSection.appendChild(statsTitle);
                     const statsGrid = document.createElement('div');
-                    statsGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:12px;';
+                    statsGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;';
                     const videoCount = videoHiderFeature?._getHiddenVideos()?.length || 0;
                     const channelCount = videoHiderFeature?._getBlockedChannels()?.length || 0;
                     [{ label: 'Hidden Videos', value: videoCount }, { label: 'Blocked Channels', value: channelCount }].forEach(stat => {
                         const statEl = document.createElement('div');
-                        statEl.style.cssText = 'padding:16px;background:var(--ytkit-bg-elevated);border-radius:8px;text-align:center;';
+                        statEl.style.cssText = 'padding:10px;background:var(--ytkit-bg-elevated);border-radius:6px;text-align:center;';
                         const val = document.createElement('div');
-                        val.style.cssText = 'font-size:24px;font-weight:700;color:var(--ytkit-text-primary);margin-bottom:4px;';
+                        val.style.cssText = 'font-size:20px;font-weight:700;color:var(--ytkit-text-primary);margin-bottom:2px;';
                         val.textContent = stat.value;
                         const lbl = document.createElement('div');
-                        lbl.style.cssText = 'font-size:12px;color:var(--ytkit-text-muted);';
+                        lbl.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
                         lbl.textContent = stat.label;
                         statEl.appendChild(val); statEl.appendChild(lbl);
                         statsGrid.appendChild(statEl);
@@ -9230,8 +8320,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             return pane;
         }
 
-        content.appendChild(recentSection);
-
         categoryOrder.forEach((cat, index) => {
             // Special handling for Ad Blocker
             if (cat === 'Ad Blocker') {
@@ -9240,18 +8328,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 return;
             }
 
-            // Special handling for Video Hider
-            if (cat === 'Video Hider') {
-                const config = CATEGORY_CONFIG[cat];
-                content.appendChild(buildVideoHiderPane(config));
-                return;
-            }
-
             const categoryFeatures = featuresByCategory[cat];
             if (!categoryFeatures || categoryFeatures.length === 0) return;
 
             const config = CATEGORY_CONFIG[cat] || { icon: 'settings', color: '#60a5fa' };
-            const catId = cat.replace(/ /g, '-');
+            const catId = cat.replace(/[^a-zA-Z0-9]+/g, '-').replace(/-+$/, '');
 
             const pane = document.createElement('section');
             pane.id = `ytkit-pane-${catId}`;
@@ -9264,16 +8345,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             const paneTitle = document.createElement('div');
             paneTitle.className = 'ytkit-pane-title';
 
-            const paneIcon = document.createElement('span');
-            paneIcon.className = 'ytkit-pane-icon';
-            paneIcon.style.setProperty('--cat-color', config.color);
-            const paneIconFn = ICONS[config.icon] || ICONS.settings;
-            paneIcon.appendChild(paneIconFn());
-
             const paneTitleH2 = document.createElement('h2');
             paneTitleH2.textContent = cat;
 
-            paneTitle.appendChild(paneIcon);
             paneTitle.appendChild(paneTitleH2);
 
             const toggleAllLabel = document.createElement('label');
@@ -9472,11 +8546,11 @@ pause
             badge.id = 'ytkit-whats-new-badge';
             badge.style.cssText = 'position:absolute;top:-3px;right:-8px;width:8px;height:8px;background:#ef4444;border-radius:50%;animation:ytkit-badge-pulse 2s infinite;';
             versionSpan.appendChild(badge);
-            versionSpan.title = `New in v${YTKIT_VERSION}: Architecture hardening, inline Quick Links editor, settings migration, observer consolidation, leak fixes`;
+            versionSpan.title = `New in v${YTKIT_VERSION}: Ultra-condensed settings panel — removed logo, pane icons, status badges, recently changed section; zero-padding layout`;
             versionSpan.onclick = () => {
                 GM_setValue('ytkit_last_seen_version', CURRENT_VER);
                 badge.remove();
-                showToast(`v${YTKIT_VERSION}: Error boundaries, settings migration, Quick Links editor, observer consolidation, leak fixes`, '#3b82f6', { duration: 6 });
+                showToast(`v${YTKIT_VERSION}: Ultra-condensed settings — removed logo, pane icons, status badges, recently changed; zero-padding`, '#3b82f6', { duration: 6 });
             };
         }
 
@@ -9555,24 +8629,6 @@ pause
         info.appendChild(name);
         info.appendChild(desc);
 
-        // Feature state badge
-        const _status = getFeatureStatus(f);
-        if (_status.label && !isSubFeature) {
-            const statusBadge = document.createElement('span');
-            statusBadge.className = 'ytkit-status-badge';
-            statusBadge.dataset.status = _status.status;
-            statusBadge.style.cssText = 'display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:100px;margin-top:4px;letter-spacing:0.02em;';
-            const dot = document.createElement('span');
-            dot.style.cssText = 'width:5px;height:5px;border-radius:50%;background:' + _status.color + ';flex-shrink:0;';
-            if (_status.status === 'active') dot.style.boxShadow = '0 0 4px ' + _status.color;
-            statusBadge.appendChild(dot);
-            const lbl = document.createElement('span');
-            lbl.textContent = _status.label;
-            lbl.style.color = _status.color;
-            statusBadge.appendChild(lbl);
-            info.appendChild(statusBadge);
-        }
-
         // Feature preview tooltip
         const previewText = FEATURE_PREVIEWS[f.id];
         if (previewText) {
@@ -9605,7 +8661,7 @@ pause
             const select = document.createElement('select');
             select.className = 'ytkit-select';
             select.id = `ytkit-select-${f.id}`;
-            select.style.cssText = `padding:8px 12px;border-radius:8px;background:var(--ytkit-bg-base);color:#fff;border:1px solid rgba(255,255,255,0.1);cursor:pointer;font-size:13px;min-width:150px;`;
+            select.style.cssText = `padding:5px 10px;border-radius:6px;background:var(--ytkit-bg-base);color:#fff;border:1px solid rgba(255,255,255,0.1);cursor:pointer;font-size:12px;min-width:140px;`;
             const settingKey = f.settingKey || f.id;
             const currentValue = String(appState.settings[settingKey] ?? Object.keys(f.options)[0]);
             for (const [value, label] of Object.entries(f.options)) {
@@ -9964,9 +9020,6 @@ pause
                         }
                     }
 
-                    // Track recently changed
-                    trackRecentChange(featureId, isEnabled);
-
                     if (feature) {
                         if (isEnabled) {
                             // Reset crash counter on manual toggle-on
@@ -10131,7 +9184,7 @@ pause
 
     //  SECTION 5: STYLES
     function injectPanelStyles() {
-        GM_addStyle(`@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');:root{--ytkit-font:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--ytkit-bg-base:#0a0a0b;--ytkit-bg-elevated:#111113;--ytkit-bg-surface:#18181b;--ytkit-bg-hover:#1f1f23;--ytkit-bg-active:#27272a;--ytkit-border:#27272a;--ytkit-border-subtle:#1f1f23;--ytkit-text-primary:#fafafa;--ytkit-text-secondary:#a1a1aa;--ytkit-text-muted:#71717a;--ytkit-accent:#ff4e45;--ytkit-accent-soft:rgba(255,78,69,0.15);--ytkit-success:#22c55e;--ytkit-error:#ef4444;--ytkit-radius-sm:6px;--ytkit-radius-md:10px;--ytkit-radius-lg:14px;--ytkit-radius-xl:20px;--ytkit-shadow-sm:0 1px 2px rgba(0,0,0,0.3);--ytkit-shadow-md:0 4px 12px rgba(0,0,0,0.4);--ytkit-shadow-lg:0 8px 32px rgba(0,0,0,0.5);--ytkit-shadow-xl:0 24px 64px rgba(0,0,0,0.6);--ytkit-transition:200ms cubic-bezier(0.4,0,0.2,1);} .ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn,.ytkit-transcript-btn,.ytkit-mpv-btn,.ytkit-dlplay-btn,.ytkit-embed-btn{display:inline-flex !important;visibility:visible !important;opacity:1 !important;z-index:9999 !important;position:relative !important;} /* z-index for action buttons kept at 9999 to ensure visibility within YT layout */ .ytkit-button-container{display:flex !important;gap:8px !important;margin:8px 0 !important;flex-wrap:wrap !important;visibility:visible !important;} .ytkit-trigger-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;margin:0 4px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-trigger-btn svg{width:22px;height:22px;color:var(--yt-spec-icon-inactive,#aaa);transition:all var(--ytkit-transition);} .ytkit-trigger-btn:hover{background:var(--yt-spec-badge-chip-background,rgba(255,255,255,0.1));} .ytkit-trigger-btn:hover svg{color:var(--yt-spec-text-primary,#fff);transform:rotate(45deg);} #ytkit-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:80000;opacity:0;pointer-events:none;transition:opacity 300ms ease;} body.ytkit-panel-open #ytkit-overlay{opacity:1;pointer-events:auto;} #ytkit-settings-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.96);z-index:80001;display:flex;flex-direction:column;width:95%;max-width:1100px;height:85vh;max-height:800px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-xl);box-shadow:var(--ytkit-shadow-xl),0 0 0 1px rgba(255,255,255,0.05) inset;font-family:var(--ytkit-font);color:var(--ytkit-text-primary);opacity:0;pointer-events:none;transition:all 300ms cubic-bezier(0.32,0.72,0,1);overflow:hidden;} body.ytkit-panel-open #ytkit-settings-panel{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);} .ytkit-header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;background:linear-gradient(180deg,var(--ytkit-bg-elevated) 0%,var(--ytkit-bg-base) 100%);border-bottom:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-brand{display:flex;align-items:center;gap:12px;} .ytkit-logo{display:flex;align-items:center;justify-content:center;width:42px;height:42px;background:linear-gradient(135deg,#ff0000 0%,#cc0000 100%);border-radius:var(--ytkit-radius-md);box-shadow:0 4px 12px rgba(255,0,0,0.3);} .ytkit-yt-icon{width:26px;height:auto;} .ytkit-title{font-size:26px;font-weight:700;letter-spacing:-0.5px;margin:0;} .ytkit-title-yt{background:linear-gradient(135deg,#ff4e45 0%,#ff0000 50%,#ff4e45 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ytkit-shimmer 3s linear infinite;} .ytkit-title-kit{color:var(--ytkit-text-primary);} @keyframes ytkit-shimmer{0%{background-position:0% center;} 100%{background-position:200% center;} } .ytkit-badge{padding:4px 10px;font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#fff;background:linear-gradient(135deg,#ff4e45,#ff0000);border-radius:100px;box-shadow:0 2px 8px rgba(255,78,69,0.4);} .ytkit-close{display:flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-close svg{width:18px;height:18px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-close:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);} .ytkit-close:hover svg{color:#fff;} .ytkit-body{display:flex;flex:1;overflow:hidden;} .ytkit-sidebar{display:flex;flex-direction:column;width:240px;padding:16px 12px;background:var(--ytkit-bg-elevated);border-right:1px solid var(--ytkit-border);overflow-y:auto;flex-shrink:0;} .ytkit-search-container{position:relative;margin-bottom:12px;} .ytkit-search-input{width:100%;padding:10px 12px 10px 36px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-size:13px;transition:all var(--ytkit-transition);} .ytkit-search-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px rgba(255,78,69,0.15);} .ytkit-search-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:var(--ytkit-text-muted);pointer-events:none;} .ytkit-sidebar-divider{height:1px;background:var(--ytkit-border);margin:8px 0 12px;} .ytkit-pane.ytkit-search-active{display:block;} .ytkit-pane.ytkit-search-active .ytkit-pane-header{display:none;} .ytkit-nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;margin-bottom:2px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);text-align:left;} .ytkit-nav-btn:hover{background:var(--ytkit-bg-hover);} .ytkit-nav-btn.active{background:var(--ytkit-bg-active);} .ytkit-nav-icon{display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:var(--ytkit-bg-surface);border-radius:var(--ytkit-radius-sm);flex-shrink:0;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon{background:var(--cat-color,var(--ytkit-accent));box-shadow:0 2px 8px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 40%,transparent);} .ytkit-nav-icon svg{width:16px;height:16px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon svg{color:#fff;} .ytkit-nav-label{flex:1;font-size:13px;font-weight:500;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .ytkit-nav-btn.active .ytkit-nav-label{color:var(--ytkit-text-primary);} .ytkit-nav-count{font-size:11px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:2px 6px;border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-count{background:rgba(255,255,255,0.15);color:var(--ytkit-text-primary);} .ytkit-nav-arrow{display:flex;opacity:0;transition:opacity var(--ytkit-transition);} .ytkit-nav-arrow svg{width:14px;height:14px;color:var(--ytkit-text-muted);} .ytkit-nav-btn.active .ytkit-nav-arrow{opacity:1;} .ytkit-nav-group-label{padding:4px 12px 2px;font-size:9.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--ytkit-text-muted);user-select:none;pointer-events:none;} .ytkit-content{flex:1;padding:24px;overflow-y:auto;background:var(--ytkit-bg-base);} .ytkit-pane{display:none;animation:ytkit-fade-in 300ms ease;} .ytkit-pane.active{display:block;} .ytkit-pane.ytkit-vh-pane.active{display:flex;flex-direction:column;height:100%;max-height:calc(85vh - 180px);} #ytkit-vh-content{flex:1;overflow-y:auto;padding-right:8px;} @keyframes ytkit-fade-in{from{opacity:0;transform:translateX(8px);} to{opacity:1;transform:translateX(0);} } @keyframes ytkit-badge-pulse{0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.5;transform:scale(1.3);} } .ytkit-pane-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--ytkit-border);} .ytkit-pane-title{display:flex;align-items:center;gap:12px;} .ytkit-pane-icon{display:flex;align-items:center;justify-content:center;width:40px;height:40px;background:var(--cat-color,var(--ytkit-accent));border-radius:var(--ytkit-radius-md);box-shadow:0 4px 12px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 30%,transparent);} .ytkit-pane-icon svg{width:20px;height:20px;color:#fff;} .ytkit-pane-title h2{font-size:20px;font-weight:600;margin:0;color:var(--ytkit-text-primary);} .ytkit-toggle-all{display:flex;align-items:center;gap:10px;cursor:pointer;} .ytkit-toggle-all span{font-size:13px;font-weight:500;color:var(--ytkit-text-secondary);} .ytkit-reset-group-btn{padding:6px 12px;margin-right:12px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-muted);font-size:12px;font-weight:500;cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-reset-group-btn:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);color:#fff;} .ytkit-features-grid{display:flex;flex-direction:column;gap:8px;} .ytkit-feature-card{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border-subtle);border-left:3px solid transparent;border-radius:var(--ytkit-radius-md);transition:all var(--ytkit-transition);} .ytkit-feature-card:hover{background:var(--ytkit-bg-hover);border-color:var(--ytkit-border);border-left-color:transparent;} .ytkit-feature-card.ytkit-card-enabled{border-left-color:var(--cat-color,var(--ytkit-accent));} .ytkit-sub-card{margin-left:24px;background:var(--ytkit-bg-elevated);border-left:2px solid var(--ytkit-accent-soft);} .ytkit-sub-features{display:flex;flex-direction:column;gap:8px;} .ytkit-feature-info{flex:1;min-width:0;padding-right:16px;} .ytkit-feature-name{font-size:14px;font-weight:600;color:var(--ytkit-text-primary);margin:0 0 4px 0;} .ytkit-feature-desc{font-size:12px;color:var(--ytkit-text-muted);margin:0;line-height:1.4;} .ytkit-textarea-card{flex-direction:column;align-items:stretch;gap:12px;} .ytkit-textarea-card .ytkit-feature-info{padding-right:0;} .ytkit-input{width:100%;padding:10px 12px;font-family:var(--ytkit-font);font-size:13px;color:var(--ytkit-text-primary);background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);resize:vertical;min-height:60px;transition:all var(--ytkit-transition);} .ytkit-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px var(--ytkit-accent-soft);} .ytkit-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-switch{position:relative;width:44px;height:24px;flex-shrink:0;} .ytkit-switch input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1;margin:0;} .ytkit-switch-track{position:absolute;inset:0;background:var(--ytkit-bg-active);border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-switch.active .ytkit-switch-track{background:var(--switch-color,var(--ytkit-accent));box-shadow:0 0 12px color-mix(in srgb,var(--switch-color,var(--ytkit-accent)) 50%,transparent);} .ytkit-switch-thumb{position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;box-shadow:var(--ytkit-shadow-sm);transition:all var(--ytkit-transition);display:flex;align-items:center;justify-content:center;} .ytkit-switch.active .ytkit-switch-thumb{transform:translateX(20px);} .ytkit-switch-icon{display:flex;opacity:0;transform:scale(0.5);transition:all var(--ytkit-transition);} .ytkit-switch-icon svg{width:12px;height:12px;color:var(--switch-color,var(--ytkit-accent));} .ytkit-switch.active .ytkit-switch-icon{opacity:1;transform:scale(1);} .ytkit-footer{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--ytkit-bg-elevated);border-top:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-footer-left{display:flex;align-items:center;gap:16px;} .ytkit-github{display:flex;align-items:center;justify-content:center;width:32px;height:32px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);border-radius:var(--ytkit-radius-sm);transition:all var(--ytkit-transition);} .ytkit-github:hover{color:var(--ytkit-text-primary);background:var(--ytkit-bg-hover);} .ytkit-github svg{width:18px;height:18px;} .ytkit-version{font-size:12px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:4px 10px;border-radius:100px;} .ytkit-shortcut{font-size:11px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:4px 8px;border-radius:var(--ytkit-radius-sm);font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace;} .ytkit-footer-right{display:flex;gap:10px;} .ytkit-btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;font-family:var(--ytkit-font);font-size:13px;font-weight:600;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-btn svg{width:16px;height:16px;} .ytkit-btn-secondary{color:var(--ytkit-text-secondary);background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);} .ytkit-btn-secondary:hover{background:var(--ytkit-bg-hover);color:var(--ytkit-text-primary);} .ytkit-btn-primary{color:#fff;background:linear-gradient(135deg,#ff4e45,#e6423a);box-shadow:0 2px 8px rgba(255,78,69,0.3);} .ytkit-btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(255,78,69,0.4);} .ytkit-toast{position:fixed;bottom:-80px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:14px 20px;font-family:var(--ytkit-font);font-size:14px;font-weight:500;color:#fff;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-lg);box-shadow:var(--ytkit-shadow-lg);z-index:90000;transition:all 400ms cubic-bezier(0.68,-0.55,0.27,1.55);} .ytkit-toast.show{bottom:24px;} .ytkit-toast-success{border-color:var(--ytkit-success);box-shadow:0 4px 20px rgba(34,197,94,0.2);} .ytkit-toast-error{border-color:var(--ytkit-error);box-shadow:0 4px 20px rgba(239,68,68,0.2);}ytd-watch-metadata.watch-active-metadata{margin-top:180px !important;} ytd-live-chat-frame:not([style*="position"]){margin-top:-57px !important;width:402px !important;} .ytkit-sidebar::-webkit-scrollbar,.ytkit-content::-webkit-scrollbar{width:6px;} .ytkit-sidebar::-webkit-scrollbar-track,.ytkit-content::-webkit-scrollbar-track{background:transparent;} .ytkit-sidebar::-webkit-scrollbar-thumb,.ytkit-content::-webkit-scrollbar-thumb{background:var(--ytkit-border);border-radius:100px;} .ytkit-sidebar::-webkit-scrollbar-thumb:hover,.ytkit-content::-webkit-scrollbar-thumb:hover{background:var(--ytkit-text-muted);}  .ytkit-css-editor{width:100%;min-height:150px;padding:12px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-family:'Monaco','Menlo','Ubuntu Mono',monospace;font-size:13px;line-height:1.5;resize:vertical;} .ytkit-css-editor:focus{outline:none;border-color:var(--ytkit-accent);} .ytkit-bulk-bar{animation:slideDown 0.2s ease-out;} @keyframes slideDown{from{opacity:0;transform:translateY(-10px);} to{opacity:1;transform:translateY(0);} }
+        GM_addStyle(`@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');:root{--ytkit-font:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--ytkit-bg-base:#0a0a0b;--ytkit-bg-elevated:#111113;--ytkit-bg-surface:#18181b;--ytkit-bg-hover:#1f1f23;--ytkit-bg-active:#27272a;--ytkit-border:#27272a;--ytkit-border-subtle:#1f1f23;--ytkit-text-primary:#fafafa;--ytkit-text-secondary:#a1a1aa;--ytkit-text-muted:#71717a;--ytkit-accent:#ff4e45;--ytkit-accent-soft:rgba(255,78,69,0.15);--ytkit-success:#22c55e;--ytkit-error:#ef4444;--ytkit-radius-sm:6px;--ytkit-radius-md:10px;--ytkit-radius-lg:14px;--ytkit-radius-xl:20px;--ytkit-shadow-sm:0 1px 2px rgba(0,0,0,0.3);--ytkit-shadow-md:0 4px 12px rgba(0,0,0,0.4);--ytkit-shadow-lg:0 8px 32px rgba(0,0,0,0.5);--ytkit-shadow-xl:0 24px 64px rgba(0,0,0,0.6);--ytkit-transition:200ms cubic-bezier(0.4,0,0.2,1);} .ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn,.ytkit-transcript-btn,.ytkit-mpv-btn,.ytkit-dlplay-btn,.ytkit-embed-btn{display:inline-flex !important;visibility:visible !important;opacity:1 !important;z-index:9999 !important;position:relative !important;} /* z-index for action buttons kept at 9999 to ensure visibility within YT layout */ .ytkit-button-container{display:flex !important;gap:8px !important;margin:8px 0 !important;flex-wrap:wrap !important;visibility:visible !important;} .ytkit-trigger-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;margin:0 4px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-trigger-btn svg{width:22px;height:22px;color:var(--yt-spec-icon-inactive,#aaa);transition:all var(--ytkit-transition);} .ytkit-trigger-btn:hover{background:var(--yt-spec-badge-chip-background,rgba(255,255,255,0.1));} .ytkit-trigger-btn:hover svg{color:var(--yt-spec-text-primary,#fff);transform:rotate(45deg);} #ytkit-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:80000;opacity:0;pointer-events:none;transition:opacity 300ms ease;} body.ytkit-panel-open #ytkit-overlay{opacity:1;pointer-events:auto;} #ytkit-settings-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.96);z-index:80001;display:flex;flex-direction:column;width:95%;max-width:1100px;height:85vh;max-height:800px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-xl);box-shadow:var(--ytkit-shadow-xl),0 0 0 1px rgba(255,255,255,0.05) inset;font-family:var(--ytkit-font);color:var(--ytkit-text-primary);opacity:0;pointer-events:none;transition:all 300ms cubic-bezier(0.32,0.72,0,1);overflow:hidden;} body.ytkit-panel-open #ytkit-settings-panel{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);} .ytkit-header{display:flex;align-items:center;justify-content:space-between;padding:4px 20px;background:linear-gradient(180deg,var(--ytkit-bg-elevated) 0%,var(--ytkit-bg-base) 100%);border-bottom:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-brand{display:flex;align-items:center;gap:10px;} .ytkit-title{font-size:20px;font-weight:700;letter-spacing:-0.5px;margin:0;} .ytkit-title-yt{background:linear-gradient(135deg,#ff4e45 0%,#ff0000 50%,#ff4e45 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ytkit-shimmer 3s linear infinite;} .ytkit-title-kit{color:var(--ytkit-text-primary);} @keyframes ytkit-shimmer{0%{background-position:0% center;} 100%{background-position:200% center;} } .ytkit-badge{padding:2px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#fff;background:linear-gradient(135deg,#ff4e45,#ff0000);border-radius:100px;box-shadow:0 2px 8px rgba(255,78,69,0.4);} .ytkit-close{display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-close svg{width:16px;height:16px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-close:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);} .ytkit-close:hover svg{color:#fff;} .ytkit-body{display:flex;flex:1;overflow:hidden;} .ytkit-sidebar{display:flex;flex-direction:column;width:220px;padding:4px 0;background:var(--ytkit-bg-elevated);border-right:1px solid var(--ytkit-border);overflow-y:auto;flex-shrink:0;} .ytkit-search-container{position:relative;margin:4px 4px 8px;} .ytkit-search-input{width:100%;padding:2px 10px 2px 32px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-primary);font-size:12px;transition:all var(--ytkit-transition);} .ytkit-search-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px rgba(255,78,69,0.15);} .ytkit-search-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-search-icon{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--ytkit-text-muted);pointer-events:none;} .ytkit-sidebar-divider{height:1px;background:var(--ytkit-border);margin:4px 0 6px;} .ytkit-pane.ytkit-search-active{display:block;} .ytkit-pane.ytkit-search-active .ytkit-pane-header{display:none;} .ytkit-nav-btn{display:flex;align-items:center;gap:8px;width:100%;padding:3px 8px;margin:0;background:transparent;border:none;border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);text-align:left;} .ytkit-nav-btn:hover{background:var(--ytkit-bg-hover);} .ytkit-nav-btn.active{background:var(--ytkit-bg-active);} .ytkit-nav-icon{display:flex;align-items:center;justify-content:center;width:26px;height:26px;background:var(--ytkit-bg-surface);border-radius:4px;flex-shrink:0;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon{background:var(--cat-color,var(--ytkit-accent));box-shadow:0 2px 8px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 40%,transparent);} .ytkit-nav-icon svg{width:14px;height:14px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon svg{color:#fff;} .ytkit-nav-label{flex:1;font-size:12px;font-weight:500;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .ytkit-nav-btn.active .ytkit-nav-label{color:var(--ytkit-text-primary);} .ytkit-nav-count{font-size:10px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:1px 5px;border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-count{background:rgba(255,255,255,0.15);color:var(--ytkit-text-primary);} .ytkit-nav-arrow{display:flex;opacity:0;transition:opacity var(--ytkit-transition);} .ytkit-nav-arrow svg{width:14px;height:14px;color:var(--ytkit-text-muted);} .ytkit-nav-btn.active .ytkit-nav-arrow{opacity:1;} .ytkit-nav-group-label{padding:3px 10px 1px;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--ytkit-text-muted);user-select:none;pointer-events:none;} .ytkit-content{flex:1;padding:16px 20px;overflow-y:auto;background:var(--ytkit-bg-base);} .ytkit-pane{display:none;animation:ytkit-fade-in 300ms ease;} .ytkit-pane.active{display:block;} .ytkit-pane.ytkit-vh-pane.active{display:flex;flex-direction:column;height:100%;max-height:calc(85vh - 180px);} #ytkit-vh-content{flex:1;overflow-y:auto;padding-right:8px;} @keyframes ytkit-fade-in{from{opacity:0;transform:translateX(8px);} to{opacity:1;transform:translateX(0);} } @keyframes ytkit-badge-pulse{0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.5;transform:scale(1.3);} } .ytkit-pane-header{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px 0;padding:4px 0 10px 0;border-bottom:1px solid var(--ytkit-border);} .ytkit-pane-title{display:flex;align-items:center;gap:10px;} .ytkit-pane-title h2{font-size:16px;font-weight:600;margin:0;color:var(--ytkit-text-primary);} .ytkit-toggle-all{display:flex;align-items:center;gap:8px;cursor:pointer;} .ytkit-toggle-all span{font-size:12px;font-weight:500;color:var(--ytkit-text-secondary);} .ytkit-reset-group-btn{padding:4px 10px;margin-right:8px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-muted);font-size:11px;font-weight:500;cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-reset-group-btn:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);color:#fff;} .ytkit-features-grid{display:flex;flex-direction:column;gap:4px;} .ytkit-feature-card{display:flex;align-items:center;justify-content:space-between;padding:4px 12px;margin:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border-subtle);border-left:3px solid transparent;border-radius:var(--ytkit-radius-sm);transition:all var(--ytkit-transition);} .ytkit-feature-card:hover{background:var(--ytkit-bg-hover);border-color:var(--ytkit-border);border-left-color:transparent;} .ytkit-feature-card.ytkit-card-enabled{border-left-color:var(--cat-color,var(--ytkit-accent));} .ytkit-sub-card{margin-left:20px;background:var(--ytkit-bg-elevated);border-left:2px solid var(--ytkit-accent-soft);} .ytkit-sub-features{display:flex;flex-direction:column;gap:4px;} .ytkit-feature-info{flex:1;min-width:0;padding-right:12px;} .ytkit-feature-name{font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin:0 0 1px 0;} .ytkit-feature-desc{font-size:11px;color:var(--ytkit-text-muted);margin:0;line-height:1.35;} .ytkit-textarea-card{flex-direction:column;align-items:stretch;gap:8px;} .ytkit-textarea-card .ytkit-feature-info{padding-right:0;} .ytkit-input{width:100%;padding:7px 10px;font-family:var(--ytkit-font);font-size:12px;color:var(--ytkit-text-primary);background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);resize:vertical;min-height:50px;transition:all var(--ytkit-transition);} .ytkit-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px var(--ytkit-accent-soft);} .ytkit-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-switch{position:relative;width:38px;height:20px;flex-shrink:0;} .ytkit-switch input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1;margin:0;} .ytkit-switch-track{position:absolute;inset:0;background:var(--ytkit-bg-active);border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-switch.active .ytkit-switch-track{background:var(--switch-color,var(--ytkit-accent));box-shadow:0 0 12px color-mix(in srgb,var(--switch-color,var(--ytkit-accent)) 50%,transparent);} .ytkit-switch-thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:50%;box-shadow:var(--ytkit-shadow-sm);transition:all var(--ytkit-transition);display:flex;align-items:center;justify-content:center;} .ytkit-switch.active .ytkit-switch-thumb{transform:translateX(18px);} .ytkit-switch-icon{display:flex;opacity:0;transform:scale(0.5);transition:all var(--ytkit-transition);} .ytkit-switch-icon svg{width:10px;height:10px;color:var(--switch-color,var(--ytkit-accent));} .ytkit-switch.active .ytkit-switch-icon{opacity:1;transform:scale(1);} .ytkit-footer{display:flex;align-items:center;justify-content:space-between;padding:4px 20px;background:var(--ytkit-bg-elevated);border-top:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-footer-left{display:flex;align-items:center;gap:12px;} .ytkit-github{display:flex;align-items:center;justify-content:center;width:28px;height:28px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);border-radius:4px;transition:all var(--ytkit-transition);} .ytkit-github:hover{color:var(--ytkit-text-primary);background:var(--ytkit-bg-hover);} .ytkit-github svg{width:16px;height:16px;} .ytkit-version{font-size:11px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:2px 8px;border-radius:100px;} .ytkit-shortcut{font-size:10px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:2px 6px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace;} .ytkit-footer-right{display:flex;gap:8px;} .ytkit-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;font-family:var(--ytkit-font);font-size:12px;font-weight:600;border:none;border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-btn svg{width:14px;height:14px;} .ytkit-btn-secondary{color:var(--ytkit-text-secondary);background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);} .ytkit-btn-secondary:hover{background:var(--ytkit-bg-hover);color:var(--ytkit-text-primary);} .ytkit-btn-primary{color:#fff;background:linear-gradient(135deg,#ff4e45,#e6423a);box-shadow:0 2px 8px rgba(255,78,69,0.3);} .ytkit-btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(255,78,69,0.4);} .ytkit-toast{position:fixed;bottom:-80px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:10px 16px;font-family:var(--ytkit-font);font-size:13px;font-weight:500;color:#fff;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);box-shadow:var(--ytkit-shadow-lg);z-index:90000;transition:all 400ms cubic-bezier(0.68,-0.55,0.27,1.55);} .ytkit-toast.show{bottom:24px;} .ytkit-toast-success{border-color:var(--ytkit-success);box-shadow:0 4px 20px rgba(34,197,94,0.2);} .ytkit-toast-error{border-color:var(--ytkit-error);box-shadow:0 4px 20px rgba(239,68,68,0.2);}ytd-watch-metadata.watch-active-metadata{margin-top:180px !important;} ytd-live-chat-frame:not([style*="position"]){margin-top:-57px !important;width:402px !important;} .ytkit-sidebar::-webkit-scrollbar,.ytkit-content::-webkit-scrollbar{width:6px;} .ytkit-sidebar::-webkit-scrollbar-track,.ytkit-content::-webkit-scrollbar-track{background:transparent;} .ytkit-sidebar::-webkit-scrollbar-thumb,.ytkit-content::-webkit-scrollbar-thumb{background:var(--ytkit-border);border-radius:100px;} .ytkit-sidebar::-webkit-scrollbar-thumb:hover,.ytkit-content::-webkit-scrollbar-thumb:hover{background:var(--ytkit-text-muted);}  .ytkit-css-editor{width:100%;min-height:150px;padding:12px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-family:'Monaco','Menlo','Ubuntu Mono',monospace;font-size:13px;line-height:1.5;resize:vertical;} .ytkit-css-editor:focus{outline:none;border-color:var(--ytkit-accent);} .ytkit-bulk-bar{animation:slideDown 0.2s ease-out;} @keyframes slideDown{from{opacity:0;transform:translateY(-10px);} to{opacity:1;transform:translateY(0);} }
 
 /* ─── Drag-reorder sidebar ─── */
 .ytkit-nav-btn{cursor:grab;user-select:none;}
@@ -10140,8 +9193,6 @@ pause
 .ytkit-drag-above{box-shadow:0 -2px 0 0 var(--ytkit-accent) inset;}
 .ytkit-drag-below{box-shadow:0 2px 0 0 var(--ytkit-accent) inset;}
 
-/* ─── Recently Changed section ─── */
-.ytkit-recent-section{margin-bottom:20px;padding:12px 14px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border-subtle);border-radius:var(--ytkit-radius-md);}
 
 /* ─── Feature Preview Tooltip ─── */
 .ytkit-feature-card.ytkit-has-preview{position:relative;}
@@ -10151,12 +9202,12 @@ pause
 /* ─── Responsive Breakpoints ─── */
 @media (max-width:900px){
     #ytkit-settings-panel{width:98%;height:92vh;max-height:none;border-radius:12px;}
-    .ytkit-sidebar{width:200px;padding:10px 8px;}
-    .ytkit-nav-label{font-size:12px;}
-    .ytkit-nav-icon{width:28px;height:28px;}
-    .ytkit-nav-icon svg{width:14px;height:14px;}
-    .ytkit-content{padding:16px;}
-    .ytkit-pane-title h2{font-size:17px;}
+    .ytkit-sidebar{width:185px;padding:4px 0;}
+    .ytkit-nav-label{font-size:11px;}
+    .ytkit-nav-icon{width:24px;height:24px;}
+    .ytkit-nav-icon svg{width:12px;height:12px;}
+    .ytkit-content{padding:12px;}
+    .ytkit-pane-title h2{font-size:15px;}
 }
 @media (max-width:700px){
     .ytkit-body{flex-direction:column;}
@@ -10164,35 +9215,32 @@ pause
     .ytkit-search-container{display:none;}
     .ytkit-sidebar-divider{display:none;}
     .ytkit-nav-group-label{display:none;}
-    .ytkit-nav-btn{flex-direction:column;gap:3px;padding:6px 10px;min-width:fit-content;white-space:nowrap;margin-bottom:0;border-radius:8px;}
+    .ytkit-nav-btn{flex-direction:column;gap:3px;padding:4px 8px;min-width:fit-content;white-space:nowrap;margin:0;border-radius:8px;}
     .ytkit-nav-icon{width:24px;height:24px;}
     .ytkit-nav-label{font-size:10px;}
     .ytkit-nav-count{font-size:9px;padding:1px 4px;}
     .ytkit-nav-arrow{display:none !important;}
-    .ytkit-content{padding:12px;flex:1;overflow-y:auto;}
-    .ytkit-pane-header{flex-wrap:wrap;gap:8px;}
-    .ytkit-toggle-all span{font-size:11px;}
-    .ytkit-feature-card{padding:10px 12px;}
-    .ytkit-feature-name{font-size:13px;}
-    .ytkit-feature-desc{font-size:11px;}
-    .ytkit-header{padding:12px 16px;}
-    .ytkit-title{font-size:20px;}
-    .ytkit-footer{padding:10px 16px;flex-wrap:wrap;gap:8px;}
-    .ytkit-footer-left{gap:8px;}
-    .ytkit-btn{padding:8px 12px;font-size:12px;}
-    .ytkit-recent-section{margin-bottom:12px;padding:10px;}
+    .ytkit-content{padding:10px;flex:1;overflow-y:auto;}
+    .ytkit-pane-header{flex-wrap:wrap;gap:6px;}
+    .ytkit-toggle-all span{font-size:10px;}
+    .ytkit-feature-card{padding:4px 10px;}
+    .ytkit-feature-name{font-size:12px;}
+    .ytkit-feature-desc{font-size:10px;}
+    .ytkit-header{padding:4px 12px;}
+    .ytkit-title{font-size:18px;}
+    .ytkit-footer{padding:4px 12px;flex-wrap:wrap;gap:6px;}
+    .ytkit-footer-left{gap:6px;}
+    .ytkit-btn{padding:5px 10px;font-size:11px;}
     /* Tooltip below on mobile */
     .ytkit-feature-card.ytkit-has-preview::after{bottom:auto;top:calc(100% + 4px);left:8px;right:8px;}
 }
 @media (max-width:480px){
     #ytkit-settings-panel{width:100%;height:100vh;border-radius:0;max-height:100vh;}
-    .ytkit-sidebar{padding:6px;gap:2px;}
-    .ytkit-nav-btn{padding:5px 8px;}
+    .ytkit-sidebar{padding:4px 0;gap:2px;}
+    .ytkit-nav-btn{padding:3px 6px;}
     .ytkit-content{padding:10px;}
-    .ytkit-pane-icon{width:32px;height:32px;}
-    .ytkit-pane-icon svg{width:16px;height:16px;}
-    .ytkit-pane-title h2{font-size:15px;}
-    .ytkit-sub-card{margin-left:12px;}
+    .ytkit-pane-title h2{font-size:14px;}
+    .ytkit-sub-card{margin-left:10px;}
     .ytkit-feature-card.ytkit-has-preview::after{display:none;}
 }`);
     }
@@ -10228,7 +9276,6 @@ pause
         ],
         watch: [
             { id: 'stickyVideo',                 label: 'Theater Split' },
-            { id: 'fitPlayerToWindow',           label: 'Fit to Window' },
             { id: 'expandVideoWidth',            label: 'Expand Width' },
             { id: 'skipSponsors',                label: 'SponsorBlock' },
             { id: 'autoMaxResolution',           label: 'Max Resolution' },
@@ -10571,7 +9618,6 @@ pause
             const LAZY_IDS = new Set([
                 // Only defer watch-page-only features that are heavy or network-bound
                 'skipSponsors',
-                'autoResumePosition','chapterProgressBar',
             ]);
 
             const initFeature = (f) => {
