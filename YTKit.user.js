@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YTKit: YouTube Customization Suite
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      2.6.3
+// @version      2.6.4
 // @description  Ultimate YouTube customization with ad blocking, VLC streaming, video/channel hiding, playback enhancements, sticky video, and more.
 // @author       Matthew Parker
 // @license      MIT
@@ -946,7 +946,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '2.6.3';
+    const YTKIT_VERSION = '2.6.4';
 
     // ── Z-Index Hierarchy ──
     const Z = {
@@ -7067,13 +7067,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         },
 
         cssFeature('disableSeekPreview', 'Disable Seek Preview', 'Hide the large video frame preview that appears when hovering/clicking the progress bar (fixes seek issues)', 'Video Player', 'eye-off',
-            `.ytp-tooltip.ytp-preview { display: none !important; }
-             .ytp-tooltip.ytp-text-detail.ytp-preview { display: none !important; }
-             .ytp-chapter-hover-container { display: none !important; }
+            `.ytp-tooltip.ytp-preview .ytp-tooltip-bg { display: none !important; }
+             .ytp-tooltip.ytp-preview .ytp-tooltip-image { display: none !important; }
              .ytp-storyboard-framepreview { display: none !important; }
-             .ytp-inline-preview-ui { display: none !important; }
-             .ytp-tooltip-bg { display: none !important; }
-             .ytp-tooltip-duration-text { display: none !important; }`),
+             .ytp-inline-preview-ui { display: none !important; }`),
 
         // ─── Playback Features ───
         {

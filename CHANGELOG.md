@@ -4,6 +4,13 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [2.6.4] - Seek Preview Fix
+
+### Fixed
+- **Playback bar hidden** — The Disable Seek Preview CSS was too broad, hiding the entire time tooltip and chapter markers. Narrowed selectors to only target the storyboard frame preview image while preserving the normal progress bar UI
+
+---
+
 ## [2.6.3] - Bug Audit & Stability Fixes
 
 ### Fixed
