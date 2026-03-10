@@ -5,7 +5,7 @@
 <h1 align="center">YTKit: YouTube Customization Suite</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.7.5-ff4e45?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.8.0-ff4e45?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/platform-Tampermonkey%20%7C%20Violentmonkey-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/YouTube-Desktop-ff0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube">
@@ -17,6 +17,8 @@
 
 <p align="center">
   <a href="https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js"><strong>⬇ Install YTKit</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.min.user.js"><strong>⬇ Install YTKit (Minified)</strong></a>
 </p>
 
 ---
@@ -122,7 +124,6 @@ The Video Hider settings panel provides a 4-tab interface: **Videos** (grid with
 | Feature | Description | Default |
 |---------|-------------|---------|
 | Theater Split | Fullscreen video on watch pages — scroll down to reveal comments side-by-side, scroll back up to return to fullscreen | On |
-| Fit to Window | Make the player fill your entire browser window | On |
 | Expand Video Width | Stretch the video to fill available space when sidebar is hidden | On |
 | YTKit Player Controls | Replace native player right-controls with YouTube logo (quick links dropdown) and settings gear | On |
 | Auto-Resume Position | Resume videos from where you left off | On |
@@ -245,13 +246,26 @@ Key architectural decisions:
 
 ---
 
+## Related Scripts
+
+YTKit is a focused suite. Features that were removed in earlier versions to keep it lean live on in dedicated scripts:
+
+| Script | What It's For | Install |
+|--------|--------------|---------|
+| **YTKit** *(this repo)* | All-in-one YouTube overhaul — UI, content filtering, player, ad blocking, downloads | [Install](https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js) |
+| **[YoutubeAdblock](https://github.com/SysAdminDoc/YoutubeAdblock)** | Ad blocking only, with more aggressive proxy hooks than YTKit's built-in blocker (JSON.parse proxy, Promise.then proxy, property traps, appendChild proxy). Use this if you only want ads gone and nothing else. | [Install](https://github.com/SysAdminDoc/YoutubeAdblock/raw/refs/heads/main/YoutubeAdblock.user.js) |
+| **[Chapterizer](https://github.com/SysAdminDoc/Chapterizer)** | Auto-generates chapters via local NLP (TF-IDF + cosine similarity), detects filler words, AutoSkips pauses — entirely offline, no external APIs. This was YTKit's ChapterForge feature before it was removed in v2.0. | [Install](https://raw.githubusercontent.com/SysAdminDoc/Chapterizer/main/Chapterizer.user.js) |
+| **[MediaDL](https://github.com/SysAdminDoc/YTYT-Downloader)** | Full download suite for YouTube + 1800 sites — background PowerShell server, real-time progress, 6-layer Facebook extraction, yt-dlp + ffmpeg turnkey installer. Use this instead of YTKit's basic download buttons if you download frequently. | [Install](https://github.com/SysAdminDoc/YTYT-Downloader/raw/refs/heads/main/src/MediaDL.user.js) |
+
+---
+
 ## FAQ
 
 **Q: The ad blocker is off by default?**
-A: Yes. YTKit's ad blocker uses aggressive API proxying that may conflict with other ad-blocking extensions. If you're already running uBlock Origin, you may not need it. Enable it in Settings → Ad Blocker if you want YTKit to handle ads instead.
+A: Yes. YTKit's ad blocker uses aggressive API proxying that may conflict with other ad-blocking extensions. If you're already running uBlock Origin, you may not need it. Enable it in Settings → Ad Blocker if you want YTKit to handle ads instead. For a standalone ad blocker with more proxy hooks, see [YoutubeAdblock](https://github.com/SysAdminDoc/YoutubeAdblock).
 
 **Q: How do I get VLC/MPV streaming working?**
-A: Install [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and register a `vlc://` or `mpv://` URI protocol handler on your system. The buttons pass the video URL to your local player via URI scheme.
+A: Install [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and register a `vlc://` or `mpv://` URI protocol handler on your system. The buttons pass the video URL to your local player via URI scheme. For a full turnkey download solution with a background server and real-time progress, see [MediaDL](https://github.com/SysAdminDoc/YTYT-Downloader).
 
 **Q: Can I use this with other YouTube extensions?**
 A: Yes, but avoid running multiple ad blockers simultaneously. YTKit's cosmetic CSS filters and SponsorBlock integration work alongside most extensions without conflict.
@@ -261,6 +275,9 @@ A: YTKit stores settings in your userscript manager's storage, which persists ac
 
 **Q: Theater Split doesn't show comments.**
 A: Scroll down. Theater Split starts in fullscreen video mode — scrolling reveals the comments panel side-by-side. Scroll back up to return to fullscreen.
+
+**Q: Where did AI chapter generation go?**
+A: It was removed from YTKit in v2.0 to reduce script size. It lives on as a dedicated script: [Chapterizer](https://github.com/SysAdminDoc/Chapterizer).
 
 ---
 
