@@ -20,6 +20,8 @@
 // @connect      raw.githubusercontent.com
 // @connect      cobalt.meowing.de
 // @connect      meowing.de
+// @connect      localhost
+// @connect      127.0.0.1
 // @updateURL    https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js
 // @downloadURL  https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js
 // @run-at       document-start
@@ -1699,6 +1701,74 @@
         setTimeout(() => toast.remove(), duration);
 
         return toast;
+    }
+
+    // Trigger a custom protocol URI (ytvlc://, ytmpv://, etc.) without navigating
+    // away from YouTube. An anchor click bypasses YouTube's SPA router.
+    function openProtocol(uri, errorMsg) {
+        try {
+            const a = document.createElement('a');
+            a.href = uri;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { try { document.body.removeChild(a); } catch (_) {} }, 200);
+        } catch (e) {
+            if (errorMsg) showToast(errorMsg, '#ef4444', { duration: 5 });
+        }
+    }
+
+    // Send a download request to the local MediaDL server (http://127.0.0.1:9751).
+    // Falls back to the ytdl:// protocol handler if the server is unreachable.
+    function mediaDLDownload(videoUrl, audioOnly) {
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: 'http://127.0.0.1:9751/health',
+            headers: { 'X-MDL-Client': 'MediaDL' },
+            timeout: 3000,
+            onload: function(res) {
+                let token = null;
+                try { token = JSON.parse(res.responseText).token; } catch (_) {}
+                if (!token) {
+                    showToast('MediaDL server error. Trying protocol handler...', '#f59e0b', { duration: 3 });
+                    openProtocol('ytdl://' + encodeURIComponent(videoUrl), 'yt-dlp not found. Install YTYT-Downloader.');
+                    return;
+                }
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'http://127.0.0.1:9751/download',
+                    headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+                    data: JSON.stringify({ url: videoUrl, audioOnly: audioOnly || false }),
+                    timeout: 5000,
+                    onload: function(r) {
+                        try {
+                            const resp = JSON.parse(r.responseText);
+                            if (resp.id) {
+                                showToast(audioOnly ? '🎵 Audio download queued!' : '⬇️ Video download queued!', '#22c55e', { duration: 3 });
+                            } else {
+                                showToast('MediaDL: ' + (resp.error || 'Unknown error'), '#ef4444', { duration: 5 });
+                            }
+                        } catch (_) {
+                            showToast('MediaDL server returned invalid response', '#ef4444', { duration: 5 });
+                        }
+                    },
+                    onerror: function() {
+                        showToast('MediaDL download request failed', '#ef4444', { duration: 5 });
+                    },
+                    ontimeout: function() {
+                        showToast('MediaDL request timed out', '#ef4444', { duration: 5 });
+                    }
+                });
+            },
+            onerror: function() {
+                showToast('MediaDL server not running. Trying protocol handler...', '#f59e0b', { duration: 3 });
+                openProtocol('ytdl://' + encodeURIComponent(videoUrl), 'yt-dlp not found. Install YTYT-Downloader.');
+            },
+            ontimeout: function() {
+                showToast('MediaDL server not responding. Trying protocol handler...', '#f59e0b', { duration: 3 });
+                openProtocol('ytdl://' + encodeURIComponent(videoUrl), 'yt-dlp not found. Install YTYT-Downloader.');
+            }
+        });
     }
 
     // Aggressive button injection system with MutationObserver
@@ -5974,11 +6044,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 btn.onmouseleave = () => { btn.style.background = '#f97316'; };
                 btn.addEventListener('click', () => {
                     showToast('🎬 Sending to VLC...', '#f97316');
-                    try {
-                        window.location.href = 'ytvlc://' + encodeURIComponent(window.location.href);
-                    } catch(e) {
-                        showToast('VLC protocol handler not found. Install YTYT-Downloader.', '#ef4444', { duration: 5 });
-                    }
+                    openProtocol('ytvlc://' + encodeURIComponent(window.location.href), 'VLC protocol handler not found. Install YTYT-Downloader.');
                 });
                 parent.appendChild(btn);
             },
@@ -6016,11 +6082,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 btn.onmouseleave = () => { btn.style.background = '#22c55e'; };
                 btn.addEventListener('click', () => {
                     showToast('⬇️ Starting download...', '#22c55e');
-                    try {
-                        window.location.href = 'ytdl://' + encodeURIComponent(window.location.href);
-                    } catch(e) {
-                        showToast('yt-dlp protocol handler not found. Install YTYT-Downloader.', '#ef4444', { duration: 5 });
-                    }
+                    mediaDLDownload(window.location.href, false);
                 });
                 parent.appendChild(btn);
             },
@@ -6058,11 +6120,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 btn.onmouseleave = () => { btn.style.background = '#8b5cf6'; };
                 btn.addEventListener('click', () => {
                     showToast('🎵 Starting MP3 download...', '#8b5cf6');
-                    try {
-                        window.location.href = 'ytdl://' + encodeURIComponent(window.location.href) + '?ytyt_audio_only=1';
-                    } catch(e) {
-                        showToast('yt-dlp protocol handler not found. Install YTYT-Downloader.', '#ef4444', { duration: 5 });
-                    }
+                    mediaDLDownload(window.location.href, true);
                 });
                 parent.appendChild(btn);
             },
@@ -6296,21 +6354,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _downloadVideo() {
                 const url = window.location.href;
                 showToast('⬇️ Starting video download...', '#22c55e');
-                try {
-                    window.location.href = 'ytdl://' + encodeURIComponent(url);
-                } catch(e) {
-                    showToast('yt-dlp protocol handler not found. Install YTYT-Downloader.', '#ef4444', { duration: 5 });
-                }
+                mediaDLDownload(url, false);
             },
 
             _downloadAudio() {
                 const url = window.location.href;
                 showToast('🎵 Starting audio download...', '#a855f7');
-                try {
-                    window.location.href = 'ytdl://' + encodeURIComponent(url + '&ytkit_audio_only=1');
-                } catch(e) {
-                    showToast('yt-dlp protocol handler not found. Install YTYT-Downloader.', '#ef4444', { duration: 5 });
-                }
+                mediaDLDownload(url, true);
             },
 
             async _downloadTranscript() {
@@ -6320,31 +6370,19 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _streamVLC() {
                 const url = window.location.href;
                 showToast('Sending to VLC...', '#f97316');
-                try {
-                    window.location.href = 'ytvlc://' + encodeURIComponent(url);
-                } catch(e) {
-                    showToast('VLC protocol handler not found. Install YTYT-Downloader.', '#ef4444', { duration: 5 });
-                }
+                openProtocol('ytvlc://' + encodeURIComponent(url), 'VLC protocol handler not found. Install YTYT-Downloader.');
             },
 
             _streamMPV() {
                 const url = window.location.href;
                 showToast('🎬 Sending to MPV...', '#8b5cf6');
-                try {
-                    window.location.href = 'ytmpv://' + encodeURIComponent(url);
-                } catch(e) {
-                    showToast('MPV protocol handler not found. Install YTYT-Downloader.', '#ef4444', { duration: 5 });
-                }
+                openProtocol('ytmpv://' + encodeURIComponent(url), 'MPV protocol handler not found. Install YTYT-Downloader.');
             },
 
             _addToVLCQueue() {
                 const url = window.location.href;
                 showToast('📋 Adding to VLC queue...', '#f97316');
-                try {
-                    window.location.href = 'ytvlcq://' + encodeURIComponent(url);
-                } catch(e) {
-                    showToast('VLC Queue protocol handler not found. Install YTYT-Downloader.', '#ef4444', { duration: 5 });
-                }
+                openProtocol('ytvlcq://' + encodeURIComponent(url), 'VLC Queue protocol handler not found. Install YTYT-Downloader.');
             },
 
             async _activateEmbed() {
