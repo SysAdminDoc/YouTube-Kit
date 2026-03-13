@@ -255,7 +255,7 @@ YTKit is a focused suite. Features that were removed in earlier versions to keep
 | **YTKit** *(this repo)* | All-in-one YouTube overhaul — UI, content filtering, player, ad blocking, downloads | [Install](https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js) |
 | **[YoutubeAdblock](https://github.com/SysAdminDoc/YoutubeAdblock)** | Ad blocking only, with more aggressive proxy hooks than YTKit's built-in blocker (JSON.parse proxy, Promise.then proxy, property traps, appendChild proxy). Use this if you only want ads gone and nothing else. | [Install](https://github.com/SysAdminDoc/YoutubeAdblock/raw/refs/heads/main/YoutubeAdblock.user.js) |
 | **[Chapterizer](https://github.com/SysAdminDoc/Chapterizer)** | Auto-generates chapters via local NLP (TF-IDF + cosine similarity), detects filler words, AutoSkips pauses — entirely offline, no external APIs. This was YTKit's ChapterForge feature before it was removed in v2.0. | [Install](https://raw.githubusercontent.com/SysAdminDoc/Chapterizer/main/Chapterizer.user.js) |
-| **[MediaDL](https://github.com/SysAdminDoc/YTYT-Downloader)** | Full download suite for YouTube + 1800 sites — background PowerShell server, real-time progress, 6-layer Facebook extraction, yt-dlp + ffmpeg turnkey installer. Use this instead of YTKit's basic download buttons if you download frequently. | [Install](https://github.com/SysAdminDoc/YTYT-Downloader/raw/refs/heads/main/src/MediaDL.user.js) |
+| **MediaDL** *(built-in)* | Full download suite for YouTube + 1800 sites — background PowerShell server, real-time progress, yt-dlp + ffmpeg turnkey installer. Built into YTKit's download integration. | Use the installer button in YTKit settings |
 
 ---
 
@@ -265,7 +265,7 @@ YTKit is a focused suite. Features that were removed in earlier versions to keep
 A: Yes. YTKit's ad blocker uses aggressive API proxying that may conflict with other ad-blocking extensions. If you're already running uBlock Origin, you may not need it. Enable it in Settings → Ad Blocker if you want YTKit to handle ads instead. For a standalone ad blocker with more proxy hooks, see [YoutubeAdblock](https://github.com/SysAdminDoc/YoutubeAdblock).
 
 **Q: How do I get VLC/MPV streaming working?**
-A: Install [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and register a `vlc://` or `mpv://` URI protocol handler on your system. The buttons pass the video URL to your local player via URI scheme. For a full turnkey download solution with a background server and real-time progress, see [MediaDL](https://github.com/SysAdminDoc/YTYT-Downloader).
+A: Install [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and register a `vlc://` or `mpv://` URI protocol handler on your system. The buttons pass the video URL to your local player via URI scheme. For a full turnkey download solution with a background server and real-time progress, use YTKit's built-in installer button.
 
 **Q: Can I use this with other YouTube extensions?**
 A: Yes, but avoid running multiple ad blockers simultaneously. YTKit's cosmetic CSS filters and SponsorBlock integration work alongside most extensions without conflict.

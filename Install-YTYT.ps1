@@ -47,9 +47,9 @@ $script:OllamaModels = [ordered]@{
 }
 
 # Image URLs
-$script:IconUrl = "https://raw.githubusercontent.com/SysAdminDoc/YTYT-Downloader/refs/heads/main/images/icons/ytyticn.ico"
-$script:LogoUrl = "https://raw.githubusercontent.com/SysAdminDoc/YTYT-Downloader/refs/heads/main/images/ytytfull.png"
-$script:IconPngUrl = "https://raw.githubusercontent.com/SysAdminDoc/YTYT-Downloader/refs/heads/main/images/icons/ytyticn-128x128.png"
+$script:IconUrl = "https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/main/images/icons/ytyticn.ico"
+$script:LogoUrl = "https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/main/images/ytytfull.png"
+$script:IconPngUrl = "https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/main/images/icons/ytyticn-128x128.png"
 
 # Browser icon URLs
 # ScriptVault (userscript manager extension)
