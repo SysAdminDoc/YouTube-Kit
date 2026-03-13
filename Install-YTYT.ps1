@@ -2417,8 +2417,10 @@ function Start-Download {
     $cookies = $params.cookies
     $isDirect = $url -match "fbcdn\.net|\.mp4\?|\.webm\?"
 
-    # Write cookie file for yt-dlp fallback (from GM_cookie data sent by userscript)
+    # Cookie strategy for yt-dlp: prefer --cookies-from-browser chrome (reads Chrome's cookie DB directly)
+    # Falls back to cookie file from GM_cookie data if provided
     $cookieFile = Write-CookieFile $cookies
+    $isYouTube = $url -match 'youtube\.com|youtu\.be'
 
     $ffLoc = Split-Path $config.FfmpegPath -Parent
     $ffmpegExe = $config.FfmpegPath
@@ -2600,10 +2602,11 @@ function Start-Download {
         if ($audioOnly -and $isDirect) {
             $tempVideo = Join-Path $config.DownloadPath "mdl_temp_$([guid]::NewGuid().ToString('N')).mp4"
             $job = Start-Job -ScriptBlock {
-                param($ytdlp, $ffmpeg, $vUrl, $tempVideo, $outMp3, $outFile, $ref, $ckFile)
+                param($ytdlp, $ffmpeg, $vUrl, $tempVideo, $outMp3, $outFile, $ref, $ckFile, $isYT)
                 $dlArgs = @('--newline', '--progress', '-o', $tempVideo)
                 if ($ref) { $dlArgs += '--referer'; $dlArgs += $ref }
-                if ($ckFile -and (Test-Path $ckFile)) { $dlArgs += '--cookies'; $dlArgs += $ckFile }
+                if ($isYT) { $dlArgs += '--cookies-from-browser'; $dlArgs += 'chrome' }
+                elseif ($ckFile -and (Test-Path $ckFile)) { $dlArgs += '--cookies'; $dlArgs += $ckFile }
                 $dlArgs += $vUrl
                 & $ytdlp @dlArgs 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
                 if (Test-Path $tempVideo) {
@@ -2615,43 +2618,46 @@ function Start-Download {
                     }
                 }
                 if ($ckFile -and (Test-Path $ckFile)) { Remove-Item $ckFile -Force -ErrorAction SilentlyContinue }
-            } -ArgumentList $config.YtDlpPath, $config.FfmpegPath, $url, $tempVideo, $outTpl, $progressFile, $referer, $cookieFile
+            } -ArgumentList $config.YtDlpPath, $config.FfmpegPath, $url, $tempVideo, $outTpl, $progressFile, $referer, $cookieFile, $isYouTube
         }
         elseif ($audioOnly) {
             $job = Start-Job -ScriptBlock {
-                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile)
+                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT)
                 $a = @('-f', 'bestaudio', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
                        '--newline', '--progress', '--ffmpeg-location', $ffLoc, '-o', $outTpl)
                 if ($ref) { $a += '--referer'; $a += $ref }
-                if ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
+                if ($isYT) { $a += '--cookies-from-browser'; $a += 'chrome' }
+                elseif ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
                 $a += $vUrl
                 & $ytdlp @a 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
                 if ($ckFile -and (Test-Path $ckFile)) { Remove-Item $ckFile -Force -ErrorAction SilentlyContinue }
-            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile
+            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube
         }
         elseif ($isDirect) {
             $job = Start-Job -ScriptBlock {
-                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile)
+                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT)
                 $a = @('--newline', '--progress', '--ffmpeg-location', $ffLoc, '-o', $outTpl)
                 if ($ref) { $a += '--referer'; $a += $ref }
-                if ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
+                if ($isYT) { $a += '--cookies-from-browser'; $a += 'chrome' }
+                elseif ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
                 $a += $vUrl
                 & $ytdlp @a 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
                 if ($ckFile -and (Test-Path $ckFile)) { Remove-Item $ckFile -Force -ErrorAction SilentlyContinue }
-            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile
+            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube
         }
         else {
             $job = Start-Job -ScriptBlock {
-                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile)
+                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT)
                 $a = @('-f', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
                        '--merge-output-format', 'mp4', '--newline', '--progress',
                        '--ffmpeg-location', $ffLoc, '-o', $outTpl)
                 if ($ref) { $a += '--referer'; $a += $ref }
-                if ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
+                if ($isYT) { $a += '--cookies-from-browser'; $a += 'chrome' }
+                elseif ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
                 $a += $vUrl
                 & $ytdlp @a 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
                 if ($ckFile -and (Test-Path $ckFile)) { Remove-Item $ckFile -Force -ErrorAction SilentlyContinue }
-            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile
+            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube
         }
     }
 
