@@ -15,16 +15,23 @@
     // Ad blocker config keys that also mirror to localStorage for MAIN world access
     const LOCALSTORAGE_MIRROR_KEYS = ['ytab_enabled', 'ytab_antidetect'];
 
+    // Check if extension context is still valid (survives extension reload)
+    function isContextValid() {
+        try { return !!chrome.runtime?.id; } catch(e) { return false; }
+    }
+
     const gmCompat = {
         _readyPromise: null,
 
         async preload() {
             if (_ready) return;
-            try {
-                const all = await chrome.storage.local.get(null);
-                Object.assign(_cache, all);
-            } catch (e) {
-                console.warn('[YTKit] Storage preload failed:', e);
+            if (isContextValid()) {
+                try {
+                    const all = await chrome.storage.local.get(null);
+                    Object.assign(_cache, all);
+                } catch (e) {
+                    console.warn('[YTKit] Storage preload failed:', e);
+                }
             }
             _ready = true;
 
@@ -42,7 +49,9 @@
 
         GM_setValue(key, value) {
             _cache[key] = value;
-            chrome.storage.local.set({ [key]: value }).catch(() => {});
+            if (isContextValid()) {
+                chrome.storage.local.set({ [key]: value }).catch(() => {});
+            }
 
             // Mirror ad blocker keys to localStorage for MAIN world
             if (LOCALSTORAGE_MIRROR_KEYS.includes(key)) {
@@ -58,60 +67,75 @@
         },
 
         GM_xmlhttpRequest(details) {
-            chrome.runtime.sendMessage({
-                type: 'GM_XHR',
-                details: {
-                    method: details.method || 'GET',
-                    url: details.url,
-                    headers: details.headers || {},
-                    data: details.data || null,
-                    timeout: details.timeout || 0,
-                    responseType: details.responseType || ''
-                }
-            }, (response) => {
-                if (chrome.runtime.lastError) {
-                    details.onerror?.({ error: chrome.runtime.lastError.message });
-                    return;
-                }
-                if (!response) {
-                    details.onerror?.({ error: 'No response from background' });
-                    return;
-                }
-                if (response.timeout) {
-                    details.ontimeout?.(response);
-                } else if (response.error) {
-                    details.onerror?.(response);
-                } else {
-                    // Build a response object matching GM_xmlhttpRequest format
-                    const resp = {
-                        status: response.status,
-                        statusText: response.statusText,
-                        responseText: response.responseText,
-                        responseHeaders: response.responseHeaders,
-                        finalUrl: response.finalUrl,
-                        response: response.responseText
-                    };
-                    details.onload?.(resp);
-                }
-            });
+            if (!isContextValid()) {
+                details.onerror?.({ error: 'Extension context invalidated. Reload the page.' });
+                return;
+            }
+            try {
+                chrome.runtime.sendMessage({
+                    type: 'GM_XHR',
+                    details: {
+                        method: details.method || 'GET',
+                        url: details.url,
+                        headers: details.headers || {},
+                        data: details.data || null,
+                        timeout: details.timeout || 0,
+                        responseType: details.responseType || ''
+                    }
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        details.onerror?.({ error: chrome.runtime.lastError.message });
+                        return;
+                    }
+                    if (!response) {
+                        details.onerror?.({ error: 'No response from background' });
+                        return;
+                    }
+                    if (response.timeout) {
+                        details.ontimeout?.(response);
+                    } else if (response.error) {
+                        details.onerror?.(response);
+                    } else {
+                        const resp = {
+                            status: response.status,
+                            statusText: response.statusText,
+                            responseText: response.responseText,
+                            responseHeaders: response.responseHeaders,
+                            finalUrl: response.finalUrl,
+                            response: response.responseText
+                        };
+                        details.onload?.(resp);
+                    }
+                });
+            } catch(e) {
+                details.onerror?.({ error: e.message });
+            }
         },
 
         GM_cookie: {
             list(filter, callback) {
-                chrome.runtime.sendMessage({
-                    type: 'GM_COOKIE_LIST',
-                    filter: filter
-                }, (result) => {
-                    if (chrome.runtime.lastError) {
-                        callback(null, chrome.runtime.lastError.message);
-                        return;
-                    }
-                    if (!result) {
-                        callback(null, 'No response from background');
-                        return;
-                    }
-                    callback(result.cookies, result.error);
-                });
+                if (!isContextValid()) {
+                    callback(null, 'Extension context invalidated. Reload the page.');
+                    return;
+                }
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'GM_COOKIE_LIST',
+                        filter: filter
+                    }, (result) => {
+                        if (chrome.runtime.lastError) {
+                            callback(null, chrome.runtime.lastError.message);
+                            return;
+                        }
+                        if (!result) {
+                            callback(null, 'No response from background');
+                            return;
+                        }
+                        callback(result.cookies, result.error);
+                    });
+                } catch(e) {
+                    callback(null, e.message);
+                }
             }
         }
     };

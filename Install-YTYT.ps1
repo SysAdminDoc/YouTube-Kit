@@ -53,7 +53,7 @@ $script:IconPngUrl = "https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/
 
 # Browser icon URLs
 # ScriptVault (userscript manager extension)
-$script:ScriptVaultUrl = "https://github.com/SysAdminDoc/ScriptVault"
+$script:ScriptVaultUrl = "https://chromewebstore.google.com/detail/scriptvault/jlhdbkeijcbgnonpfkfkkkhfmbeejkgh"
 
 # ============================================
 # ASSEMBLIES
@@ -767,7 +767,7 @@ if ($script:OllamaFound) {
                                 <TextBlock Text="ScriptVault" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
                                 <TextBlock Text="Chrome MV3 Userscript Manager" FontSize="12" Foreground="#a78bfa" HorizontalAlignment="Center" Margin="0,0,0,12"/>
                                 <TextBlock Text="Full GM_cookie, GM_xmlhttpRequest, GM_download support. Required for YTKit authenticated downloads." FontSize="12" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,16" MaxWidth="320"/>
-                                <Button x:Name="btnInstallScriptVault" Content="Get ScriptVault on GitHub" Style="{StaticResource BaseButton}" Padding="24,12" FontSize="14"/>
+                                <Button x:Name="btnInstallScriptVault" Content="Get ScriptVault on Chrome Web Store" Style="{StaticResource BaseButton}" Padding="24,12" FontSize="14"/>
                             </StackPanel>
                         </Border>
 
