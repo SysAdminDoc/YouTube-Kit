@@ -8930,7 +8930,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
         ytToolsBtn.addEventListener('click', () => {
             // Generate a .bat file that runs the PowerShell installer
-            const cacheBust = Date.now();
             const batContent = `@echo off
 title YTYT-Downloader Installer
 echo ========================================
@@ -8954,7 +8953,7 @@ pause
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
             showToast('📦 Installer downloaded! Double-click the .bat file to run.', '#22c55e');
         });
         const ytToolsLink = ytToolsBtn; // Alias for existing appendChild call
@@ -9225,7 +9224,7 @@ pause
         const url = URL.createObjectURL(blob);
         const a = Object.assign(document.createElement('a'), { href: url, download: filename });
         a.click();
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
     function attachUIEventListeners() {
@@ -9322,7 +9321,7 @@ pause
                 const text = el._originalText;
                 const idx = text.toLowerCase().indexOf(q);
                 if (idx === -1) { el.textContent = text; return; }
-                el.innerHTML = '';
+                el.textContent = '';
                 el.appendChild(document.createTextNode(text.substring(0, idx)));
                 const mark = document.createElement('mark');
                 mark.style.cssText = 'background:#fbbf24;color:#000;border-radius:2px;padding:0 1px;';
