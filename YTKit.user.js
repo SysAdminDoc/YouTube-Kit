@@ -117,7 +117,7 @@
         /* ── Theater Split ── */
         body.ts-active ytd-masthead,
         body.ts-active #masthead-container { display: none !important; }
-        body.ts-active { overflow: hidden !important; }
+        html:has(body.ts-active), body.ts-active { overflow: hidden !important; }
         #ts-wrapper { display:none; }
         body.ts-active #ts-wrapper { display:flex; }
         ytd-watch-flexy[fullscreen] ~ #ts-wrapper,
@@ -257,8 +257,6 @@
         let touchStartY = 0;
         let windowResizeHandler = null;
         let playerResizeObs = null;
-        let clickToPauseHandler = null;
-        let clickToPauseMp = null;
         let resizeTimer = null;
         let lastVideoId = null;
         let chatObserver = null;
@@ -416,7 +414,7 @@
         function buildOverlay() {
             const wrapper = document.createElement('div');
             wrapper.id = 'ts-wrapper';
-            wrapper.style.cssText = `display:flex;position:fixed;top:0;left:0;right:0;bottom:0;z-index:${Z.TS_OVERLAY};background:transparent;overflow:hidden;`;
+            wrapper.style.cssText = `display:flex;position:fixed;top:0;left:0;right:0;bottom:0;z-index:${Z.TS_OVERLAY};background:transparent;overflow:hidden;pointer-events:none;`;
 
             const left = document.createElement('div');
             left.id = 'ts-left';
@@ -424,7 +422,7 @@
 
             const divider = document.createElement('div');
             divider.id = 'ts-divider';
-            divider.style.cssText = `flex:0 0 0;width:0;cursor:col-resize;position:relative;background:rgba(255,255,255,0.04);transition:flex-basis ${TRANSITION};overflow:hidden;z-index:10;`;
+            divider.style.cssText = `flex:0 0 0;width:0;cursor:col-resize;position:relative;background:rgba(255,255,255,0.04);transition:flex-basis ${TRANSITION};overflow:hidden;z-index:10;pointer-events:auto;scrollbar-width:none;`;
             const pip = document.createElement('div');
             pip.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:4px;height:40px;border-radius:2px;background:rgba(255,255,255,0.18);pointer-events:none;';
             divider.appendChild(pip);
@@ -433,7 +431,7 @@
 
             const right = document.createElement('div');
             right.id = 'ts-right';
-            right.style.cssText = `flex:0 0 0;width:0;height:100%;overflow-y:auto;overflow-x:hidden;background:#0f0f0f;border-left:1px solid rgba(255,255,255,0.06);scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;padding:0;box-sizing:border-box;opacity:0;transition:flex-basis ${TRANSITION},opacity 0.3s;`;
+            right.style.cssText = `flex:0 0 0;width:0;height:100%;overflow-y:auto;overflow-x:hidden;background:#0f0f0f;border-left:1px solid rgba(255,255,255,0.06);scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;padding:0;box-sizing:border-box;opacity:0;transition:flex-basis ${TRANSITION},opacity 0.3s;pointer-events:auto;`;
 
             initDividerDrag(divider, left, right);
 
@@ -520,7 +518,7 @@
                 width: '100%', height: '100vh',
                 'z-index': '9998', background: '#000',
                 'min-height': '0', margin: '0', padding: '0',
-                'max-width': 'none'
+                'max-width': 'none', overflow: 'hidden'
             });
 
             let fpsCount = 0;
@@ -578,9 +576,17 @@
                 return positionedEls.some(el => el.contains(target));
             };
 
+            // Wheel/touch on document capture — the overlay has pointer-events:none
+            // so events target the player directly. Use capture on document to intercept
+            // before YouTube's player can stopPropagation (volume control).
+            const isOverPlayer = (target) => {
+                const mp = document.getElementById('movie_player');
+                return mp && mp.contains(target);
+            };
             wheelHandler = (e) => {
                 if (!isActive) return;
-                if (!isSplit && e.deltaY > 0) { expandSplit(); return; }
+                if (!isOverPlayer(e.target) && !isInRightContent(e.target)) return;
+                if (!isSplit && e.deltaY > 0 && isOverPlayer(e.target)) { expandSplit(); return; }
                 if (isSplit && !isInRightContent(e.target)) {
                     const sEl = scrollTarget;
                     if (sEl) {
@@ -594,7 +600,7 @@
             touchMoveHandler = (e) => {
                 if (!isActive) return;
                 const t = e.touches[0]; if (!t) return;
-                if (!isSplit && touchStartY - t.clientY > 30) { expandSplit(); return; }
+                if (!isSplit && touchStartY - t.clientY > 30 && isOverPlayer(e.target)) { expandSplit(); return; }
                 if (isSplit && !isInRightContent(e.target)) {
                     const delta = touchStartY - t.clientY;
                     const sEl = scrollTarget;
@@ -605,27 +611,12 @@
                     touchStartY = t.clientY;
                 }
             };
-            splitWrapper.addEventListener('wheel', wheelHandler, { passive: true, capture: true });
-            splitWrapper.addEventListener('touchstart', touchHandler, { passive: true, capture: true });
-            splitWrapper.addEventListener('touchmove', touchMoveHandler, { passive: true, capture: true });
+            document.addEventListener('wheel', wheelHandler, { passive: true, capture: true });
+            document.addEventListener('touchstart', touchHandler, { passive: true, capture: true });
+            document.addEventListener('touchmove', touchMoveHandler, { passive: true, capture: true });
 
             windowResizeHandler = () => { if (isActive) triggerPlayerResize(); };
             window.addEventListener('resize', windowResizeHandler);
-
-            clickToPauseHandler = (e) => {
-                const t = e.target;
-                if (t.closest('.ytp-chrome-bottom, .ytp-chrome-top, .ytp-ce-element, .ytp-cards-teaser, .ytp-ad-overlay-container, .ytp-settings-menu, .ytp-popup, .ytp-paid-content-overlay, a')) return;
-                const vid = document.querySelector('video.html5-main-video');
-                if (!vid) return;
-                if (t !== vid && !t.closest('.html5-video-container')) return;
-                e.stopImmediatePropagation();
-                e.preventDefault();
-                if (vid.paused) vid.play().catch(() => {});
-                else vid.pause();
-            };
-            const mp = document.getElementById('movie_player');
-            if (mp) mp.addEventListener('click', clickToPauseHandler, true);
-            clickToPauseMp = mp;
         }
 
         function expandSplit() {
@@ -762,7 +753,7 @@
             const player = getPlayer();
             if (player) {
                 removeStyles(player, ['position', 'top', 'left', 'width', 'height',
-                    'z-index', 'background', 'min-height', 'margin', 'padding', 'max-width']);
+                    'z-index', 'background', 'min-height', 'margin', 'padding', 'max-width', 'overflow']);
             }
 
             const mp = document.getElementById('movie_player');
@@ -777,9 +768,14 @@
                 if (innerCont) removeStyles(innerCont, ['width', 'height', 'padding-bottom']);
             }
 
-            if (clickToPauseMp && clickToPauseHandler) clickToPauseMp.removeEventListener('click', clickToPauseHandler, true);
-            clickToPauseHandler = null;
-            clickToPauseMp = null;
+            if (wheelHandler) {
+                document.removeEventListener('wheel', wheelHandler, true);
+                document.removeEventListener('touchstart', touchHandler, true);
+                document.removeEventListener('touchmove', touchMoveHandler, true);
+            }
+            wheelHandler = null;
+            touchHandler = null;
+            touchMoveHandler = null;
 
             if (playerResizeObs) { playerResizeObs.disconnect(); playerResizeObs = null; }
             if (windowResizeHandler) { window.removeEventListener('resize', windowResizeHandler); windowResizeHandler = null; }
