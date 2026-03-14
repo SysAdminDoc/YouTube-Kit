@@ -2350,7 +2350,7 @@ function New-JsonResponse {
     $context.Response.StatusCode = $status
     $context.Response.ContentType = "application/json; charset=utf-8"
     $origin = $context.Request.Headers["Origin"]
-    $allowedOrigin = if ($origin -match '^chrome-extension://') { $origin } else { "null" }
+    $allowedOrigin = if ($origin -match '^(chrome-extension://|https://(\w+\.)?youtube\.com)') { $origin } else { "null" }
     $context.Response.Headers.Add("Access-Control-Allow-Origin", $allowedOrigin)
     $context.Response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
     $context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token, X-MDL-Client")
@@ -2417,8 +2417,8 @@ function Start-Download {
     $cookies = $params.cookies
     $isDirect = $url -match "fbcdn\.net|\.mp4\?|\.webm\?"
 
-    # Cookie strategy for yt-dlp: prefer --cookies-from-browser chrome (reads Chrome's cookie DB directly)
-    # Falls back to cookie file from GM_cookie data if provided
+    # Cookie strategy: use cookie file from extension if provided
+    # --cookies-from-browser fails when browser is running (locked DB), so we use extension-provided cookies
     $cookieFile = Write-CookieFile $cookies
     $isYouTube = $url -match 'youtube\.com|youtu\.be'
 
@@ -2602,11 +2602,10 @@ function Start-Download {
         if ($audioOnly -and $isDirect) {
             $tempVideo = Join-Path $config.DownloadPath "mdl_temp_$([guid]::NewGuid().ToString('N')).mp4"
             $job = Start-Job -ScriptBlock {
-                param($ytdlp, $ffmpeg, $vUrl, $tempVideo, $outMp3, $outFile, $ref, $ckFile, $isYT)
+                param($ytdlp, $ffmpeg, $vUrl, $tempVideo, $outMp3, $outFile, $ref, $ckFile, $isYT, $browser)
                 $dlArgs = @('--newline', '--progress', '-o', $tempVideo)
                 if ($ref) { $dlArgs += '--referer'; $dlArgs += $ref }
-                if ($isYT) { $dlArgs += '--cookies-from-browser'; $dlArgs += 'chrome' }
-                elseif ($ckFile -and (Test-Path $ckFile)) { $dlArgs += '--cookies'; $dlArgs += $ckFile }
+                if ($ckFile -and (Test-Path $ckFile)) { $dlArgs += '--cookies'; $dlArgs += $ckFile }
                 $dlArgs += $vUrl
                 & $ytdlp @dlArgs 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
                 if (Test-Path $tempVideo) {
@@ -2618,46 +2617,43 @@ function Start-Download {
                     }
                 }
                 if ($ckFile -and (Test-Path $ckFile)) { Remove-Item $ckFile -Force -ErrorAction SilentlyContinue }
-            } -ArgumentList $config.YtDlpPath, $config.FfmpegPath, $url, $tempVideo, $outTpl, $progressFile, $referer, $cookieFile, $isYouTube
+            } -ArgumentList $config.YtDlpPath, $config.FfmpegPath, $url, $tempVideo, $outTpl, $progressFile, $referer, $cookieFile, $isYouTube, $browserName
         }
         elseif ($audioOnly) {
             $job = Start-Job -ScriptBlock {
-                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT)
+                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT, $browser)
                 $a = @('-f', 'bestaudio', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
                        '--newline', '--progress', '--ffmpeg-location', $ffLoc, '-o', $outTpl)
                 if ($ref) { $a += '--referer'; $a += $ref }
-                if ($isYT) { $a += '--cookies-from-browser'; $a += 'chrome' }
-                elseif ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
+                if ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
                 $a += $vUrl
                 & $ytdlp @a 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
                 if ($ckFile -and (Test-Path $ckFile)) { Remove-Item $ckFile -Force -ErrorAction SilentlyContinue }
-            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube
+            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube, $browserName
         }
         elseif ($isDirect) {
             $job = Start-Job -ScriptBlock {
-                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT)
+                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT, $browser)
                 $a = @('--newline', '--progress', '--ffmpeg-location', $ffLoc, '-o', $outTpl)
                 if ($ref) { $a += '--referer'; $a += $ref }
-                if ($isYT) { $a += '--cookies-from-browser'; $a += 'chrome' }
-                elseif ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
+                if ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
                 $a += $vUrl
                 & $ytdlp @a 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
                 if ($ckFile -and (Test-Path $ckFile)) { Remove-Item $ckFile -Force -ErrorAction SilentlyContinue }
-            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube
+            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube, $browserName
         }
         else {
             $job = Start-Job -ScriptBlock {
-                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT)
+                param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ref, $ckFile, $isYT, $browser)
                 $a = @('-f', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
                        '--merge-output-format', 'mp4', '--newline', '--progress',
                        '--ffmpeg-location', $ffLoc, '-o', $outTpl)
                 if ($ref) { $a += '--referer'; $a += $ref }
-                if ($isYT) { $a += '--cookies-from-browser'; $a += 'chrome' }
-                elseif ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
+                if ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
                 $a += $vUrl
                 & $ytdlp @a 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
                 if ($ckFile -and (Test-Path $ckFile)) { Remove-Item $ckFile -Force -ErrorAction SilentlyContinue }
-            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube
+            } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $url, $progressFile, $referer, $cookieFile, $isYouTube, $browserName
         }
     }
 
@@ -2694,8 +2690,18 @@ function Update-Downloads {
                     if ($content -match '\[Merger\]|Merging formats|merge complete') { $dl.status = "merging" }
                     elseif ($content -match '\[ExtractAudio\]|\[extract\]|Converting to MP3') { $dl.status = "extracting" }
                     elseif ($content -match 'already been downloaded') { $dl.progress = 100; $dl.status = "complete" }
-                    if ($content -match '\[download\] Destination: (.+)') { $dl.filename = $matches[1] }
-                    elseif ($content -match '\[Merger\] Merging formats into "(.+)"') { $dl.filename = $matches[1] }
+                    if ($content -match '\[download\] Destination: (.+)') {
+                        $dl.filename = $matches[1]
+                        if ($dl.title -eq 'Unknown') {
+                            $dl.title = [System.IO.Path]::GetFileNameWithoutExtension($matches[1]) -replace '^\s+|\s+$', ''
+                        }
+                    }
+                    elseif ($content -match '\[Merger\] Merging formats into "(.+)"') {
+                        $dl.filename = $matches[1]
+                        if ($dl.title -eq 'Unknown') {
+                            $dl.title = [System.IO.Path]::GetFileNameWithoutExtension($matches[1]) -replace '^\s+|\s+$', ''
+                        }
+                    }
                 }
             } catch {}
         }
@@ -2711,6 +2717,52 @@ function Update-Downloads {
             if ($allOutput -match "100%|has already been downloaded|Merging formats into|DelayedMuxer|audio extraction complete|merge complete") {
                 $dl.status = "complete"; $dl.progress = 100
                 Write-Log "[$id] Complete (mode=$($dl.mode))"
+            } elseif ($dl.mode -eq "direct" -and -not $dl.retried) {
+                # Direct stream failed (likely 403) - retry with yt-dlp
+                $snippet = if ($allOutput.Length -gt 300) { $allOutput.Substring(0, 300) } else { $allOutput }
+                Write-Log "[$id] Direct stream failed, retrying with yt-dlp: $snippet"
+                $dl.retried = $true
+                $dl.mode = "ytdlp"
+                $dl.progress = 0
+                $dl.status = "downloading"
+                $dl.startTime = Get-Date
+                try { Remove-Job -Job $dl.job -Force -ErrorAction SilentlyContinue } catch {}
+                if (Test-Path $dl.progressFile) { Remove-Item $dl.progressFile -Force -ErrorAction SilentlyContinue }
+                $progressFile = Join-Path $env:TEMP "mdl_progress_$id.txt"
+                "" | Set-Content $progressFile -Force
+                $dl.progressFile = $progressFile
+                $ffLoc = Split-Path $config.FfmpegPath -Parent
+                $dlUrl = $dl.url
+                $dlAudioOnly = $dl.audioOnly
+                $safeName = $dl.title -replace '[<>:"/\\|?*]', '_' -replace '_+', '_'
+                $safeName = $safeName.Trim('_. ')
+                if ($safeName.Length -gt 120) { $safeName = $safeName.Substring(0, 120).TrimEnd('_. ') }
+                $ext = if ($dlAudioOnly) { "mp3" } else { "%(ext)s" }
+                $outTpl = Join-Path $config.DownloadPath "$safeName.$ext"
+                # Find cookie file if one was written for this download
+                $ckFile = Get-ChildItem $env:TEMP -Filter "mdl_cookies_*.txt" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+                if ($dlAudioOnly) {
+                    $dl.job = Start-Job -ScriptBlock {
+                        param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ckFile)
+                        $a = @('-f', 'bestaudio', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
+                               '--newline', '--progress', '--ffmpeg-location', $ffLoc, '-o', $outTpl)
+                        if ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
+                        $a += $vUrl
+                        & $ytdlp @a 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
+                    } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $dlUrl, $progressFile, $ckFile
+                } else {
+                    $dl.job = Start-Job -ScriptBlock {
+                        param($ytdlp, $ffLoc, $outTpl, $vUrl, $outFile, $ckFile)
+                        $a = @('-f', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
+                               '--merge-output-format', 'mp4', '--newline', '--progress',
+                               '--ffmpeg-location', $ffLoc, '-o', $outTpl)
+                        if ($ckFile -and (Test-Path $ckFile)) { $a += '--cookies'; $a += $ckFile }
+                        $a += $vUrl
+                        & $ytdlp @a 2>&1 | ForEach-Object { $_ | Out-File $outFile -Append -Encoding utf8 }
+                    } -ArgumentList $config.YtDlpPath, $ffLoc, $outTpl, $dlUrl, $progressFile, $ckFile
+                }
+                Write-Log "[$id] Retrying with yt-dlp"
+                continue
             } else {
                 $dl.status = "failed"
                 $snippet = if ($allOutput.Length -gt 300) { $allOutput.Substring(0, 300) } else { $allOutput }
@@ -2879,6 +2931,7 @@ while ($listener.IsListening) {
                 New-JsonResponse $context @{ id = $id; status = "downloading" }
             }
             '^/status/(.+)$' {
+                Update-Downloads
                 $id = $matches[1]
                 if ($downloads.ContainsKey($id)) {
                     $dl = $downloads[$id]
