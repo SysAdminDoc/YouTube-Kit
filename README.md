@@ -5,7 +5,7 @@
 <h1 align="center">YTKit: YouTube Customization Suite</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.0.0-ff4e45?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-3.0.1-ff4e45?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/platform-Chrome%20Extension%20%7C%20Tampermonkey%20%7C%20Violentmonkey-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/YouTube-Desktop-ff0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube">
@@ -186,7 +186,7 @@ These features provide granular toggle controls through the settings panel:
 | MP3 Download Button | Download audio as MP3 via `yt-dlp` | On |
 | Configurable Cobalt URL | Set custom Cobalt instance URL | `cobalt.meowing.de` |
 
-> **Note:** VLC/MPV streaming and local downloads require [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) installed locally with a URI handler configured. The web download button uses [Cobalt](https://github.com/imputnet/cobalt) and works without any local tools.
+> **Note:** Local downloads use the built-in MediaDL server (installed via the YTKit settings panel) which bundles `yt-dlp` and `ffmpeg` — no manual setup required. The server runs locally and downloads videos in the background with real-time progress tracking. VLC/MPV streaming requires a URI protocol handler. The web download button uses [Cobalt](https://github.com/imputnet/cobalt) and works without any local tools.
 
 ---
 
