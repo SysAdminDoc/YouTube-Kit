@@ -5389,12 +5389,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             _processVideoElement(element) {
-                if (element.dataset.ytkitHideProcessed) return;
+                const alreadyProcessed = !!element.dataset.ytkitHideProcessed;
                 element.dataset.ytkitHideProcessed = 'true';
                 const videoId = this._extractVideoId(element);
                 if (videoId) element.dataset.ytkitVideoId = videoId;
-                if (this._shouldHide(element)) { element.classList.add('ytkit-video-hidden'); }
-                else { element.classList.remove('ytkit-video-hidden'); }
+                if (!alreadyProcessed) {
+                    if (this._shouldHide(element)) { element.classList.add('ytkit-video-hidden'); }
+                    else { element.classList.remove('ytkit-video-hidden'); }
+                }
                 const thumbnail = this._findThumbnailContainer(element);
                 if (!thumbnail || thumbnail.querySelector('.ytkit-video-hide-btn')) return;
                 if (window.getComputedStyle(thumbnail).position === 'static') thumbnail.style.position = 'relative';
@@ -5406,20 +5408,22 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             _processVideoElementWithResult(element) {
-                if (element.dataset.ytkitHideProcessed) {
-                    return element.classList.contains('ytkit-video-hidden');
-                }
+                const alreadyProcessed = !!element.dataset.ytkitHideProcessed;
                 element.dataset.ytkitHideProcessed = 'true';
                 const videoId = this._extractVideoId(element);
                 if (videoId) element.dataset.ytkitVideoId = videoId;
-                const shouldHide = this._shouldHide(element);
-                if (shouldHide) { element.classList.add('ytkit-video-hidden'); }
-                else { element.classList.remove('ytkit-video-hidden'); }
+                let shouldHide;
+                if (alreadyProcessed) {
+                    shouldHide = element.classList.contains('ytkit-video-hidden');
+                } else {
+                    shouldHide = this._shouldHide(element);
+                    if (shouldHide) { element.classList.add('ytkit-video-hidden'); }
+                    else { element.classList.remove('ytkit-video-hidden'); }
+                }
                 const thumbnail = this._findThumbnailContainer(element);
                 if (thumbnail && !thumbnail.querySelector('.ytkit-video-hide-btn')) {
                     if (window.getComputedStyle(thumbnail).position === 'static') thumbnail.style.position = 'relative';
                     const btn = this._createHideButton();
-                    const videoId = this._extractVideoId(element);
                     const channelInfo = this._extractChannelInfo(element);
                     btn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); if (videoId) this._hideVideo(videoId, element); });
                     btn.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); if (channelInfo) this._blockChannel(channelInfo, element); });
@@ -5485,11 +5489,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 showToast('Restored all videos', '#22c55e');
             },
 
-            _createSubsHideAllButton() {
-                if (document.querySelector('.ytkit-subs-hide-all-btn')) return;
-                if (window.location.pathname !== '/feed/subscriptions') return;
-                const headerButtons = document.querySelector('#masthead #end #buttons');
-                if (!headerButtons) return;
+            _createHideAllButtonElement(className) {
                 const ns = 'http://www.w3.org/2000/svg';
                 const createSvgElement = (tag, attrs) => {
                     const el = document.createElementNS(ns, tag);
@@ -5497,7 +5497,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     return el;
                 };
                 const hideAllBtn = document.createElement('button');
-                hideAllBtn.className = 'ytkit-subs-hide-all-btn';
+                hideAllBtn.className = className;
                 hideAllBtn.title = 'Hide all visible videos on this page';
                 const svg = createSvgElement('svg', { viewBox: '0 0 24 24', width: '20', height: '20', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
                 svg.appendChild(createSvgElement('path', { d: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24' }));
@@ -5510,6 +5510,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 hideAllBtn.onmouseenter = () => { hideAllBtn.style.background = '#b91c1c'; };
                 hideAllBtn.onmouseleave = () => { hideAllBtn.style.background = '#dc2626'; };
                 hideAllBtn.addEventListener('click', () => this._hideAllVideos());
+                return hideAllBtn;
+            },
+
+            _createSubsHideAllButton() {
+                if (document.querySelector('.ytkit-subs-hide-all-btn')) return;
+                if (window.location.pathname !== '/feed/subscriptions') return;
+                const headerButtons = document.querySelector('#masthead #end #buttons');
+                if (!headerButtons) return;
+                const hideAllBtn = this._createHideAllButtonElement('ytkit-subs-hide-all-btn');
                 const vlcBtn = headerButtons.querySelector('.ytkit-subs-vlc-btn');
                 if (vlcBtn) headerButtons.insertBefore(hideAllBtn, vlcBtn);
                 else headerButtons.appendChild(hideAllBtn);
@@ -5517,6 +5526,21 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _removeSubsHideAllButton() {
                 document.querySelector('.ytkit-subs-hide-all-btn')?.remove();
+            },
+
+            _createHomeHideAllButton() {
+                if (document.querySelector('.ytkit-home-hide-all-btn')) return;
+                if (window.location.pathname !== '/') return;
+                const headerButtons = document.querySelector('#masthead #end #buttons');
+                if (!headerButtons) return;
+                const hideAllBtn = this._createHideAllButtonElement('ytkit-home-hide-all-btn');
+                const vlcBtn = headerButtons.querySelector('.ytkit-subs-vlc-btn');
+                if (vlcBtn) headerButtons.insertBefore(hideAllBtn, vlcBtn);
+                else headerButtons.appendChild(hideAllBtn);
+            },
+
+            _removeHomeHideAllButton() {
+                document.querySelector('.ytkit-home-hide-all-btn')?.remove();
             },
 
             init() {
@@ -5570,8 +5594,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._observer.observe(observeTarget, { childList: true, subtree: true });
 
                 let wasOnSubsPage = window.location.pathname === '/feed/subscriptions';
-                const checkSubsPage = () => {
-                    const isOnSubsPage = window.location.pathname === '/feed/subscriptions';
+                const checkPages = () => {
+                    const path = window.location.pathname;
+                    const isOnSubsPage = path === '/feed/subscriptions';
+                    const isOnHomePage = path === '/';
                     if (isOnSubsPage) {
                         if (!wasOnSubsPage) this._resetSubsLoadState();
                         setTimeout(() => this._createSubsHideAllButton(), 1000);
@@ -5579,14 +5605,32 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         this._removeSubsHideAllButton();
                         this._removeLoadBlocker();
                     }
+                    if (isOnHomePage) {
+                        setTimeout(() => this._createHomeHideAllButton(), 1000);
+                    } else {
+                        this._removeHomeHideAllButton();
+                    }
                     wasOnSubsPage = isOnSubsPage;
                 };
 
                 addNavigateRule('hideVideosFromHomeNav', () => {
                     this._processAllVideosDebounced(500);
-                    checkSubsPage();
+                    checkPages();
                 });
-                checkSubsPage();
+                checkPages();
+
+                // Filter chip clicks (e.g. "Recently uploaded") replace grid content
+                // without firing yt-navigate-finish. Detect and reprocess after DOM settles.
+                this._chipClickHandler = (e) => {
+                    const chip = e.target.closest('yt-chip-cloud-chip-renderer, ytd-feed-filter-chip-bar-renderer yt-formatted-string');
+                    if (chip) {
+                        this._processAllVideosDebounced(800);
+                        // Second pass for late-rendering thumbnails
+                        setTimeout(() => this._processAllVideosDebounced(300), 1500);
+                    }
+                };
+                document.addEventListener('click', this._chipClickHandler, true);
+
                 DebugManager.log('VideoHider', 'Initialized:', this._getHiddenVideos().length, 'videos,', this._getBlockedChannels().length, 'channels');
             },
 
@@ -5594,6 +5638,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._styleElement?.remove();
                 this._observer?.disconnect();
                 this._clearBatchBuffer?.();
+                if (this._chipClickHandler) { document.removeEventListener('click', this._chipClickHandler, true); this._chipClickHandler = null; }
                 if (this._processAllDebounceTimer) { clearTimeout(this._processAllDebounceTimer); this._processAllDebounceTimer = null; }
                 removeNavigateRule('hideVideosFromHomeNav');
                 document.querySelectorAll('.ytkit-video-hide-btn').forEach(b => b.remove());
@@ -5601,6 +5646,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 document.querySelectorAll('[data-ytkit-hide-processed]').forEach(e => delete e.dataset.ytkitHideProcessed);
                 document.getElementById('ytkit-hide-toast')?.remove();
                 this._removeSubsHideAllButton();
+                this._removeHomeHideAllButton();
                 this._removeLoadBlocker();
             }
         },
