@@ -1,0 +1,30 @@
+/* Astra Deck - Early CSS injection (document_start)
+   Prevents FOUC for CSS-based features before ytkit.js loads at document_idle */
+
+/* hideEndCards */
+.ytp-ce-element { display: none !important; }
+
+/* hideInfoCards */
+.ytp-cards-button,
+.ytp-cards-teaser { display: none !important; }
+
+/* hideNotificationBadge */
+ytd-notification-topbar-button-renderer .notification-count,
+.ytd-notification-topbar-button-renderer[aria-label*="notification"] .yt-spec-icon-badge-shape__badge {
+    display: none !important;
+}
+
+/* hideAutoplayToggle */
+.ytp-autonav-toggle-button-container { display: none !important; }
+
+/* creatorCommentHighlight */
+ytd-comment-view-model.ytd-comment-view-model[creator] #body {
+    border-left: 3px solid var(--yt-spec-call-to-action, #3ea6ff);
+}
+
+/* keyMoments highlight */
+ytd-macro-markers-list-item-renderer.ytd-structured-description-content-renderer {
+    border-left: 3px solid rgba(255, 255, 255, 0.12);
+    padding-left: 8px;
+    margin-bottom: 4px;
+}

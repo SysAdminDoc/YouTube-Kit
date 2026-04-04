@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YTKit: YouTube Customization Suite",
+  "name": "Astra Deck",
   "version": "3.2.0",
-  "description": "Ultimate YouTube customization with ad blocking, SponsorBlock, video/channel hiding, playback enhancements, and more.",
+  "description": "Premium watch-page customization, comment tooling, layouts, and local downloads for YouTube.",
   "author": "Matthew Parker",
   "homepage_url": "https://github.com/SysAdminDoc/YouTube-Kit",
   "icons": {
@@ -10,19 +10,25 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+  "action": {
+    "default_title": "Astra Deck",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
   "permissions": [
     "storage",
-    "cookies"
+    "cookies",
+    "downloads"
   ],
   "host_permissions": [
     "https://*.youtube.com/*",
     "https://*.youtube-nocookie.com/*",
     "https://youtu.be/*",
-    "https://sponsor.ajay.app/*",
-    "https://raw.githubusercontent.com/*",
     "https://returnyoutubedislikeapi.com/*",
-    "https://cobalt.meowing.de/*",
-    "https://*.meowing.de/*",
+    "https://sponsor.ajay.app/*",
     "http://127.0.0.1:9751/*",
     "http://localhost:9751/*"
   ],
@@ -33,21 +39,14 @@
     {
       "matches": ["https://*.youtube.com/*", "https://*.youtube-nocookie.com/*", "https://youtu.be/*"],
       "exclude_matches": ["https://m.youtube.com/*", "https://studio.youtube.com/*"],
-      "js": ["gm-compat.js", "adblock-sandbox.js"],
-      "run_at": "document_start",
-      "world": "ISOLATED"
+      "css": ["early.css"],
+      "run_at": "document_start"
     },
     {
       "matches": ["https://*.youtube.com/*", "https://*.youtube-nocookie.com/*", "https://youtu.be/*"],
       "exclude_matches": ["https://m.youtube.com/*", "https://studio.youtube.com/*"],
-      "js": ["adblock-main.js"],
-      "run_at": "document_start",
-      "world": "MAIN"
-    },
-    {
-      "matches": ["https://*.youtube.com/*", "https://*.youtube-nocookie.com/*", "https://youtu.be/*"],
-      "exclude_matches": ["https://m.youtube.com/*", "https://studio.youtube.com/*"],
-      "js": ["gm-compat.js", "ytkit.js"],
+      "js": ["ytkit.js"],
+      "all_frames": true,
       "run_at": "document_idle",
       "world": "ISOLATED"
     }
@@ -55,11 +54,26 @@
   "web_accessible_resources": [
     {
       "resources": ["icons/*"],
-      "matches": ["https://*.youtube.com/*"]
+      "matches": [
+        "https://*.youtube.com/*",
+        "https://*.youtube-nocookie.com/*",
+        "https://youtu.be/*"
+      ]
     }
   ],
   "options_ui": {
     "page": "options.html",
     "open_in_tab": true
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "commands": {
+    "toggle-control-center": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      },
+      "description": "Toggle the Astra Deck control center on the current YouTube tab"
+    }
   }
 }
