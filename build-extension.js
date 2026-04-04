@@ -16,6 +16,7 @@ const CRX_KEY = path.join(__dirname, 'ytkit.pem');
 
 // Parse args
 const args = process.argv.slice(2);
+const INCLUDE_USERSCRIPT = args.includes('--with-userscript');
 const bumpIndex = args.indexOf('--bump');
 const bumpType = bumpIndex !== -1 ? args[bumpIndex + 1] : null;
 
@@ -42,8 +43,8 @@ if (bumpType) {
         console.log('Updated YTKIT_VERSION in ytkit.js');
     }
 
-    // Update userscript version header
-    if (fs.existsSync(USERSCRIPT)) {
+    // Update userscript version header only when explicitly requested
+    if (INCLUDE_USERSCRIPT && fs.existsSync(USERSCRIPT)) {
         let usSrc = fs.readFileSync(USERSCRIPT, 'utf8');
         usSrc = usSrc.replace(/^(\/\/ @name\s+)YTKit v[\d.]+/m, '$1YTKit v' + version);
         usSrc = usSrc.replace(/^(\/\/ @version\s+)[\d.]+/m, '$1' + version);
@@ -59,16 +60,35 @@ if (bumpType) {
 if (fs.existsSync(BUILD_DIR)) fs.rmSync(BUILD_DIR, { recursive: true });
 fs.mkdirSync(BUILD_DIR, { recursive: true });
 
-// Copy extension files (exclude .map files and .git)
+const STAGE_SKIP_NAMES = new Set([
+    '.git',
+    '.DS_Store',
+    'Thumbs.db'
+]);
+
+const STAGE_SKIP_SUFFIXES = [
+    '.map',
+    '.tmp',
+    '.bak',
+    '.orig',
+    '.rej'
+];
+
+function shouldStageEntry(entryName) {
+    if (STAGE_SKIP_NAMES.has(entryName)) return false;
+    return !STAGE_SKIP_SUFFIXES.some(suffix => entryName.endsWith(suffix));
+}
+
+// Copy extension files while skipping temp/editor artifacts
 function copyDir(src, dest) {
     fs.mkdirSync(dest, { recursive: true });
     for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-        if (entry.name === '.git') continue;
+        if (!shouldStageEntry(entry.name)) continue;
         const srcPath = path.join(src, entry.name);
         const destPath = path.join(dest, entry.name);
         if (entry.isDirectory()) {
             copyDir(srcPath, destPath);
-        } else if (!entry.name.endsWith('.map')) {
+        } else {
             fs.copyFileSync(srcPath, destPath);
         }
     }
@@ -96,6 +116,7 @@ function listFiles(dir, base) {
     base = base || dir;
     let files = [];
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!shouldStageEntry(entry.name)) continue;
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
             files = files.concat(listFiles(full, base));
@@ -106,12 +127,94 @@ function listFiles(dir, base) {
     return files;
 }
 
+function buildUserscriptSource(extensionSource, targetVersion) {
+    const header = `// ==UserScript==
+// @name         YTKit v${targetVersion}
+// @namespace    https://github.com/SysAdminDoc/YouTube-Kit
+// @version      ${targetVersion}
+// @description  Ultimate YouTube customization with ad blocking, SponsorBlock, video/channel hiding, playback enhancements, and 115+ features
+// @author       Matthew Parker
+// @match        https://www.youtube.com/*
+// @match        https://youtube.com/*
+// @exclude      https://m.youtube.com/*
+// @exclude      https://studio.youtube.com/*
+// @run-at       document-start
+// @inject-into  content
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @connect      sponsor.ajay.app
+// @connect      returnyoutubedislikeapi.com
+// @connect      cobalt.tools
+// @connect      *.cobalt.tools
+// @connect      *.imput.net
+// @connect      *.meowing.de
+// @connect      *.canine.tools
+// @connect      capi.3kh0.net
+// @connect      downloadapi.stuff.solutions
+// @connect      raw.githubusercontent.com
+// @connect      localhost
+// @connect      127.0.0.1
+// ==/UserScript==
+`;
+
+    const preamble = `(function() {
+    'use strict';
+
+    // In userscript context, GM_* APIs are native — no shim needed
+    // window.ytInitialPlayerResponse and window.__ytab are directly accessible (same page context)
+    const GM = { xmlHttpRequest: GM_xmlhttpRequest };
+    // GM_cookie not available in userscripts — provide no-op
+    const GM_cookie = { list(filter, cb) { cb(null, 'GM_cookie not available in userscript mode'); } };
+    // triggerDownload — open URL directly in userscript mode (no chrome.downloads API)
+    function triggerDownload(url, filename) {
+        return new Promise((resolve) => {
+            const a = document.createElement('a');
+            a.href = url;
+            if (filename) a.download = filename;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { try { document.body.removeChild(a); } catch (_) {} resolve({ ok: true }); }, 200);
+        });
+    }
+
+`;
+
+    let activeMarker = 'const triggerDownload = gm.triggerDownload.bind(gm);';
+    let bodyStartIndex = extensionSource.indexOf(activeMarker);
+    if (bodyStartIndex === -1) {
+        activeMarker = 'const GM = gm.GM;';
+        bodyStartIndex = extensionSource.indexOf(activeMarker);
+        if (bodyStartIndex === -1) {
+            throw new Error('Could not find userscript body start marker in extension source');
+        }
+    }
+
+    let body = extensionSource.slice(bodyStartIndex + activeMarker.length);
+    while (body.startsWith('\r') || body.startsWith('\n')) {
+        body = body.slice(1);
+    }
+
+    body = body.replace(
+        /\s*\/\/ Bridge to page context[^\n]*[\s\S]*?_prCacheHref: ''\r?\n\s*\};/,
+        '\n    // In userscript context, window.ytInitialPlayerResponse and window.__ytab\n    // are directly accessible (same page context, no ISOLATED/MAIN world split)'
+    );
+    body = body.replace(/_rw\.ytInitialPlayerResponse/g, 'window.ytInitialPlayerResponse');
+    body = body.replace(/_rw\.__ytab/g, 'window.__ytab');
+    body = body.replace(/\r?\n\}\)\(\);\s*$/, '');
+
+    return header + '\n' + preamble + body + '\n})();\n';
+}
+
 async function build() {
     // ── Chrome Build ──
     const chromeStageDir = path.join(BUILD_DIR, 'chrome-stage');
     copyDir(EXT_DIR, chromeStageDir);
 
-    const chromeZipName = 'ytkit-chrome-v' + version + '.zip';
+const chromeZipName = 'astra-deck-chrome-v' + version + '.zip';
     const chromeZipPath = path.join(BUILD_DIR, chromeZipName);
 
     try {
@@ -123,7 +226,7 @@ async function build() {
     }
 
     // ── Chrome CRX Build ──
-    const chromeCrxName = 'ytkit-chrome-v' + version + '.crx';
+const chromeCrxName = 'astra-deck-chrome-v' + version + '.crx';
     const chromeCrxPath = path.join(BUILD_DIR, chromeCrxName);
 
     try {
@@ -173,7 +276,7 @@ async function build() {
 
     fs.writeFileSync(ffManifestPath, JSON.stringify(ffManifest, null, 2) + '\n', 'utf8');
 
-    const firefoxZipName = 'ytkit-firefox-v' + version + '.zip';
+const firefoxZipName = 'astra-deck-firefox-v' + version + '.zip';
     const firefoxZipPath = path.join(BUILD_DIR, firefoxZipName);
 
     try {
@@ -186,16 +289,21 @@ async function build() {
 
     // ── Firefox XPI Build ──
     // XPI is just a ZIP with .xpi extension
-    const firefoxXpiName = 'ytkit-firefox-v' + version + '.xpi';
+const firefoxXpiName = 'astra-deck-firefox-v' + version + '.xpi';
     const firefoxXpiPath = path.join(BUILD_DIR, firefoxXpiName);
     fs.copyFileSync(firefoxZipPath, firefoxXpiPath);
     console.log('Firefox XPI: build/' + firefoxXpiName + ' (' + formatSize(firefoxXpiPath) + ' KB)');
 
-    // ── Userscript Copy ──
-    if (fs.existsSync(USERSCRIPT)) {
-        const usDestName = 'ytkit-v' + version + '.user.js';
-        fs.copyFileSync(USERSCRIPT, path.join(BUILD_DIR, usDestName));
-        console.log('Userscript:  build/' + usDestName + ' (' + formatSize(USERSCRIPT) + ' KB)');
+    // ── Optional Userscript Build Artifact ──
+    if (INCLUDE_USERSCRIPT) {
+        const userscriptDestName = 'ytkit-v' + version + '.user.js';
+        const userscriptDestPath = path.join(BUILD_DIR, userscriptDestName);
+        const extensionSource = fs.readFileSync(YTKIT_JS, 'utf8');
+        const userscriptOutput = buildUserscriptSource(extensionSource, version);
+        fs.writeFileSync(userscriptDestPath, userscriptOutput, 'utf8');
+        console.log('Userscript:  build/' + userscriptDestName + ' (' + formatSize(userscriptDestPath) + ' KB)');
+    } else {
+        console.log('Userscript:  skipped (extension-native build)');
     }
 
     // Cleanup staging dirs

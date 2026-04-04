@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 84" fill="none">
+  <defs>
+    <linearGradient id="astraWordLeftLight" x1="18" y1="57" x2="36" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ef5f3a"/>
+      <stop offset="1" stop-color="#ff9b72"/>
+    </linearGradient>
+    <linearGradient id="astraWordRightLight" x1="49" y1="57" x2="34" y2="14" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1998d6"/>
+      <stop offset="1" stop-color="#4dbfff"/>
+    </linearGradient>
+  </defs>
+  <path d="M15 57 28.4 15h6.4L21.6 57H15Z" fill="url(#astraWordLeftLight)"/>
+  <path d="M50 57 36.6 15h-6.4L43.4 57H50Z" fill="url(#astraWordRightLight)"/>
+  <path d="M24.8 38.2h16.1l-2 6.2H22.8l2-6.2Z" fill="#07111a"/>
+  <path d="m48.4 17 1.8 3.7 3.8 1.8-3.8 1.8-1.8 3.7-1.8-3.7-3.8-1.8 3.8-1.8 1.8-3.7Z" fill="#ffbc47"/>
+  <text x="72" y="38" fill="#0e1622" font-family="'Segoe UI Variable Display','Aptos Display','Segoe UI',sans-serif" font-size="28" font-weight="800" letter-spacing="0.08em">ASTRA</text>
+  <text x="72" y="58" fill="#526173" font-family="'Segoe UI Variable Display','Aptos Display','Segoe UI',sans-serif" font-size="15" font-weight="700" letter-spacing="0.32em">DECK</text>
+</svg>

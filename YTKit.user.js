@@ -17,8 +17,13 @@
 // @grant        GM.xmlHttpRequest
 // @connect      sponsor.ajay.app
 // @connect      returnyoutubedislikeapi.com
-// @connect      cobalt.meowing.de
+// @connect      cobalt.tools
+// @connect      *.cobalt.tools
+// @connect      *.imput.net
 // @connect      *.meowing.de
+// @connect      *.canine.tools
+// @connect      capi.3kh0.net
+// @connect      downloadapi.stuff.solutions
 // @connect      raw.githubusercontent.com
 // @connect      localhost
 // @connect      127.0.0.1
@@ -32,6 +37,18 @@
     const GM = { xmlHttpRequest: GM_xmlhttpRequest };
     // GM_cookie not available in userscripts — provide no-op
     const GM_cookie = { list(filter, cb) { cb(null, 'GM_cookie not available in userscript mode'); } };
+    // triggerDownload — open URL directly in userscript mode (no chrome.downloads API)
+    function triggerDownload(url, filename) {
+        return new Promise((resolve) => {
+            const a = document.createElement('a');
+            a.href = url;
+            if (filename) a.download = filename;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { try { document.body.removeChild(a); } catch(_) {} resolve({ ok: true }); }, 200);
+        });
+    }
 
 
     // In userscript context, window.ytInitialPlayerResponse and window.__ytab
@@ -93,7 +110,6 @@
         NAV_DEBOUNCE: 50,         // Navigation detection debounce (ms)
         SAVE_DEBOUNCE: 500,       // Settings save debounce (ms)
         ELEMENT_TIMEOUT: 3000,    // waitForElement timeout (ms)
-        LABEL_MAX_ATTEMPTS: 20,   // SponsorBlock label retry limit
     };
 
     //  Trusted Types Safe HTML Helper
@@ -205,34 +221,6 @@
     };
     StorageManager._initUnloadFlush();
 
-    // ── Persistent Ad Block Stats Accumulator ──
-    const _lifetimeStats = {
-        _key: 'ytkit-adblock-lifetime-stats',
-        _lastSession: { blocked: 0, pruned: 0, ssapSkipped: 0 },
-        _saved: null,
-        load() {
-            if (!this._saved) this._saved = StorageManager.get(this._key, { blocked: 0, pruned: 0, ssapSkipped: 0 });
-            return this._saved;
-        },
-        accumulate(sessionStats) {
-            if (!sessionStats) return;
-            const delta = {
-                blocked: Math.max(0, (sessionStats.blocked || 0) - this._lastSession.blocked),
-                pruned: Math.max(0, (sessionStats.pruned || 0) - this._lastSession.pruned),
-                ssapSkipped: Math.max(0, (sessionStats.ssapSkipped || 0) - this._lastSession.ssapSkipped),
-            };
-            if (delta.blocked === 0 && delta.pruned === 0 && delta.ssapSkipped === 0) return;
-            this._lastSession = { blocked: sessionStats.blocked || 0, pruned: sessionStats.pruned || 0, ssapSkipped: sessionStats.ssapSkipped || 0 };
-            const lifetime = this.load();
-            lifetime.blocked += delta.blocked;
-            lifetime.pruned += delta.pruned;
-            lifetime.ssapSkipped += delta.ssapSkipped;
-            this._saved = lifetime;
-            StorageManager.set(this._key, lifetime);
-        },
-        get() { return this.load(); },
-        reset() { this._saved = { blocked: 0, pruned: 0, ssapSkipped: 0 }; StorageManager.setSync(this._key, this._saved); }
-    };
 
     //  TRANSCRIPT SERVICE - Multi-Method Extraction with Failover
     const TranscriptService = {
@@ -686,83 +674,60 @@
         disable() { this._enabled = false; GM_setValue('ytkit_debug', false); }
     };
 
-    // ── Shared Web Audio Graph ──
-    // Only ONE MediaElementSource can exist per <video>. This manager shares it
-    // across volumeBoost, skipSilence, and audioNormalization features.
-    const SharedAudio = {
-        _ctx: null,
-        _source: null,
-        _videoEl: null,
-        _nodes: new Map(),      // featureId -> { node, output }
-        _destination: null,
 
-        getContext() {
-            if (!this._ctx) this._ctx = new (window.AudioContext || window.webkitAudioContext)();
-            return this._ctx;
-        },
-
-        // Returns a { source } object. Features chain from source -> their nodes -> connect to output via connectOutput()
-        getSource(video) {
-            if (this._videoEl === video && this._source) return this._source;
-            const ctx = this.getContext();
-            try {
-                this._source = ctx.createMediaElementSource(video);
-                this._videoEl = video;
-            } catch (e) {
-                // Already created — reuse existing
-                if (!this._source) throw e;
-            }
-            this._rebuildChain();
-            return this._source;
-        },
-
-        // Register a feature's audio processing chain. input/output are AudioNodes.
-        // Features are chained in order: source -> [feature nodes in registration order] -> destination
-        register(featureId, inputNode, outputNode) {
-            this._nodes.set(featureId, { input: inputNode, output: outputNode });
-            this._rebuildChain();
-        },
-
-        unregister(featureId) {
-            const entry = this._nodes.get(featureId);
-            if (entry) {
-                try { entry.input.disconnect(); entry.output.disconnect(); } catch {}
-                this._nodes.delete(featureId);
-                this._rebuildChain();
-            }
-        },
-
-        _rebuildChain() {
-            if (!this._source || !this._ctx) return;
-            // Disconnect everything first
-            try { this._source.disconnect(); } catch {}
-            this._nodes.forEach(n => { try { n.input.disconnect(); n.output.disconnect(); } catch {} });
-
-            const ctx = this._ctx;
-            const chain = [...this._nodes.values()];
-            if (chain.length === 0) {
-                this._source.connect(ctx.destination);
-                return;
-            }
-            // source -> first node's input
-            this._source.connect(chain[0].input);
-            // chain nodes together
-            for (let i = 0; i < chain.length - 1; i++) {
-                chain[i].output.connect(chain[i + 1].input);
-            }
-            // last node -> destination
-            chain[chain.length - 1].output.connect(ctx.destination);
-        },
-
-        reset() {
-            this._nodes.forEach((n, id) => { try { n.input.disconnect(); n.output.disconnect(); } catch {} });
-            this._nodes.clear();
-            try { this._source?.disconnect(); } catch {}
-            this._source = null;
-            this._videoEl = null;
-            // Don't close context — it can be reused
+    // ── Shared Player Button Styles ──
+    // All YTKit buttons injected into YouTube's player controls use this base class
+    // for consistent sizing, spacing, opacity, and hover behavior.
+    const _playerBtnCSS = document.createElement('style');
+    _playerBtnCSS.textContent = `
+        .ytkit-player-btn {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            height: 100% !important;
+            width: 36px !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            opacity: 0.8;
+            transition: opacity 0.2s !important;
+            color: #fff !important;
+            border: none !important;
+            background: transparent !important;
+            cursor: pointer !important;
+            box-sizing: border-box !important;
+            vertical-align: top !important;
+            line-height: 1 !important;
         }
-    };
+        .ytkit-player-btn:hover { opacity: 1 !important; }
+        .ytkit-player-btn svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+            pointer-events: none;
+        }
+        .ytkit-player-btn svg[data-stroke] {
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .ytkit-player-btn--text {
+            font-size: 12px !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.3px !important;
+            font-family: inherit !important;
+        }
+        .ytkit-player-btn--active {
+            opacity: 1 !important;
+            color: #22c55e !important;
+        }
+        .ytkit-player-btn--warn {
+            opacity: 1 !important;
+            color: #fbbf24 !important;
+        }
+    `;
+    (document.head || document.documentElement).appendChild(_playerBtnCSS);
 
     //  SECTION 0B: DYNAMIC CONTENT/STYLE ENGINE
     let mutationObserver = null;
@@ -1064,101 +1029,244 @@
         poll();
     }
 
-    // Web download fallback: opens cobalt when local download methods all fail
+    // Web download fallback: opens cobalt when all other download methods fail
     function _webDownloadFallback(videoUrl) {
-        const cobaltUrl = GM_getValue('ytkit_cobalt_url', 'https://cobalt.meowing.de/#');
-        const downloadUrl = cobaltUrl + encodeURIComponent(videoUrl);
-        showToast('YTYT-Downloader not installed. Opening web downloader...', '#3b82f6', { duration: 4 });
+        const cobaltUrl = GM_getValue('ytkit_cobalt_url', 'https://cobalt.tools/#');
+        // Ensure URL ends with # for hash-based paste
+        const base = cobaltUrl.includes('#') ? cobaltUrl : cobaltUrl.replace(/\/?$/, '/#');
+        const downloadUrl = base + encodeURIComponent(videoUrl);
+        showToast('Opening web downloader...', '#3b82f6', { duration: 4 });
         window.open(downloadUrl, '_blank');
     }
 
-    // Send a download request to the local MediaDL server (http://127.0.0.1:9751).
-    // If the server is not running, auto-starts it via mediadl:// protocol and retries.
-    // Falls back to cobalt web download if the server remains unreachable.
-    function mediaDLDownload(videoUrl, audioOnly) {
-        DebugManager.log('MediaDL', `Download requested: ${videoUrl} (audio=${audioOnly})`);
-        _mediaDLHealthCheck(videoUrl, audioOnly, false);
-    }
+    // ── MediaDL Server Manager ──
+    // Caches server availability, provides install/status helpers, and auto-start logic.
+    const MediaDLManager = {
+        _status: null, // null = unknown, 'running', 'not-installed'
+        _token: null,
+        _lastCheck: 0,
+        _serverVersion: null,
+        _autoStartAttempted: false,
+        _CHECK_INTERVAL: 30000, // Re-check every 30s
 
-    function _mediaDLHealthCheck(videoUrl, audioOnly, isRetry) {
-        DebugManager.log('MediaDL', `Health check (retry=${isRetry})...`);
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: 'http://127.0.0.1:9751/health',
-            headers: { 'X-MDL-Client': 'MediaDL' },
-            timeout: 3000,
-            onload: function(res) {
-                DebugManager.log('MediaDL', `Health response: ${res.status} - ${res.responseText}`);
-                let token = null;
-                try { token = JSON.parse(res.responseText).token; } catch (e) {}
-                if (!token) {
-                    _webDownloadFallback(videoUrl);
-                    return;
-                }
-                _mediaDLSendDownload(videoUrl, audioOnly, token).catch(e => {
-                    DebugManager.log('MediaDL', `Send download error: ${e.message}`);
-                    showToast('Download failed: ' + e.message, '#ef4444', { duration: 5 });
+        // GitHub raw URL for the PowerShell installer
+        INSTALLER_URL: 'https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/main/Install-YTYT.ps1',
+        INSTALLER_COMMAND: "powershell -ExecutionPolicy Bypass -Command \"irm 'https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/main/Install-YTYT.ps1' | iex\"",
+
+        // Quick health check — returns { ok, token, version } or { ok: false }
+        async check(force) {
+            const now = Date.now();
+            if (!force && this._status === 'running' && this._token && (now - this._lastCheck < this._CHECK_INTERVAL)) {
+                return { ok: true, token: this._token, version: this._serverVersion };
+            }
+            return new Promise((resolve) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: 'http://127.0.0.1:9751/health',
+                    headers: { 'X-MDL-Client': 'MediaDL' },
+                    timeout: 2000,
+                    onload: (res) => {
+                        try {
+                            const data = JSON.parse(res.responseText);
+                            if (data.token) {
+                                this._status = 'running';
+                                this._token = data.token;
+                                this._serverVersion = data.version || null;
+                                this._lastCheck = now;
+                                DebugManager.log('MediaDL', `Server running (v${this._serverVersion || '?'}, ${data.downloads || 0} active)`);
+                                resolve({ ok: true, token: data.token, version: this._serverVersion });
+                                return;
+                            }
+                        } catch (_) {}
+                        this._status = 'not-installed';
+                        this._token = null;
+                        resolve({ ok: false });
+                    },
+                    onerror: () => {
+                        this._status = 'not-installed';
+                        this._token = null;
+                        resolve({ ok: false });
+                    },
+                    ontimeout: () => {
+                        this._status = 'not-installed';
+                        this._token = null;
+                        resolve({ ok: false });
+                    }
                 });
-            },
-            onerror: function(err) {
-                DebugManager.log('MediaDL', `Health check error: ${JSON.stringify(err)}`);
-                if (!isRetry) {
-                    _mediaDLAutoStart(videoUrl, audioOnly);
-                } else {
-                    _webDownloadFallback(videoUrl);
-                }
-            },
-            ontimeout: function() {
-                DebugManager.log('MediaDL', 'Health check timed out');
-                if (!isRetry) {
-                    _mediaDLAutoStart(videoUrl, audioOnly);
-                } else {
-                    _webDownloadFallback(videoUrl);
+            });
+        },
+
+        // Try to auto-start the server via mediadl:// protocol and wait for it.
+        // Attempts the protocol launch once per page load, then polls health up to
+        // `retries` times. If the protocol handler isn't registered, the browser
+        // silently ignores it — no error dialog.
+        async tryAutoStart(retries = 4) {
+            if (this._autoStartAttempted) {
+                // Already tried this session — just do a single quick recheck
+                return this.check(true);
+            }
+            this._autoStartAttempted = true;
+            DebugManager.log('MediaDL', 'Attempting auto-start via mediadl:// protocol...');
+            showToast('Starting MediaDL server...', '#3b82f6', { duration: 4 });
+            openProtocol('mediadl://start');
+            // Poll for server readiness
+            for (let i = 0; i < retries; i++) {
+                await new Promise(r => setTimeout(r, 1500));
+                const result = await this.check(true);
+                if (result.ok) {
+                    showToast('MediaDL server started!', '#22c55e', { duration: 2 });
+                    return result;
                 }
             }
-        });
-    }
+            DebugManager.log('MediaDL', 'Auto-start failed — server did not respond');
+            return { ok: false };
+        },
 
-    function _mediaDLAutoStart(videoUrl, audioOnly) {
-        showToast('Starting MediaDL server...', '#3b82f6', { duration: 4 });
-        openProtocol('mediadl://start');
-        // Retry health check after giving the server time to boot
-        let retries = 0;
-        const maxRetries = 4;
-        const retryDelay = 1500;
-        const tryConnect = () => {
-            retries++;
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: 'http://127.0.0.1:9751/health',
-                headers: { 'X-MDL-Client': 'MediaDL' },
-                timeout: 2000,
-                onload: function(res) {
-                    let token = null;
-                    try { token = JSON.parse(res.responseText).token; } catch (_) {}
-                    if (token) {
-                        showToast('MediaDL server started!', '#22c55e', { duration: 2 });
-                        _mediaDLSendDownload(videoUrl, audioOnly, token).catch(e => {
-                            console.error('[YTKit] Download error:', e);
-                            showToast('Download failed: ' + e.message, '#ef4444', { duration: 5 });
-                        });
-                    } else if (retries < maxRetries) {
-                        setTimeout(tryConnect, retryDelay);
+        // Reset auto-start flag so the next download re-attempts.
+        // Called from the "Retry" button after user installs.
+        resetAutoStart() { this._autoStartAttempted = false; this._status = null; },
+
+        get isRunning() { return this._status === 'running'; },
+        get token() { return this._token; },
+
+        // Show install / retry prompt panel.
+        // Two modes:
+        //   'install' — user has never installed MediaDL (default)
+        //   'retry'   — auto-start failed, might just need a kick
+        showInstallPrompt(mode) {
+            const existing = document.getElementById('ytkit-mediadl-install-prompt');
+            if (existing) existing.remove(); // replace with fresh state
+
+            const isRetryMode = mode === 'retry';
+
+            const prompt = document.createElement('div');
+            prompt.id = 'ytkit-mediadl-install-prompt';
+            prompt.style.cssText = `
+                position:fixed;bottom:80px;right:20px;width:380px;background:#1a1a2e;
+                border:1px solid #30363d;border-radius:12px;padding:18px;z-index:2147483647;
+                font-family:"Roboto",Arial,sans-serif;box-shadow:0 8px 32px rgba(0,0,0,0.5);
+                color:#e6edf3;animation:ytkit-slide-in 0.3s ease-out;
+            `;
+
+            // ── Header ──
+            const header = document.createElement('div');
+            header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
+            const titleEl = document.createElement('span');
+            titleEl.style.cssText = 'font-size:14px;font-weight:600;color:#22c55e;';
+            titleEl.textContent = isRetryMode ? 'MediaDL Server Not Responding' : 'Upgrade Your Downloads';
+            const closeBtn = document.createElement('button');
+            closeBtn.style.cssText = 'background:none;border:none;color:#8b949e;cursor:pointer;font-size:16px;padding:0;line-height:1;';
+            closeBtn.textContent = '\u2715';
+            closeBtn.onclick = () => prompt.remove();
+            header.appendChild(titleEl);
+            header.appendChild(closeBtn);
+
+            // ── Description ──
+            const desc = document.createElement('p');
+            desc.style.cssText = 'font-size:13px;color:#8b949e;margin:0 0 14px;line-height:1.5;';
+            desc.textContent = isRetryMode
+                ? 'The server didn\'t start. It may not be installed yet, or the scheduled task stopped. Choose an option below:'
+                : 'Install MediaDL for 1080p+ downloads with automatic video+audio merging, background downloads, and progress tracking.';
+
+            // ── Buttons ──
+            const btnCol = document.createElement('div');
+            btnCol.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+
+            // Button helper
+            const makeBtn = (text, bg, border, onClick) => {
+                const b = document.createElement('button');
+                b.style.cssText = `width:100%;padding:9px 14px;border-radius:8px;border:${border || 'none'};background:${bg};color:${bg === 'transparent' ? '#8b949e' : 'white'};font-size:13px;font-weight:500;cursor:pointer;transition:background 0.2s;text-align:left;display:flex;align-items:center;gap:10px;`;
+                const label = document.createElement('span');
+                label.textContent = text;
+                b.appendChild(label);
+                b.onclick = onClick;
+                return b;
+            };
+
+            // 1. Retry / Start Server
+            if (isRetryMode) {
+                const retryBtn = makeBtn('Try Starting Server Again', '#3b82f6', 'none', async () => {
+                    retryBtn.querySelector('span').textContent = 'Starting...';
+                    retryBtn.style.opacity = '0.7';
+                    retryBtn.style.pointerEvents = 'none';
+                    this.resetAutoStart();
+                    const result = await this.tryAutoStart(5);
+                    if (result.ok) {
+                        showToast('MediaDL server is running!', '#22c55e', { duration: 3 });
+                        prompt.remove();
                     } else {
-                        _webDownloadFallback(videoUrl);
+                        retryBtn.querySelector('span').textContent = 'Still not responding — try installing below';
+                        retryBtn.style.opacity = '1';
+                        retryBtn.style.pointerEvents = 'auto';
+                        retryBtn.style.background = '#ef4444';
                     }
-                },
-                onerror: function() {
-                    if (retries < maxRetries) setTimeout(tryConnect, retryDelay);
-                    else _webDownloadFallback(videoUrl);
-                },
-                ontimeout: function() {
-                    if (retries < maxRetries) setTimeout(tryConnect, retryDelay);
-                    else _webDownloadFallback(videoUrl);
+                });
+                btnCol.appendChild(retryBtn);
+            }
+
+            // 2. Copy Install Command
+            const copyBtn = makeBtn('Copy Install Command (PowerShell)', '#22c55e', 'none', async () => {
+                try {
+                    await navigator.clipboard.writeText(this.INSTALLER_COMMAND);
+                    copyBtn.querySelector('span').textContent = 'Copied! Paste in PowerShell (Win+X \u2192 Terminal)';
+                    copyBtn.style.background = '#16a34a';
+                    showToast('Install command copied! Open PowerShell and paste to install.', '#22c55e', { duration: 8 });
+                } catch (_) {
+                    window.open(this.INSTALLER_URL, '_blank');
                 }
             });
-        };
-        setTimeout(tryConnect, 2000);
+            btnCol.appendChild(copyBtn);
+
+            // 3. Download Installer Script
+            const dlBtn = makeBtn('Download Installer Script (.ps1)', 'transparent', '1px solid #30363d', () => {
+                triggerDownload(this.INSTALLER_URL, 'Install-YTYT.ps1').catch(() => {
+                    window.open(this.INSTALLER_URL, '_blank');
+                });
+                showToast('Installer downloaded! Right-click \u2192 Run with PowerShell', '#3b82f6', { duration: 6 });
+            });
+            btnCol.appendChild(dlBtn);
+
+            // 4. "I just installed it" — re-check
+            const recheckBtn = makeBtn('I just installed it \u2014 check again', 'transparent', '1px solid #30363d', async () => {
+                recheckBtn.querySelector('span').textContent = 'Checking...';
+                this.resetAutoStart();
+                const result = await this.tryAutoStart(5);
+                if (result.ok) {
+                    showToast('MediaDL is ready! Downloads will now use 1080p+ quality.', '#22c55e', { duration: 4 });
+                    prompt.remove();
+                } else {
+                    recheckBtn.querySelector('span').textContent = 'Not detected \u2014 make sure the installer completed';
+                    setTimeout(() => { recheckBtn.querySelector('span').textContent = 'I just installed it \u2014 check again'; }, 4000);
+                }
+            });
+            btnCol.appendChild(recheckBtn);
+
+            // 5. Dismiss
+            if (!isRetryMode) {
+                const dismissBtn = makeBtn('Not now', 'transparent', 'none', () => {
+                    prompt.remove();
+                    GM_setValue('ytkit_mediadl_prompt_dismissed', true);
+                });
+                dismissBtn.style.cssText += 'padding:6px 14px;font-size:12px;color:#6b7280;justify-content:center;';
+                btnCol.appendChild(dismissBtn);
+            }
+
+            prompt.appendChild(header);
+            prompt.appendChild(desc);
+            prompt.appendChild(btnCol);
+            document.body.appendChild(prompt);
+
+            // Auto-dismiss after 30s (install mode only)
+            if (!isRetryMode) {
+                setTimeout(() => { if (prompt.parentNode) prompt.remove(); }, 30000);
+            }
+        }
+    };
+
+    // Legacy wrapper — still used by autoStart retry logic
+    function mediaDLDownload(videoUrl, audioOnly) {
+        DebugManager.log('MediaDL', `Download requested (legacy): ${videoUrl} (audio=${audioOnly})`);
+        ytKitDownload(videoUrl, audioOnly);
     }
 
     // Extract streaming URLs from YouTube's player response for direct download.
@@ -1187,6 +1295,14 @@
                 return null;
             }
             DebugManager.log('MediaDL', `Trying Innertube API for ${videoId}`);
+            // Try to extract client version from page scripts for best compatibility
+            let clientVersion = '2.20260301.00.00';
+            try {
+                for (const s of document.querySelectorAll('script')) {
+                    const m = s.textContent?.match(/INNERTUBE_CLIENT_VERSION["']?\s*[:=]\s*["']([^"']+)/);
+                    if (m) { clientVersion = m[1]; break; }
+                }
+            } catch (_) {}
             try {
                 pr = await new Promise((resolve, reject) => {
                     GM_xmlhttpRequest({
@@ -1194,7 +1310,7 @@
                         url: 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
                         headers: { 'Content-Type': 'application/json' },
                         data: JSON.stringify({
-                            context: { client: { clientName: 'WEB', clientVersion: '2.20250310.00.00' } },
+                            context: { client: { clientName: 'WEB', clientVersion: clientVersion } },
                             videoId: videoId
                         }),
                         timeout: 8000,
@@ -1249,8 +1365,11 @@
             }
 
             // For video: pick best video + best audio from adaptiveFormats
+            // Respect downloadQuality setting (best, 2160, 1440, 1080, 720, 480)
+            const qualPref = appState?.settings?.downloadQuality || 'best';
+            const maxHeight = qualPref === 'best' ? 2160 : parseInt(qualPref, 10) || 1080;
             const videoFormats = (sd.adaptiveFormats || [])
-                .filter(f => f.url && f.mimeType?.startsWith('video/') && (f.height || 0) <= 1080)
+                .filter(f => f.url && f.mimeType?.startsWith('video/') && (f.height || 0) <= maxHeight)
                 .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.bitrate || 0) - (a.bitrate || 0));
             const audioFormats = (sd.adaptiveFormats || [])
                 .filter(f => f.url && f.mimeType?.startsWith('audio/'))
@@ -1268,17 +1387,253 @@
                 };
             }
 
-            // Skip combined-only streams — they're low quality muxed formats and
-            // YouTube returns 403 when downloaded without proper auth cookies.
-            // Returning null triggers yt-dlp fallback which handles auth properly
-            // and delivers higher quality separate video+audio with merge.
-            DebugManager.log('MediaDL', 'No separate video+audio streams found, deferring to yt-dlp');
+            // Try combined (muxed) formats — these contain video+audio in one stream.
+            // Lower quality (typically 360p/720p) but downloadable directly via chrome.downloads
+            // since the browser sends its own cookies (no 403 issue).
+            const combinedFormats = (sd.formats || [])
+                .filter(f => f.url && f.mimeType?.startsWith('video/'))
+                .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.bitrate || 0) - (a.bitrate || 0));
+            if (combinedFormats.length > 0) {
+                const best = combinedFormats[0];
+                DebugManager.log('MediaDL', `Combined stream: itag=${best.itag} ${best.width}x${best.height} mime=${best.mimeType}`);
+                return {
+                    title, videoId, duration,
+                    combinedUrl: best.url, combinedItag: best.itag, combinedMime: best.mimeType,
+                    combinedWidth: best.width, combinedHeight: best.height
+                };
+            }
 
             DebugManager.log('MediaDL', 'No usable streams found in streamingData');
             return null;
         } catch (e) {
             DebugManager.log('MediaDL', `Stream extraction error: ${e.message}`);
             return null;
+        }
+    }
+
+    // Sanitize a video title for use as a filename
+    function _sanitizeFilename(title) {
+        return title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\s+/g, ' ').trim().substring(0, 200);
+    }
+
+    // Direct download using chrome.downloads API — downloads YouTube stream URLs
+    // directly through the browser's download manager (sends cookies automatically).
+    async function _tryDirectDownload(audioOnly) {
+        const streams = await _extractStreamingData(audioOnly);
+        if (!streams) return false;
+
+        let downloadUrl = null;
+        let ext = 'mp4';
+        if (audioOnly && streams.audioUrl) {
+            downloadUrl = streams.audioUrl;
+            ext = streams.audioMime?.includes('webm') ? 'webm' : (streams.audioMime?.includes('mp4') ? 'm4a' : 'webm');
+        } else if (!audioOnly && streams.combinedUrl) {
+            downloadUrl = streams.combinedUrl;
+            ext = streams.combinedMime?.includes('webm') ? 'webm' : 'mp4';
+        } else if (!audioOnly && streams.videoUrl && streams.audioUrl) {
+            // Adaptive-only: download best video stream (no audio muxing possible in browser).
+            // Still better than no download — user gets video file.
+            downloadUrl = streams.videoUrl;
+            ext = streams.videoMime?.includes('webm') ? 'webm' : 'mp4';
+        }
+
+        if (!downloadUrl) return false;
+
+        const title = _sanitizeFilename(streams.title || streams.videoId || 'video');
+        const filename = `${title}.${ext}`;
+
+        try {
+            // Show quality info
+            let qualityInfo = '';
+            if (!audioOnly && streams.combinedUrl) {
+                qualityInfo = streams.combinedHeight ? ` (${streams.combinedHeight}p)` : '';
+            } else if (!audioOnly && streams.videoWidth) {
+                qualityInfo = streams.videoHeight ? ` (${streams.videoHeight}p, video only)` : '';
+            }
+            DebugManager.log('Download', `Direct download: ${filename}${qualityInfo} (${audioOnly ? 'audio' : 'video'})`);
+            await triggerDownload(downloadUrl, filename);
+            showToast(`Downloading${qualityInfo}: ${title}`, '#22c55e', { duration: 4 });
+            return true;
+        } catch (e) {
+            DebugManager.log('Download', `Direct download failed: ${e.message}`);
+            return false;
+        }
+    }
+
+    // Cobalt API download — calls cobalt instance API to get a direct download URL
+    // No-auth community Cobalt API instances (fallback list)
+    const _cobaltApiInstances = [
+        'https://cobalt-api.meowing.de',
+        'https://cobalt-backend.canine.tools',
+        'https://kityune.imput.net',
+        'https://nachos.imput.net',
+        'https://sunny.imput.net',
+        'https://blossom.imput.net',
+        'https://capi.3kh0.net',
+        'https://downloadapi.stuff.solutions',
+    ];
+
+    // Resolve user's cobalt URL to an actual API endpoint.
+    // cobalt.tools is the web frontend — not the API. Map it to a working instance.
+    function _resolveCobaltApiUrl(userUrl) {
+        const cleaned = userUrl.replace(/#.*$/, '').replace(/\/+$/, '');
+        try {
+            const host = new URL(cleaned).hostname;
+            // cobalt.tools and co.wuk.sh are web frontends, not API endpoints
+            if (host === 'cobalt.tools' || host === 'co.wuk.sh') {
+                return _cobaltApiInstances[0];
+            }
+        } catch (_) {}
+        return cleaned;
+    }
+
+    async function _tryCobaltApiDownload(videoUrl, audioOnly) {
+        const userUrl = GM_getValue('ytkit_cobalt_url', 'https://cobalt.tools/#');
+        const primaryApi = _resolveCobaltApiUrl(userUrl);
+
+        // Build instance list: user's configured instance first, then fallbacks
+        const instances = [primaryApi, ..._cobaltApiInstances.filter(u => u !== primaryApi)];
+
+        const body = { url: videoUrl };
+        if (audioOnly) {
+            body.downloadMode = 'audio';
+            body.audioFormat = 'mp3';
+        } else {
+            body.downloadMode = 'auto';
+        }
+        const payload = JSON.stringify(body);
+
+        for (const instance of instances) {
+            const apiUrl = instance.replace(/\/+$/, '') + '/';
+            DebugManager.log('Download', `Cobalt API: ${apiUrl}`);
+            const result = await new Promise((resolve) => {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: apiUrl,
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    data: payload,
+                    timeout: 15000,
+                    onload: function(r) {
+                        try {
+                            const resp = JSON.parse(r.responseText);
+                            DebugManager.log('Download', `Cobalt response: ${r.status} - status=${resp.status}`);
+
+                            // Auth required — skip to next instance
+                            if (resp.error?.code?.startsWith('api.auth')) {
+                                DebugManager.log('Download', `Cobalt instance ${instance} requires auth, trying next...`);
+                                resolve('next');
+                                return;
+                            }
+
+                            if ((resp.status === 'tunnel' || resp.status === 'redirect') && resp.url) {
+                                const filename = resp.filename || undefined;
+                                triggerDownload(resp.url, filename).then(() => {
+                                    showToast('Download started via Cobalt', '#22c55e', { duration: 3 });
+                                    resolve(true);
+                                }).catch(() => {
+                                    window.open(resp.url, '_blank');
+                                    resolve(true);
+                                });
+                            } else if (resp.status === 'local-processing' && resp.url) {
+                                // v11+ local processing — browser handles muxing
+                                triggerDownload(resp.url, resp.filename || undefined).then(() => {
+                                    showToast('Download started via Cobalt', '#22c55e', { duration: 3 });
+                                    resolve(true);
+                                }).catch(() => {
+                                    window.open(resp.url, '_blank');
+                                    resolve(true);
+                                });
+                            } else if (resp.status === 'picker' && resp.picker?.length > 0) {
+                                const pick = resp.picker[0];
+                                triggerDownload(pick.url, pick.filename || undefined).then(() => {
+                                    showToast('Download started via Cobalt', '#22c55e', { duration: 3 });
+                                    resolve(true);
+                                }).catch(() => resolve('next'));
+                            } else {
+                                DebugManager.log('Download', `Cobalt API returned: ${resp.status} - ${resp.error?.code || 'unknown'}`);
+                                resolve('next');
+                            }
+                        } catch (e) {
+                            DebugManager.log('Download', `Cobalt API parse error: ${e.message}`);
+                            resolve('next');
+                        }
+                    },
+                    onerror: function(err) {
+                        DebugManager.log('Download', `Cobalt API error (${instance}): ${JSON.stringify(err)}`);
+                        resolve('next');
+                    },
+                    ontimeout: function() {
+                        DebugManager.log('Download', `Cobalt API timed out (${instance})`);
+                        resolve('next');
+                    }
+                });
+            });
+            if (result === true) return true;
+            if (result === false) return false;
+            // 'next' — try next instance
+        }
+        DebugManager.log('Download', 'All Cobalt instances failed');
+        return false;
+    }
+
+    // Main download handler — smart cascade with quality awareness:
+    //
+    //  1. Quick check: is MediaDL already running?          → use it (best quality)
+    //  2. Not running: try auto-starting via mediadl://      → use it if it wakes up
+    //  3. Still nothing: direct YouTube stream download       → combined ≤720p
+    //  4. Direct failed: Cobalt API                          → external muxing service
+    //  5. Everything failed: open Cobalt web UI              → manual fallback
+    //
+    // After step 2 fails, the download still proceeds (steps 3-5) so the user is
+    // never blocked. A prompt is shown offering to install / retry MediaDL.
+    async function ytKitDownload(videoUrl, audioOnly) {
+        DebugManager.log('Download', `Download requested: ${videoUrl} (audio=${audioOnly})`);
+        showToast(audioOnly ? 'Starting audio download...' : 'Starting video download...', '#3b82f6', { duration: 2 });
+
+        // ── Step 1: Quick cached check ──
+        let mdl = await MediaDLManager.check();
+
+        // ── Step 2: Try to wake the server if not running ──
+        if (!mdl.ok) {
+            mdl = await MediaDLManager.tryAutoStart();
+        }
+
+        // ── Use MediaDL if available ──
+        if (mdl.ok) {
+            DebugManager.log('Download', 'MediaDL server available — using for best quality');
+            try {
+                await _mediaDLSendDownload(videoUrl, audioOnly, mdl.token);
+                return; // success — done
+            } catch (e) {
+                DebugManager.log('Download', `MediaDL download failed: ${e.message}`);
+                showToast('MediaDL error, falling back to direct download...', '#f59e0b', { duration: 3 });
+            }
+        }
+
+        // ── Step 3: Direct download via YouTube stream URLs ──
+        DebugManager.log('Download', 'No MediaDL — trying direct download...');
+        const directOk = await _tryDirectDownload(audioOnly);
+        if (directOk) {
+            // Show install/retry prompt (non-blocking, behind the download)
+            if (!audioOnly && !GM_getValue('ytkit_mediadl_prompt_dismissed', false)) {
+                MediaDLManager.showInstallPrompt(MediaDLManager._autoStartAttempted ? 'retry' : 'install');
+            }
+            return;
+        }
+
+        // ── Step 4: Cobalt API ──
+        DebugManager.log('Download', 'Direct download failed, trying Cobalt API...');
+        showToast('Trying Cobalt download service...', '#3b82f6', { duration: 2 });
+        const cobaltOk = await _tryCobaltApiDownload(videoUrl, audioOnly);
+        if (cobaltOk) return;
+
+        // ── Step 5: Cobalt web UI fallback ──
+        DebugManager.log('Download', 'All methods failed, opening Cobalt web UI');
+        _webDownloadFallback(videoUrl);
+
+        // Show install/retry prompt — the user clearly needs help
+        if (!GM_getValue('ytkit_mediadl_prompt_dismissed', false)) {
+            MediaDLManager.showInstallPrompt('retry');
         }
     }
 
@@ -1694,15 +2049,6 @@
             videosPerRow: 0,                // 0 = dynamic, 3-8 = fixed columns
             quickLinkMenu: true,
             quickLinkItems: 'History | /feed/history\nWatch Later | /playlist?list=WL\nPlaylists | /feed/library\nLiked Videos | /playlist?list=LL\nSubscriptions | /feed/subscriptions\nFor You Page | /',
-            ytAdBlock: false,
-            adblockCosmeticHide: true,
-            adblockSsapAutoSkip: true,
-            adblockAntiDetect: true,
-            adblockFilterUrl: 'https://raw.githubusercontent.com/SysAdminDoc/YoutubeAdblock/refs/heads/main/youtube-adblock-filters.txt',
-            adblockFilterAutoUpdate: true,
-            skipSponsors: true,
-            hideSponsorBlockLabels: true,
-            sponsorBlockCategories: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic', 'preview', 'filler'],
             autoMaxResolution: true,
             preferredQuality: 'max', // 'max' | '4320' | '2160' | '1440' | '1080' | '720' | '480'
             useEnhancedBitrate: true,
@@ -1736,7 +2082,7 @@
             replaceWithCobaltDownloader: false,
             hiddenPlayerControlsManager: true,
             hiddenPlayerControls: [
-                'sponsorBlock', 'next', 'autoplay', 'subtitles',
+                'next', 'autoplay', 'subtitles',
                 'captions', 'miniplayer', 'pip', 'theater', 'fullscreen'
             ],
             hiddenWatchElementsManager: true,
@@ -1749,7 +2095,7 @@
             showMp3DownloadButton: true,
             videoContextMenu: true,
             downloadProvider: 'cobalt',
-            cobaltUrl: 'https://cobalt.meowing.de/#',
+            cobaltUrl: 'https://cobalt.tools/#',
             hideCollaborations: true,
             hideVideosFromHome: true,
             hideVideosKeywordFilter: '',
@@ -1779,8 +2125,6 @@
             preciseViewCounts: false,
             returnYoutubeDislike: false,
             videoScreenshot: false,
-            volumeBoost: false,
-            volumeBoostLevel: 200,
             perChannelSpeed: false,
             hideWatchedVideos: false,
             hideWatchedMode: 'dim',
@@ -1788,9 +2132,6 @@
             pauseOtherTabs: false,
 
             // v3.2.0 wave 2
-            skipSilence: false,
-            skipSilenceThreshold: 15,
-            skipSilenceSpeed: 4,
             abLoop: false,
             fineSpeedControl: false,
             showChannelVideoCount: false,
@@ -1800,12 +2141,9 @@
             blueLightFilter: false,
             blueLightIntensity: 30,
             disableInfiniteScroll: false,
-            audioNormalization: false,
             popOutPlayer: false,
 
             // v3.2.0 wave 3
-            audioEqualizer: false,
-            audioEqPreset: 'flat',
             watchTimeTracker: false,
             alwaysShowProgressBar: false,
             sortCommentsNewest: false,
@@ -1848,7 +2186,6 @@
             fullscreenOnDoubleClick: false,
 
             // v3.2.0 wave 6
-            volumeScrollWheel: false,
             rememberVolume: false,
             rememberVolumeLevel: 100,
             pipButton: false,
@@ -1875,7 +2212,6 @@
             channelSubCount: false,
             customSpeedButtons: false,
             openInNewTab: false,
-            muteAdAudio: false,
 
             // v3.2.0 wave 8 — restored from archive
             preventAutoplay: false,
@@ -1905,7 +2241,6 @@
             preferredMediaPlayer: 'vlc',
             showDownloadPlayButton: false,
             subsVlcPlaylist: false,
-            enableEmbedPlayer: false,
             deArrow: false,
             daReplaceTitles: true,
             daReplaceThumbs: true,
@@ -2211,8 +2546,6 @@
         stickyVideo: 'Full-screen player with scroll-triggered side-by-side comments',
         hideRelatedVideos: 'Secondary panel hidden, primary stretches to full width',
         expandVideoWidth: 'Primary column gets max-width:none when sidebar is hidden',
-        ytAdBlock: 'Proxy-based ad blocking: JSON.parse, fetch, XHR interception',
-        skipSponsors: 'SponsorBlock API integration with auto-skip by category',
         autoMaxResolution: 'Forces highest available resolution on video load',
         autoExpandComments: 'Removes comment truncation, clicks Read More automatically',
         commentEnhancements: 'Highlights creator replies, shows like heat, collapse toggle',
@@ -2481,7 +2814,7 @@ ytd-miniplayer.ytdMiniplayerComponentHost.ytdMiniplayerComponentVisible { displa
 
 /* Transparent player controls */
 div.ytp-right-controls { background-color: transparent; }
-button.ytp-button.ytkit-po-btn.ytkit-po-gear {
+button.ytp-button.ytkit-po-gear {
     background-color: transparent;
 }
 div.ytp-time-wrapper.ytp-time-wrapper-delhi { background-color: transparent; }
@@ -2853,7 +3186,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'removeAllShorts',
             name: 'Remove Shorts',
             description: 'Hide all Shorts videos from feeds and recommendations',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'video-off',
             _styleElement: null,
             _observer: null,
@@ -2928,7 +3261,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'redirectShorts',
             name: 'Redirect Shorts',
             description: 'Open Shorts in the standard video player',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'external-link',
             init() {
                 const redirectRule = () => {
@@ -3239,7 +3572,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const logoLink = document.createElement('a');
                 logoLink.href = this._getLogoHref();
                 logoLink.title = 'YouTube — hover for quick links';
-                logoLink.className = 'ytkit-po-btn ytkit-po-logo';
+                logoLink.className = 'ytkit-po-logo';
                 TrustedHTML.setHTML(logoLink, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 248 174" width="28" height="20" aria-label="YouTube" style="opacity:0.9">
   <path fill="#ff0000" d="M 242.88,27.11 A 31.07,31.07 0 0 0 220.95,5.18 C 201.6,0 124,0 124,0 124,0 46.46,0 27.11,5.18 A 31.07,31.07 0 0 0 5.18,27.11 C 0,46.46 0,86.82 0,86.82 c 0,0 0,40.36 5.18,59.71 a 31.07,31.07 0 0 0 21.93,21.93 c 19.35,5.18 96.92,5.18 96.92,5.18 0,0 77.57,0 96.92,-5.18 a 31.07,31.07 0 0 0 21.93,-21.93 c 5.18,-19.35 5.18,-59.71 5.18,-59.71 0,0 0,-40.36 -5.18,-59.71 z"/>
   <path fill="#ffffff" d="M 99.22,124.03 163.67,86.82 99.22,49.61 Z"/>
@@ -3253,44 +3586,37 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }
                 wrap.appendChild(logoWrap);
 
-                // Download buttons (match player control style)
-                const _mkSvg = (d) => {
-                    const s = document.createElementNS('http://www.w3.org/2000/svg','svg');
-                    s.setAttribute('viewBox','0 0 24 24'); s.setAttribute('width','18'); s.setAttribute('height','18');
-                    const p = document.createElementNS('http://www.w3.org/2000/svg','path');
-                    p.setAttribute('d', d); p.setAttribute('fill','rgba(255,255,255,0.8)');
-                    s.appendChild(p); return s;
-                };
+                // Download buttons
                 if (appState.settings.showLocalDownloadButton) {
                     const dlBtn = document.createElement('button');
-                    dlBtn.className = 'ytp-button ytkit-po-btn ytkit-po-dl';
+                    dlBtn.className = 'ytp-button ytkit-player-btn ytkit-po-dl';
                     dlBtn.title = 'Download Video';
-                    dlBtn.appendChild(_mkSvg('M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z'));
-                    dlBtn.addEventListener('click', (e) => { e.stopPropagation(); showToast('Starting download...', '#22c55e', { duration: 2 }); mediaDLDownload(window.location.href, false); });
+                    TrustedHTML.setHTML(dlBtn, '<svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>');
+                    dlBtn.addEventListener('click', (e) => { e.stopPropagation(); ytKitDownload(window.location.href, false); });
                     wrap.appendChild(dlBtn);
                 }
                 if (appState.settings.showMp3DownloadButton) {
                     const mp3Btn = document.createElement('button');
-                    mp3Btn.className = 'ytp-button ytkit-po-btn ytkit-po-mp3';
+                    mp3Btn.className = 'ytp-button ytkit-player-btn ytkit-po-mp3';
                     mp3Btn.title = 'Download MP3';
-                    mp3Btn.appendChild(_mkSvg('M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z'));
-                    mp3Btn.addEventListener('click', (e) => { e.stopPropagation(); showToast('Starting MP3 download...', '#8b5cf6', { duration: 2 }); mediaDLDownload(window.location.href, true); });
+                    TrustedHTML.setHTML(mp3Btn, '<svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>');
+                    mp3Btn.addEventListener('click', (e) => { e.stopPropagation(); ytKitDownload(window.location.href, true); });
                     wrap.appendChild(mp3Btn);
                 }
                 if (appState.settings.showVlcButton) {
                     const vlcBtn = document.createElement('button');
-                    vlcBtn.className = 'ytp-button ytkit-po-btn ytkit-po-vlc';
+                    vlcBtn.className = 'ytp-button ytkit-player-btn ytkit-po-vlc';
                     vlcBtn.title = 'Stream in VLC';
-                    vlcBtn.appendChild(_mkSvg('M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z'));
+                    TrustedHTML.setHTML(vlcBtn, '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>');
                     vlcBtn.addEventListener('click', (e) => { e.stopPropagation(); openProtocol('ytvlc://' + encodeURIComponent(window.location.href), 'VLC protocol handler not found.'); });
                     wrap.appendChild(vlcBtn);
                 }
 
                 // Settings gear
                 const gearBtn = document.createElement('button');
-                gearBtn.className = 'ytp-button ytkit-po-btn ytkit-po-gear';
+                gearBtn.className = 'ytp-button ytkit-player-btn ytkit-po-gear';
                 gearBtn.title = 'YTKit Settings';
-                TrustedHTML.setHTML(gearBtn, `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`);
+                TrustedHTML.setHTML(gearBtn, '<svg viewBox="0 0 24 24" data-stroke><path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"/><circle cx="12" cy="12" r="3"/></svg>');
                 gearBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     document.body.classList.toggle('ytkit-panel-open');
@@ -3300,7 +3626,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 rightControls.appendChild(wrap);
             },
             init() {
-                this._styleEl = GM_addStyle(`/* Hide native right controls, keep our injected elements */ .ytp-right-controls > *:not(#ytkit-player-controls){display:none !important;} .ytp-right-controls{display:flex !important;align-items:center !important;height:100% !important;} #ytkit-player-controls{display:flex;align-items:center;gap:4px;height:100%;} #ytkit-po-logo-wrap{position:relative;display:inline-flex;align-items:center;height:100%;} .ytkit-po-btn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;border:none;background:transparent;cursor:pointer;border-radius:6px;transition:background 0.15s;text-decoration:none;color:#fff;flex-shrink:0;} .ytkit-po-btn svg{display:block;} .ytkit-po-btn:hover{background:rgba(255,255,255,0.12);} .ytkit-po-dl:hover{background:rgba(34,197,94,0.2)!important;} .ytkit-po-mp3:hover{background:rgba(139,92,246,0.2)!important;} .ytkit-po-vlc:hover{background:rgba(249,115,22,0.2)!important;} .ytkit-po-gear svg{transition:transform 0.3s ease;} .ytkit-po-gear:hover svg{transform:rotate(45deg);} button.ytp-button.ytp-autonav-toggle.delhi-fast-follow-autonav-toggle{display:none !important;}`);
+                this._styleEl = GM_addStyle(`/* Hide native right controls, keep our injected elements */ .ytp-right-controls > *:not(#ytkit-player-controls){display:none !important;} .ytp-right-controls{display:flex !important;align-items:center !important;height:100% !important;} #ytkit-player-controls{display:flex;align-items:center;height:100%;margin:0;padding:0;} #ytkit-po-logo-wrap{position:relative;display:inline-flex;align-items:center;height:100%;} .ytkit-po-logo{display:inline-flex;align-items:center;justify-content:center;width:36px;height:100%;text-decoration:none;color:#fff;opacity:0.9;} .ytkit-po-logo svg{display:block;} .ytkit-po-dl:hover{background:rgba(34,197,94,0.15)!important;border-radius:4px;} .ytkit-po-mp3:hover{background:rgba(139,92,246,0.15)!important;border-radius:4px;} .ytkit-po-vlc:hover{background:rgba(249,115,22,0.15)!important;border-radius:4px;} .ytkit-po-gear svg{transition:transform 0.3s ease;} .ytkit-po-gear:hover svg{transform:rotate(45deg);} button.ytp-button.ytp-autonav-toggle.delhi-fast-follow-autonav-toggle{display:none !important;}`);
 
                 const self = this;
                 addNavigateRule(this._ruleId, () => self._inject());
@@ -4075,490 +4401,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
 
-        // ─── Ad Blocker (interfaces with document-start bootstrap) ───
-        {
-            id: 'ytAdBlock',
-            name: 'YouTube Ad Blocker',
-            description: 'Block video ads via API interception, JSON pruning, and cosmetic hiding',
-            group: 'Ad Blocker',
-            icon: 'shield',
-            isParent: true,
-            _autoUpdateTimer: null,
-            init() {
-                GM_setValue('ytab_enabled', true);
-                if (!window.__ytab?.active) {
-                    showToast('Ad Blocker will activate on next page load', '#f59e0b');
-                }
-                // Auto-update filter list every 24 hours
-                if (appState.settings.adblockFilterAutoUpdate) {
-                    const lastUpdate = GM_getValue('ytab_filter_update_time', 0);
-                    const DAY_MS = 24 * 60 * 60 * 1000;
-                    const doUpdate = () => {
-                        const url = (appState.settings.adblockFilterUrl || '').trim();
-                        if (!url) return;
-                        // Validate URL: only allow HTTPS to prevent file:// or javascript: injection
-                        try { const u = new URL(url); if (u.protocol !== 'https:') { DebugManager.log('AdBlock', 'Filter URL rejected: must be HTTPS'); return; } } catch(e) { return; }
-                        GM_xmlhttpRequest({
-                            method: 'GET', url,
-                            onload: (res) => {
-                                if (res.status === 200 && res.responseText) {
-                                    const lines = res.responseText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('!') && !l.startsWith('#') && !l.startsWith('['));
-                                    // Sanitize: reject lines with dangerous CSS patterns
-                                    const _dangerousCSS = /(?:url\s*\(|@import|expression\s*\(|javascript\s*:|\\00|\\u00|-moz-binding|behavior\s*:|content\s*:|var\s*\(\s*--[^)]*url)/i;
-                                    const safe = lines.filter(l => !_dangerousCSS.test(l) && !l.includes('{') && !l.includes('}') && !l.includes('`'));
-                                    if (safe.length > 0) {
-                                        const selectorStr = safe.join(',\n');
-                                        GM_setValue('ytab_cached_selectors', selectorStr);
-                                        GM_setValue('ytab_cached_selector_count', safe.length);
-                                        GM_setValue('ytab_filter_update_time', Date.now());
-                                        DebugManager.log('AdBlock', `Auto-updated ${safe.length} filter selectors (${lines.length - safe.length} rejected)`);
-                                    }
-                                }
-                            }
-                        });
-                    };
-                    if (Date.now() - lastUpdate > DAY_MS) doUpdate();
-                    this._autoUpdateTimer = setInterval(doUpdate, DAY_MS);
-                }
-            },
-            destroy() {
-                GM_setValue('ytab_enabled', false);
-                if (this._autoUpdateTimer) clearInterval(this._autoUpdateTimer);
-                showToast('Ad Blocker disabled - takes effect on next page load', '#ef4444');
-            }
-        },
-        {
-            id: 'adblockCosmeticHide',
-            name: 'Cosmetic Element Hiding',
-            description: 'Hide ad slots, banners, merch shelves, and promoted content via CSS',
-            group: 'Ad Blocker',
-            icon: 'eye-off',
-            isSubFeature: true,
-            parentId: 'ytAdBlock',
-            init() { window.__ytab?.updateCSS?.(GM_getValue('ytab_cached_selectors', '') + (GM_getValue('ytab_custom_filters', '') ? ',' + GM_getValue('ytab_custom_filters', '') : '')); },
-            destroy() { const el = document.getElementById('ytab-cosmetic'); if (el) el.textContent = ''; }
-        },
-        {
-            id: 'adblockSsapAutoSkip',
-            name: 'SSAP Auto-Skip',
-            description: 'Detect and auto-skip server-side ad stitching in videos',
-            group: 'Ad Blocker',
-            icon: 'skip-forward',
-            isSubFeature: true,
-            parentId: 'ytAdBlock',
-            init() { GM_setValue('ytab_ssap', true); window.__ytab?.startSSAP?.(); },
-            destroy() { GM_setValue('ytab_ssap', false); window.__ytab?.stopSSAP?.(); }
-        },
-        {
-            id: 'adblockAntiDetect',
-            name: 'Anti-Detection Bypass',
-            description: 'Block YouTube abnormality detection and ad-blocker countermeasures',
-            group: 'Ad Blocker',
-            icon: 'shield',
-            isSubFeature: true,
-            parentId: 'ytAdBlock',
-            init() { GM_setValue('ytab_antidetect', true); },
-            destroy() { GM_setValue('ytab_antidetect', false); showToast('Anti-Detection changes take effect on next page load', '#f59e0b'); }
-        },
-
-        // ─── SponsorBlock (Lite Implementation) ───
-        {
-            id: 'skipSponsors',
-            name: 'Skip Sponsors',
-            description: 'Automatically skip sponsored segments using SponsorBlock API',
-            group: 'Ad Blocker',
-            icon: 'skip-forward',
-            isParent: true,
-            _state: {
-                videoID: null,
-                segments: [],
-                skippableSegments: [],
-                lastSkippedUUID: null,
-                currentSegmentIndex: 0,
-                video: null,
-                _timeupdateHandler: null,
-                _skipTimer: null,
-                previewBarContainer: null,
-                videoDuration: 0
-            },
-            _categories: null, // populated from settings in init
-            _allCategories: ["sponsor", "selfpromo", "exclusive_access", "interaction", "intro", "outro", "music_offtopic", "preview", "filler"],
-            _categoryColors: {
-                sponsor: "#00d400",
-                selfpromo: "#ffff00",
-                exclusive_access: "#008a5c",
-                interaction: "#cc00ff",
-                intro: "#00ffff",
-                outro: "#0202ed",
-                music_offtopic: "#ff9900",
-                preview: "#008fd6",
-                filler: "#7300ff"
-            },
-            _styleElement: null,
-
-            async _sha256(message) {
-                try {
-                    const msgBuffer = new TextEncoder().encode(message);
-                    const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
-                    const hashArray = Array.from(new Uint8Array(hashBuffer));
-                    return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
-                } catch(e) {
-                    // Fallback: simple hash for environments where crypto.subtle is unavailable
-                    let hash = 0;
-                    for (let i = 0; i < message.length; i++) {
-                        const char = message.charCodeAt(i);
-                        hash = ((hash << 5) - hash) + char;
-                        hash = hash & hash; // Convert to 32bit integer
-                    }
-                    return Math.abs(hash).toString(16).padStart(4, '0');
-                }
-            },
-
-            async _getHashPrefix(videoID) {
-                const hash = await this._sha256(videoID);
-                return hash.slice(0, 4);
-            },
-
-            _getVideoID() {
-                const url = new URL(window.location.href);
-                const vParam = url.searchParams.get("v");
-                if (vParam && /^[a-zA-Z0-9_-]{11}$/.test(vParam)) return vParam;
-                const shortsMatch = url.pathname.match(/\/shorts\/([a-zA-Z0-9_-]{11})/);
-                if (shortsMatch) return shortsMatch[1];
-                return null;
-            },
-
-            async _fetchSegments(videoID) {
-                try {
-                    const hash = await this._sha256(videoID);
-                    const params = new URLSearchParams({
-                        categories: JSON.stringify(this._categories),
-                        actionTypes: JSON.stringify(["skip", "full"])
-                    });
-                    // Try with 4-char prefix first, fallback to 6-char on 404
-                    const prefixes = [hash.slice(0, 4), hash.slice(0, 6)];
-                    for (const prefix of prefixes) {
-                        const result = await new Promise((resolve) => {
-                            GM.xmlHttpRequest({
-                                method: "GET",
-                                url: `https://sponsor.ajay.app/api/skipSegments/${prefix}?${params}`,
-                                headers: { Accept: "application/json" },
-                                onload: (response) => {
-                                    if (response.status === 200) {
-                                        try {
-                                            const data = JSON.parse(response.responseText);
-                                            const videoData = data.find(v => v.videoID === videoID);
-                                            const segs = videoData?.segments || [];
-                                            segs.sort((a, b) => a.segment[0] - b.segment[0]);
-                                            resolve({ found: true, segments: segs });
-                                        } catch { resolve({ found: false, retry: false }); }
-                                    } else if (response.status === 404) {
-                                        resolve({ found: false, retry: true });
-                                    } else {
-                                        resolve({ found: false, retry: false });
-                                    }
-                                },
-                                onerror: () => resolve({ found: false, retry: false })
-                            });
-                        });
-                        if (result.found) return result.segments;
-                        if (!result.retry) return [];
-                    }
-                    return [];
-                } catch { return []; }
-            },
-
-            _computeSkippableSegments() {
-                this._state.skippableSegments = this._state.segments.filter(s => s.actionType !== "full");
-                this._state.currentSegmentIndex = 0;
-            },
-
-            _skipToTime(targetTime) {
-                if (!this._state.video || targetTime === undefined) return false;
-                try {
-                    this._state.video.currentTime = targetTime;
-                    return true;
-                } catch (e) { return false; }
-            },
-
-            // Event-driven skip: uses timeupdate (~4/s) for coarse checks,
-            // schedules a precise setTimeout when approaching a segment boundary.
-            _startSkipLoop() {
-                this._stopSkipLoop();
-                const SKIP_BUFFER = 0.003;
-                const APPROACH_WINDOW = 2.0; // seconds before segment to schedule precise skip
-
-                this._state._timeupdateHandler = () => {
-                    if (!this._state.video || !this._state.skippableSegments.length) return;
-                    if (this._state._seekGrace || this._state._userScrubbing) return;
-                    const currentTime = this._state.video.currentTime;
-                    const rate = this._state.video.playbackRate || 1;
-
-                    for (const seg of this._state.skippableSegments) {
-                        const [startTime, endTime] = seg.segment;
-                        // Already inside a segment — skip immediately
-                        if (currentTime >= startTime - SKIP_BUFFER && currentTime < endTime - SKIP_BUFFER && this._state.lastSkippedUUID !== seg.UUID) {
-                            this._state.lastSkippedUUID = seg.UUID;
-                            DebugManager.log('SponsorBlock', `Skipping ${seg.category} segment`);
-                            this._skipToTime(endTime);
-                            return;
-                        }
-                        // Approaching a segment — schedule precise skip
-                        if (currentTime < startTime && (startTime - currentTime) < APPROACH_WINDOW && this._state.lastSkippedUUID !== seg.UUID) {
-                            clearTimeout(this._state._skipTimer);
-                            const delay = Math.max(0, ((startTime - currentTime) / rate) * 1000);
-                            this._state._skipTimer = setTimeout(() => {
-                                if (!this._state.video || this._state._seekGrace || this._state._userScrubbing) return;
-                                const t = this._state.video.currentTime;
-                                if (t >= startTime - SKIP_BUFFER && t < endTime - SKIP_BUFFER && this._state.lastSkippedUUID !== seg.UUID) {
-                                    this._state.lastSkippedUUID = seg.UUID;
-                                    DebugManager.log('SponsorBlock', `Skipping ${seg.category} segment (scheduled)`);
-                                    this._skipToTime(endTime);
-                                }
-                            }, delay);
-                            return;
-                        }
-                    }
-                };
-                this._state.video.addEventListener("timeupdate", this._state._timeupdateHandler);
-            },
-
-            _stopSkipLoop() {
-                if (this._state.video && this._state._timeupdateHandler) {
-                    this._state.video.removeEventListener("timeupdate", this._state._timeupdateHandler);
-                }
-                this._state._timeupdateHandler = null;
-                clearTimeout(this._state._skipTimer);
-                this._state._skipTimer = null;
-            },
-
-            _createPreviewBar() {
-                const container = document.createElement("ul");
-                container.id = "ytkit-sb-previewbar";
-                container.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;padding:0;margin:0;overflow:visible;pointer-events:none;z-index:42;list-style:none;transform:scaleY(0.6);transition:transform 0.1s cubic-bezier(0, 0, 0.2, 1);";
-                return container;
-            },
-
-            _updatePreviewBar() {
-                const duration = this._state.video?.duration || 0;
-                if (!duration || duration <= 0) return;
-                this._state.videoDuration = duration;
-                if (!this._state.previewBarContainer) {
-                    this._state.previewBarContainer = this._createPreviewBar();
-                }
-                const progressBar = document.querySelector(".ytp-progress-bar");
-                if (progressBar && !progressBar.contains(this._state.previewBarContainer)) {
-                    progressBar.appendChild(this._state.previewBarContainer);
-                }
-                if (!progressBar) return;
-                // Clear children using DOM method (Trusted Types compliant)
-                while (this._state.previewBarContainer.firstChild) {
-                    this._state.previewBarContainer.removeChild(this._state.previewBarContainer.firstChild);
-                }
-                const previewSegments = this._state.segments.filter(s => s.actionType !== "full");
-                for (const segment of previewSegments) {
-                    const bar = document.createElement("li");
-                    bar.className = "ytkit-sb-segment";
-                    const startPercent = (segment.segment[0] / duration) * 100;
-                    const endPercent = (segment.segment[1] / duration) * 100;
-                    const widthPercent = endPercent - startPercent;
-                    bar.style.cssText = `position:absolute;top:0;height:100%;min-width:1px;opacity:0.7;left:${startPercent}%;width:${widthPercent}%;background-color:${this._categoryColors[segment.category] || "#888"};`;
-                    bar.title = segment.category.replace(/_/g, " ");
-                    this._state.previewBarContainer.appendChild(bar);
-                }
-            },
-
-            _removePreviewBar() {
-                if (this._state.previewBarContainer) {
-                    this._state.previewBarContainer.remove();
-                    this._state.previewBarContainer = null;
-                }
-            },
-
-            _reset() {
-                // Clear any in-flight video element poll
-                if (this._state._checkVideoInterval) {
-                    clearInterval(this._state._checkVideoInterval);
-                    this._state._checkVideoInterval = null;
-                }
-                // Remove video event listeners before clearing references
-                if (this._state.video) {
-                    if (this._state._playHandler) this._state.video.removeEventListener("play", this._state._playHandler);
-                    if (this._state._pauseHandler) this._state.video.removeEventListener("pause", this._state._pauseHandler);
-                    if (this._state._seekedHandler) this._state.video.removeEventListener("seeked", this._state._seekedHandler);
-                    this._state._playHandler = null;
-                    this._state._pauseHandler = null;
-                    this._state._seekedHandler = null;
-                }
-                if (this._state._scrubDown) {
-                    document.removeEventListener('mousedown', this._state._scrubDown, true);
-                    document.removeEventListener('mouseup', this._state._scrubUp, true);
-                    this._state._scrubDown = null;
-                    this._state._scrubUp = null;
-                }
-                this._state._userScrubbing = false;
-                clearTimeout(this._state._seekGraceTimer);
-                this._state._seekGrace = false;
-                this._state.videoID = null;
-                this._state.segments = [];
-                this._state.skippableSegments = [];
-                this._state.lastSkippedUUID = null;
-                this._state.currentSegmentIndex = 0;
-                this._state.videoDuration = 0;
-                this._stopSkipLoop();
-                this._removePreviewBar();
-                document.querySelectorAll('[id^="ytkit-sb-label-"]').forEach(e => e.remove());
-            },
-
-            async _loadSegmentsAndSetup() {
-                if (!this._state.videoID) return;
-                const requestVideoID = this._state.videoID;
-                try {
-                    const segments = await this._fetchSegments(requestVideoID);
-                    if (this._state.videoID !== requestVideoID) return; // navigated away during fetch
-                    this._state.segments = segments;
-                    if (this._state.segments.length > 0) {
-                        DebugManager.log('SponsorBlock', `Found ${this._state.segments.length} segments`);
-                        const skipCount = this._state.segments.filter(s => s.actionType !== 'full').length;
-                        if (skipCount > 0) {
-                            showToast(`SponsorBlock: ${skipCount} segment${skipCount !== 1 ? 's' : ''} found`, '#00d400', { duration: 2 });
-                        }
-                    }
-                    this._computeSkippableSegments();
-                    this._updatePreviewBar();
-                    // Create full video labels
-                    this._state.segments.filter(s => s.actionType === "full").forEach(s => this._createVideoLabel(s));
-                    if (this._state.video) {
-                        this._startSkipLoop();
-                    }
-                } catch (error) {
-                    console.error("[YTKit SponsorBlock] Failed to load segments:", error);
-                }
-            },
-
-            _createVideoLabel(videoLabel) {
-                let labelAttempts = 0;
-                const targetVideoID = this._state.videoID;
-                const check = () => {
-                    if (++labelAttempts > TIMING.LABEL_MAX_ATTEMPTS) return;
-                    if (this._state.videoID !== targetVideoID) return;
-                    const title = document.querySelector("#title h1, h1.title.ytd-video-primary-info-renderer");
-                    if (title) {
-                        const category = videoLabel.category;
-                        const label = document.createElement("span");
-                        label.id = `ytkit-sb-label-${category}`;
-                        label.title = `The entire video is ${category}`;
-                        label.innerText = category;
-                        label.style.cssText = `color:#111;background-color:${this._categoryColors[category] || "#ccc"};display:flex;margin:0 5px;padding:2px 6px;font-size:12px;font-weight:bold;border-radius:4px;`;
-                        title.style.display = "flex";
-                        title.prepend(label);
-                    } else {
-                        setTimeout(check, 500);
-                    }
-                };
-                check();
-            },
-
-            _handleVideoChange() {
-                const newVideoID = this._getVideoID();
-                if (!newVideoID || newVideoID === this._state.videoID) return;
-                DebugManager.log('SponsorBlock', `Video changed to: ${newVideoID}`);
-                // Clear any in-flight video element poll from previous navigation
-                if (this._state._checkVideoInterval) {
-                    clearInterval(this._state._checkVideoInterval);
-                    this._state._checkVideoInterval = null;
-                }
-                this._reset();
-                this._state.videoID = newVideoID;
-                let attempts = 0;
-                this._state._checkVideoInterval = setInterval(() => {
-                    attempts++;
-                    const video = document.querySelector("video");
-                    if (video) {
-                        clearInterval(this._state._checkVideoInterval);
-                        this._state._checkVideoInterval = null;
-                        this._state.video = video;
-                        this._state._playHandler = () => {}; // timeupdate only fires during playback
-                        this._state._pauseHandler = () => {};
-                        this._state._seekedHandler = () => {
-                            // Pause skip detection briefly after manual seek so the user
-                            // can land wherever they want without being bounced out
-                            this._state._seekGrace = true;
-                            clearTimeout(this._state._seekGraceTimer);
-                            this._state._seekGraceTimer = setTimeout(() => {
-                                this._state._seekGrace = false;
-                                this._state.lastSkippedUUID = null;
-                            }, 800);
-                        };
-                        // Detect when user is scrubbing the progress bar — pause skip loop entirely
-                        this._state._scrubDown = (e) => {
-                            if (e.target.closest('.ytp-progress-bar, .ytp-scrubber-container, .ytp-progress-bar-container')) {
-                                this._state._userScrubbing = true;
-                            }
-                        };
-                        this._state._scrubUp = () => {
-                            if (this._state._userScrubbing) {
-                                this._state._userScrubbing = false;
-                                // Grace period after releasing scrub
-                                this._state._seekGrace = true;
-                                clearTimeout(this._state._seekGraceTimer);
-                                this._state._seekGraceTimer = setTimeout(() => {
-                                    this._state._seekGrace = false;
-                                    this._state.lastSkippedUUID = null;
-                                }, 800);
-                            }
-                        };
-                        document.addEventListener('mousedown', this._state._scrubDown, true);
-                        document.addEventListener('mouseup', this._state._scrubUp, true);
-                        video.addEventListener("play", this._state._playHandler);
-                        video.addEventListener("pause", this._state._pauseHandler);
-                        video.addEventListener("seeked", this._state._seekedHandler);
-                        this._loadSegmentsAndSetup();
-                    } else if (attempts >= 50) {
-                        clearInterval(this._state._checkVideoInterval);
-                        this._state._checkVideoInterval = null;
-                    }
-                }, 100);
-            },
-
-            init() {
-                // Load categories from settings
-                const cats = appState.settings.sponsorBlockCategories || this._allCategories;
-                this._categories = cats.length ? cats : this._allCategories;
-                this._styleElement = document.createElement("style");
-                this._styleElement.textContent = `
-                    .ytp-progress-bar:hover #ytkit-sb-previewbar { transform: scaleY(1); }
-                    .ytp-big-mode #ytkit-sb-previewbar { transform: scaleY(0.625); }
-                    .ytp-big-mode .ytp-progress-bar:hover #ytkit-sb-previewbar { transform: scaleY(1); }
-                    .ytkit-sb-segment:hover { opacity: 1 !important; }
-                `;
-                document.head.appendChild(this._styleElement);
-                this._navHandler = () => this._handleVideoChange();
-                this._resetHandler = () => { this._removePreviewBar(); this._stopSkipLoop(); };
-                document.addEventListener("yt-navigate-finish", this._navHandler);
-                document.addEventListener("yt-navigate-start", this._resetHandler);
-                this._handleVideoChange();
-                setTimeout(() => this._handleVideoChange(), 500);
-            },
-
-            destroy() {
-                document.removeEventListener("yt-navigate-finish", this._navHandler);
-                document.removeEventListener("yt-navigate-start", this._resetHandler);
-                this._reset();
-                this._styleElement?.remove();
-            }
-        },
-        cssFeature('hideSponsorBlockLabels', 'Hide SponsorBlock Labels', 'Hide the category labels added by SponsorBlock', 'Ad Blocker', 'tag-off',
-            '[id^="ytkit-sb-label-"]', { isSubFeature: true, parentId: 'skipSponsors' }),
-                // Auto-generated SponsorBlock sub-features
-        ...([['sponsor','Skip: Sponsor','Paid promotion, paid referrals, direct advertisements'],['selfpromo','Skip: Self Promotion','Unpaid self-promotion: merch, channel plugs, social media links'],['interaction','Skip: Interaction Reminder','Subscribe, like, comment reminders and engagement prompts'],['intro','Skip: Intro','Intro animation, title card, or cold open with no content'],['outro','Skip: Outro','End cards, credits, outros with no new content'],['music_offtopic','Skip: Off-Topic Music','Non-music sections in music videos (e.g. talking, behind-the-scenes)'],['preview','Skip: Preview/Recap','Preview of upcoming content or recap of previous episodes'],['filler','Skip: Filler','Tangential scenes, off-topic jokes, or filler with no value']].map(([v,n,d])=>({id:'sbCat_'+v,name:n,description:d,group:'Ad Blocker',icon:'list',isSubFeature:true,parentId:'skipSponsors',_arrayKey:'sponsorBlockCategories',_arrayValue:v,init(){},destroy(){}}))),
-
         // ─── Quality ───
         {
             id: 'autoMaxResolution',
             name: 'Auto Quality',
             description: 'Automatically select preferred video quality (max, 4K, 1440p, 1080p, 720p, 480p)',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'sparkles',
             isParent: true,
             type: 'select',
@@ -4618,20 +4466,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         if (!target) target = levels[0];
                     }
                 }
-                // Lock quality with both min and max args, retry to beat YouTube's override
-                const applyQuality = () => {
-                    try { player.setPlaybackQualityRange(target, target); } catch { /* ignore */ }
-                };
-                applyQuality();
-                setTimeout(applyQuality, 500);
-                setTimeout(applyQuality, 1500);
+                try { player.setPlaybackQualityRange(target, target); } catch { /* ignore */ }
             }
         },
         {
             id: 'useEnhancedBitrate',
             name: 'Enhanced Bitrate',
             description: 'Re-apply max quality on navigation to counter YouTube quality resets',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'gauge',
             isSubFeature: true,
             parentId: 'autoMaxResolution',
@@ -4651,7 +4493,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hideQualityPopup',
             name: 'Hide Quality Popup',
             description: 'Suppress the quality selection popup during auto-selection',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'eye-off',
             isSubFeature: true,
             parentId: 'autoMaxResolution',
@@ -4686,7 +4528,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'autoExpandComments',
             name: 'Auto-Expand Comments',
             description: 'Automatically expand truncated comments so full text is always visible',
-            group: 'Watch Page',
+            group: 'Comments',
             icon: 'fullscreen',
             pages: [PageTypes.WATCH],
             _styleElement: null,
@@ -4772,7 +4614,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'commentEnhancements',
             name: 'Comment Enhancements',
             description: 'Highlight creator/OP replies, show like heat indicators, and add collapse-all-replies toggle per thread',
-            group: 'Watch Page',
+            group: 'Comments',
             icon: 'message-square',
             pages: [PageTypes.WATCH],
             _styleElement: null,
@@ -4859,7 +4701,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hideVideoEndContent',
             name: 'Hide Video End Content',
             description: 'Remove end cards, end screen, annotations, and video grid when videos finish. Superset of Hide End Screen Cards.',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'square-x',
             _styleElement: null,
             init() {
@@ -4976,16 +4818,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             icon: 'download',
             _styleElement: null,
             _providers: {
-                'cobalt': 'https://cobalt.meowing.de/#',
+                'cobalt': 'https://cobalt.tools/#',
                 'y2mate': 'https://www.y2mate.com/youtube/',
                 'savefrom': 'https://en.savefrom.net/1-youtube-video-downloader-',
                 'ssyoutube': 'https://ssyoutube.com/watch?v='
             },
-            _cobaltFallbacks: [
-                'https://cobalt.meowing.de/#',
-                'https://cobalt.tools/#',
-                'https://co.wuk.sh/#',
-            ],
             _getDownloadUrl(videoUrl) {
                 const provider = appState.settings.downloadProvider || 'cobalt';
                 const baseUrl = this._providers[provider] || this._providers['cobalt'];
@@ -5005,32 +4842,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     return baseUrl + videoId;
                 }
                 return baseUrl + encodeURIComponent(videoUrl);
-            },
-            _checkCobaltHealth() {
-                const provider = appState.settings.downloadProvider || 'cobalt';
-                if (provider !== 'cobalt') return;
-                const cobaltUrl = GM_getValue('ytkit_cobalt_url', 'https://cobalt.meowing.de/#');
-                try {
-                    const origin = new URL(cobaltUrl).origin;
-                    GM.xmlHttpRequest({
-                        method: 'HEAD',
-                        url: origin,
-                        timeout: 5000,
-                        onload: (r) => {
-                            if (r.status >= 400) this._tryCobaltFallback(cobaltUrl);
-                        },
-                        onerror: () => this._tryCobaltFallback(cobaltUrl),
-                        ontimeout: () => this._tryCobaltFallback(cobaltUrl),
-                    });
-                } catch(e) { /* invalid URL, ignore */ }
-            },
-            _tryCobaltFallback(failedUrl) {
-                const fallback = this._cobaltFallbacks.find(u => u !== failedUrl);
-                if (fallback) {
-                    GM_setValue('ytkit_cobalt_url', fallback);
-                    showToast('Cobalt instance unreachable, switched to fallback: ' + fallback, '#f59e0b', { duration: 5 });
-                    DebugManager.log('Cobalt', `Switched from ${failedUrl} to ${fallback}`);
-                }
             },
             _isWatchPage() { return window.location.pathname.startsWith('/watch'); },
             _injectButton() {
@@ -5056,7 +4867,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             init() {
                 this._styleElement = injectStyle('ytd-download-button-renderer', 'hideNativeDownload');
                 addNavigateRule('downloadButton', this._injectButton.bind(this));
-                this._checkCobaltHealth();
             },
             destroy() {
                 removeNavigateRule('downloadButton');
@@ -5068,14 +4878,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hiddenPlayerControlsManager',
             name: 'Hide Player Controls',
             description: 'Choose which player control buttons to hide',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'eye-off',
             isParent: true,
             _styleElement: null,
             _selectors: {
                 ytLogo: '.ytp-youtube-button',
                 settings: '.ytp-settings-button',
-                sponsorBlock: '.ytp-sb-button, .ytp-sponsorblock-button',
                 next: '.ytp-next-button',
                 autoplay: '.ytp-autonav-toggle-button-container',
                 subtitles: '.ytp-subtitles-button',
@@ -5095,7 +4904,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
         },
                 // Auto-generated Player Controls sub-features
-        ...([['ytLogo','YouTube Logo','Hide YouTube logo from player controls'],['settings','Settings Gear','Hide settings gear from player controls'],['sponsorBlock','SponsorBlock Button','Hide SponsorBlock button from player'],['next','Next Video Button','Hide next video button from player'],['autoplay','Autoplay Toggle','Hide autoplay toggle from player'],['subtitles','Subtitles Button','Hide subtitles button from player'],['captions','Captions Display','Hide captions overlay on video'],['miniplayer','Miniplayer Button','Hide miniplayer button from player'],['pip','Picture-in-Picture','Hide PiP button from player'],['theater','Theater Mode Button','Hide theater mode button from player'],['fullscreen','Fullscreen Button','Hide fullscreen button from player']].map(([v,n,d])=>({id:'pcHide_'+v,name:n,description:d,group:'Watch Page',icon:'eye-off',isSubFeature:true,parentId:'hiddenPlayerControlsManager',_arrayKey:'hiddenPlayerControls',_arrayValue:v,init(){},destroy(){}}))),
+        ...([['ytLogo','YouTube Logo','Hide YouTube logo from player controls'],['settings','Settings Gear','Hide settings gear from player controls'],['next','Next Video Button','Hide next video button from player'],['autoplay','Autoplay Toggle','Hide autoplay toggle from player'],['subtitles','Subtitles Button','Hide subtitles button from player'],['captions','Captions Display','Hide captions overlay on video'],['miniplayer','Miniplayer Button','Hide miniplayer button from player'],['pip','Picture-in-Picture','Hide PiP button from player'],['theater','Theater Mode Button','Hide theater mode button from player'],['fullscreen','Fullscreen Button','Hide fullscreen button from player']].map(([v,n,d])=>({id:'pcHide_'+v,name:n,description:d,group:'Video Player',icon:'eye-off',isSubFeature:true,parentId:'hiddenPlayerControlsManager',_arrayKey:'hiddenPlayerControls',_arrayValue:v,init(){},destroy(){}}))),
                                                                         // Individual player control features removed - now consolidated in hiddenPlayerControlsManager
 
         // ─── Downloads (YTYT-Downloader Integration) ───
@@ -5113,7 +4922,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 'ssyoutube': 'SSYouTube'
             },
             _providers: {
-                get cobalt() { return GM_getValue('ytkit_cobalt_url', 'https://cobalt.meowing.de/#'); },
+                get cobalt() { return GM_getValue('ytkit_cobalt_url', 'https://cobalt.tools/#'); },
                 'y2mate': 'https://www.y2mate.com/youtube/',
                 'savefrom': 'https://en.savefrom.net/1-youtube-video-downloader-',
                 'ssyoutube': 'https://ssyoutube.com/watch?v='
@@ -5130,7 +4939,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             group: 'Downloads',
             icon: 'link',
             type: 'textarea',
-            placeholder: 'https://cobalt.meowing.de/#',
+            placeholder: 'https://cobalt.tools/#',
             init() {
                 // Sync textarea value to GM storage for the download provider getter
                 const val = appState.settings.cobaltUrl;
@@ -5149,14 +4958,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }
             },
             destroy() {
-                GM_setValue('ytkit_cobalt_url', settingsManager.defaults.cobaltUrl || 'https://cobalt.meowing.de/#');
+                GM_setValue('ytkit_cobalt_url', settingsManager.defaults.cobaltUrl || 'https://cobalt.tools/#');
             }
         },
         {
             id: 'hideCollaborations',
             name: 'Hide Collaborations',
             description: 'Hide videos from channels you\'re not subscribed to in your subscriptions feed',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'users-x',
             _subscriptions: [],
             _observer: null,
@@ -5266,7 +5075,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hideVideosFromHome',
             name: 'Video Hider',
             description: 'Hide videos/channels from feeds. Includes keyword filter, duration filter, and channel blocking.',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'eye-off',
             isParent: true,
             _styleElement: null,
@@ -5949,8 +5758,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 btn.onmouseenter = () => { btn.style.background = '#16a34a'; };
                 btn.onmouseleave = () => { btn.style.background = '#22c55e'; };
                 btn.addEventListener('click', () => {
-                    showToast('⬇️ Starting download...', '#22c55e');
-                    mediaDLDownload(window.location.href, false);
+                    ytKitDownload(window.location.href, false);
                 });
                 parent.appendChild(btn);
             },
@@ -5987,8 +5795,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 btn.onmouseenter = () => { btn.style.background = '#7c3aed'; };
                 btn.onmouseleave = () => { btn.style.background = '#8b5cf6'; };
                 btn.addEventListener('click', () => {
-                    showToast('🎵 Starting MP3 download...', '#8b5cf6');
-                    mediaDLDownload(window.location.href, true);
+                    ytKitDownload(window.location.href, true);
                 });
                 parent.appendChild(btn);
             },
@@ -6056,6 +5863,18 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     { id: 'copy-url-time', icon: 'link', label: 'Copy URL at Timestamp', class: 'ytkit-item-copy', action: () => this._copyURLAtTime() },
                     { id: 'copy-id', icon: 'hash', label: 'Copy Video ID', class: 'ytkit-item-copy', action: () => this._copyID() },
                 ];
+
+                // Add "Setup MediaDL" option at the bottom if server is not running
+                if (!MediaDLManager.isRunning) {
+                    items.push({ divider: true });
+                    items.push({
+                        id: 'setup-mediadl',
+                        icon: 'settings',
+                        label: 'Setup MediaDL (1080p+ Downloads)',
+                        class: 'ytkit-item-copy',
+                        action: () => MediaDLManager.showInstallPrompt('install')
+                    });
+                }
 
                 items.forEach(item => {
                     if (item.divider) {
@@ -6200,6 +6019,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         svg.appendChild(createLine('16', '5', '16', '7'));
                         svg.appendChild(createLine('15', '6', '17', '6'));
                         break;
+                    case 'settings':
+                        svg.appendChild(createCircle('12', '12', '3'));
+                        svg.appendChild(createPath('M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z'));
+                        break;
                 }
 
                 return svg;
@@ -6231,14 +6054,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             // Action handlers
             _downloadVideo() {
                 const url = window.location.href;
-                showToast('⬇️ Starting video download...', '#22c55e');
-                mediaDLDownload(url, false);
+                ytKitDownload(url, false);
             },
 
             _downloadAudio() {
                 const url = window.location.href;
-                showToast('🎵 Starting audio download...', '#a855f7');
-                mediaDLDownload(url, true);
+                ytKitDownload(url, true);
             },
 
             async _downloadTranscript() {
@@ -6588,7 +6409,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'forceH264',
             name: 'Force H.264 Codec',
             description: 'Prefer H.264 (AVC) over VP9/AV1 for lower CPU usage on older hardware. May reduce max quality. Uses the same codec engine as Codec Selector.',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'cpu',
 
             init() {
@@ -6632,7 +6453,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'titleNormalization',
             name: 'Normalize Clickbait Titles',
             description: 'Convert ALL CAPS titles to Title Case. Reduces clickbait without changing meaning.',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'type',
             _observer: null,
 
@@ -6689,7 +6510,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'watchProgress',
             name: 'Watch Progress Indicators',
             description: 'Show colored progress bars on video thumbnails based on your watch history (saved locally)',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'bar-chart',
             _styleElement: null,
             _storageKey: 'ytkit-watch-progress',
@@ -6764,7 +6585,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'autoDismissStillWatching',
             name: 'Auto-Dismiss "Still Watching?"',
             description: 'Automatically clicks the "Continue Watching" button when YouTube pauses playback for inactivity',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'play',
             _observer: null,
 
@@ -6792,7 +6613,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'remainingTimeDisplay',
             name: 'Remaining Time Display',
             description: 'Show time remaining next to current time in the player, adjusted for playback speed',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'clock',
             pages: [PageTypes.WATCH],
             _styleEl: null,
@@ -6838,7 +6659,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'showPlaylistDuration',
             name: 'Show Playlist Duration',
             description: 'Display total playlist runtime and speed-adjusted estimate next to the playlist header',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'list',
             _observer: null,
 
@@ -6891,7 +6712,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'showTimeInTabTitle',
             name: 'Show Time in Tab Title',
             description: 'Prepend current playback time [5:23] to the browser tab title',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'type',
             pages: [PageTypes.WATCH],
             _interval: null,
@@ -6966,7 +6787,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'reversePlaylist',
             name: 'Reverse Playlist Button',
             description: 'Adds a "Reverse" button to playlist panels to play oldest first',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'arrow-down-up',
             _injected: false,
 
@@ -7158,7 +6979,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'videoScreenshot',
             name: 'Video Screenshot',
             description: 'Capture the current video frame as a PNG image — copies to clipboard and downloads',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'camera',
             pages: [PageTypes.WATCH],
             _btn: null,
@@ -7192,12 +7013,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const controls = document.querySelector('.ytp-right-controls');
                 if (!controls || controls.querySelector('.ytkit-screenshot-btn')) return;
                 const btn = document.createElement('button');
-                btn.className = 'ytp-button ytkit-screenshot-btn';
+                btn.className = 'ytp-button ytkit-player-btn ytkit-screenshot-btn';
                 btn.title = 'Screenshot (YTKit)';
-                TrustedHTML.setHTML(btn, '<svg height="100%" viewBox="0 0 24 24" width="100%" fill="white"><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.65 0-3 1.35-3 3s1.35 3 3 3 3-1.35 3-3-1.35-3-3-3z"/></svg>');
-                btn.style.cssText = 'opacity:0.8;transition:opacity 0.2s;';
-                btn.onmouseenter = () => { btn.style.opacity = '1'; };
-                btn.onmouseleave = () => { btn.style.opacity = '0.8'; };
+                TrustedHTML.setHTML(btn, '<svg viewBox="0 0 24 24"><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.65 0-3 1.35-3 3s1.35 3 3 3 3-1.35 3-3-1.35-3-3-3z"/></svg>');
                 btn.onclick = (e) => { e.stopPropagation(); this._capture(); };
                 controls.insertBefore(btn, controls.firstChild);
                 this._btn = btn;
@@ -7213,68 +7031,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
         {
-            id: 'volumeBoost',
-            name: 'Volume Boost',
-            description: 'Amplify audio beyond 100% using Web Audio API (up to 600%)',
-            group: 'Watch Page',
-            icon: 'volume-2',
-            pages: [PageTypes.WATCH],
-            type: 'range',
-            rangeMin: 100,
-            rangeMax: 600,
-            rangeStep: 25,
-            settingKey: 'volumeBoostLevel',
-            _gainNode: null,
-            _compressor: null,
-            _connected: false,
-
-            _connect() {
-                const video = document.querySelector('video.html5-main-video');
-                if (!video || this._connected) return;
-                try {
-                    const ctx = SharedAudio.getContext();
-                    SharedAudio.getSource(video);
-                    this._gainNode = ctx.createGain();
-                    this._compressor = ctx.createDynamicsCompressor();
-                    this._compressor.threshold.value = -6;
-                    this._compressor.knee.value = 30;
-                    this._compressor.ratio.value = 12;
-                    this._gainNode.connect(this._compressor);
-                    SharedAudio.register('volumeBoost', this._gainNode, this._compressor);
-                    this._connected = true;
-                    this._updateGain();
-                    DebugManager.log('VolumeBoost', 'Audio graph connected via SharedAudio');
-                } catch(e) { DebugManager.log('VolumeBoost', 'Failed: ' + e.message); }
-            },
-
-            _updateGain() {
-                if (!this._gainNode) return;
-                const level = (appState.settings.volumeBoostLevel || 200) / 100;
-                this._gainNode.gain.value = level;
-            },
-
-            init() {
-                setTimeout(() => this._connect(), 2000);
-                addNavigateRule('volumeBoost', () => {
-                    SharedAudio.unregister('volumeBoost');
-                    this._connected = false;
-                    setTimeout(() => this._connect(), 2000);
-                });
-                this._settingsHandler = () => this._updateGain();
-                document.addEventListener('ytkit-settings-changed', this._settingsHandler);
-            },
-            destroy() {
-                removeNavigateRule('volumeBoost');
-                document.removeEventListener('ytkit-settings-changed', this._settingsHandler);
-                SharedAudio.unregister('volumeBoost');
-                this._gainNode = null; this._compressor = null; this._connected = false;
-            }
-        },
-        {
             id: 'perChannelSpeed',
             name: 'Per-Channel Speed Memory',
             description: 'Remember and auto-apply preferred playback speed for each channel',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'gauge',
             pages: [PageTypes.WATCH],
             _storageKey: 'ytkit-channel-speeds',
@@ -7335,7 +7095,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'hideWatchedVideos',
             name: 'Hide Watched Videos',
             description: 'Dim or hide videos with a red progress bar (already watched) from feeds',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'eye-off',
             type: 'select',
             options: { 'dim': 'Dim (50% opacity)', 'hide': 'Fully Hidden' },
@@ -7381,7 +7141,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'antiTranslate',
             name: 'Anti-Translate (Original Titles)',
             description: 'Prevent YouTube from auto-translating video titles and descriptions to your language',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'languages',
 
             _process() {
@@ -7424,7 +7184,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'pauseOtherTabs',
             name: 'Pause Other Tabs on Play',
             description: 'When a video starts playing, pause YouTube in all other tabs',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'pause-circle',
             _channel: null,
             _playHandler: null,
@@ -7457,125 +7217,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         // ─── v3.2.0 Wave 2: Complex & Differentiating ───
 
         {
-            id: 'skipSilence',
-            name: 'Skip Silence',
-            description: 'Detect silent portions of audio and speed through them automatically. Essential for lectures and podcasts.',
-            group: 'Watch Page',
-            icon: 'fast-forward',
-            pages: [PageTypes.WATCH],
-            type: 'range',
-            rangeMin: 5,
-            rangeMax: 50,
-            rangeStep: 5,
-            settingKey: 'skipSilenceThreshold',
-            _analyser: null,
-            _checkInterval: null,
-            _connected: false,
-            _originalSpeed: null,
-            _inSilence: false,
-            _indicator: null,
-
-            _connect() {
-                const video = document.querySelector('video.html5-main-video');
-                if (!video || this._connected) return;
-                try {
-                    const ctx = SharedAudio.getContext();
-                    SharedAudio.getSource(video);
-                    this._analyser = ctx.createAnalyser();
-                    this._analyser.fftSize = 2048;
-                    this._analyser.smoothingTimeConstant = 0.3;
-                    // Analyser is a pass-through node (input = output)
-                    SharedAudio.register('skipSilence', this._analyser, this._analyser);
-                    this._connected = true;
-                    this._startChecking(video);
-                    DebugManager.log('SkipSilence', 'Audio analysis connected via SharedAudio');
-                } catch(e) { DebugManager.log('SkipSilence', 'Failed: ' + e.message); }
-            },
-
-            _getVolume() {
-                if (!this._analyser) return 100;
-                const data = new Uint8Array(this._analyser.fftSize);
-                this._analyser.getByteTimeDomainData(data);
-                let sum = 0;
-                for (let i = 0; i < data.length; i++) {
-                    const val = (data[i] - 128) / 128;
-                    sum += val * val;
-                }
-                return Math.sqrt(sum / data.length) * 100;
-            },
-
-            _showIndicator(show) {
-                if (!this._indicator) {
-                    const player = document.querySelector('#movie_player');
-                    if (!player) return;
-                    this._indicator = document.createElement('div');
-                    this._indicator.className = 'ytkit-skip-silence-indicator';
-                    this._indicator.style.cssText = 'position:absolute;top:12px;right:12px;padding:4px 10px;background:rgba(0,0,0,0.7);color:#fbbf24;font-size:12px;font-weight:600;border-radius:4px;z-index:100;pointer-events:none;transition:opacity 0.2s;';
-                    player.appendChild(this._indicator);
-                }
-                const speed = appState.settings.skipSilenceSpeed || 4;
-                this._indicator.textContent = `Silence ${speed}x`;
-                this._indicator.style.opacity = show ? '1' : '0';
-            },
-
-            _startChecking(video) {
-                const threshold = (appState.settings.skipSilenceThreshold || 15) / 100;
-                const silenceSpeed = appState.settings.skipSilenceSpeed || 4;
-                let silenceFrames = 0;
-                const SILENCE_FRAMES_REQUIRED = 5;
-
-                this._checkInterval = setInterval(() => {
-                    if (video.paused || video.ended) return;
-                    const vol = this._getVolume() / 100;
-
-                    if (vol < threshold) {
-                        silenceFrames++;
-                        if (silenceFrames >= SILENCE_FRAMES_REQUIRED && !this._inSilence) {
-                            this._originalSpeed = video.playbackRate;
-                            video.playbackRate = silenceSpeed;
-                            this._inSilence = true;
-                            this._showIndicator(true);
-                        }
-                    } else {
-                        if (this._inSilence) {
-                            video.playbackRate = this._originalSpeed || 1;
-                            this._inSilence = false;
-                            this._showIndicator(false);
-                        }
-                        silenceFrames = 0;
-                    }
-                }, 100);
-            },
-
-            init() {
-                setTimeout(() => this._connect(), 3000);
-                addNavigateRule('skipSilence', () => {
-                    if (this._checkInterval) clearInterval(this._checkInterval);
-                    this._inSilence = false;
-                    SharedAudio.unregister('skipSilence');
-                    this._connected = false;
-                    this._indicator = null;
-                    setTimeout(() => this._connect(), 3000);
-                });
-            },
-            destroy() {
-                removeNavigateRule('skipSilence');
-                if (this._checkInterval) { clearInterval(this._checkInterval); this._checkInterval = null; }
-                if (this._inSilence) {
-                    const video = document.querySelector('video.html5-main-video');
-                    if (video && this._originalSpeed) video.playbackRate = this._originalSpeed;
-                }
-                SharedAudio.unregister('skipSilence');
-                this._analyser = null;
-                this._connected = false; this._inSilence = false;
-                this._indicator?.remove(); this._indicator = null;
-            }
-        },
-        {
             id: 'abLoop',
             name: 'A-B Loop',
             description: 'Set two points on the video timeline and loop between them. Visual markers on the progress bar.',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'repeat',
             pages: [PageTypes.WATCH],
             _pointA: null,
@@ -7639,7 +7284,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _updateBtn() {
                 if (!this._btn) return;
-                this._btn.style.color = this._active ? '#22c55e' : (this._pointA !== null ? '#fbbf24' : '#fff');
+                this._btn.classList.toggle('ytkit-player-btn--active', this._active);
+                this._btn.classList.toggle('ytkit-player-btn--warn', !this._active && this._pointA !== null);
             },
 
             _updateMarkers() {
@@ -7668,10 +7314,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const controls = document.querySelector('.ytp-right-controls');
                 if (!controls || controls.querySelector('.ytkit-ab-btn')) return;
                 const btn = document.createElement('button');
-                btn.className = 'ytp-button ytkit-ab-btn';
+                btn.className = 'ytp-button ytkit-player-btn ytkit-player-btn--text ytkit-ab-btn';
                 btn.title = 'A-B Loop: Click=Set A, Click again=Set B, Click again=Clear';
                 btn.textContent = 'A-B';
-                btn.style.cssText = 'font-size:13px;font-weight:700;opacity:0.9;transition:color 0.2s;padding:0 6px;';
                 let clickCount = 0;
                 btn.onclick = (e) => {
                     e.stopPropagation();
@@ -7706,7 +7351,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'fineSpeedControl',
             name: 'Fine Speed Control',
             description: 'Extend speed range to 0.1x-16x with 0.05x increments. Scroll on the speed badge to adjust.',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'gauge',
             pages: [PageTypes.WATCH],
             _badge: null,
@@ -7831,7 +7476,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'notInterestedButton',
             name: '"Not Interested" on Thumbnails',
             description: 'Add an X button on video thumbnails to quickly dismiss videos via YouTube\'s feedback API',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'x-circle',
             _styleEl: null,
 
@@ -8133,56 +7778,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
         {
-            id: 'audioNormalization',
-            name: 'Audio Normalization',
-            description: 'Auto-level volume across videos so quiet podcasts and loud music videos play at similar levels',
-            group: 'Watch Page',
-            icon: 'volume-1',
-            pages: [PageTypes.WATCH],
-            _compressor: null,
-            _makeupGain: null,
-            _connected: false,
-
-            _connect() {
-                const video = document.querySelector('video.html5-main-video');
-                if (!video || this._connected) return;
-                try {
-                    const ctx = SharedAudio.getContext();
-                    SharedAudio.getSource(video);
-                    this._compressor = ctx.createDynamicsCompressor();
-                    this._compressor.threshold.value = -30;
-                    this._compressor.knee.value = 20;
-                    this._compressor.ratio.value = 8;
-                    this._compressor.attack.value = 0.005;
-                    this._compressor.release.value = 0.15;
-                    this._makeupGain = ctx.createGain();
-                    this._makeupGain.gain.value = 1.8;
-                    this._compressor.connect(this._makeupGain);
-                    SharedAudio.register('audioNormalization', this._compressor, this._makeupGain);
-                    this._connected = true;
-                    DebugManager.log('AudioNorm', 'Normalization connected via SharedAudio');
-                } catch(e) { DebugManager.log('AudioNorm', 'Failed: ' + e.message); }
-            },
-
-            init() {
-                setTimeout(() => this._connect(), 2500);
-                addNavigateRule('audioNorm', () => {
-                    SharedAudio.unregister('audioNormalization');
-                    this._connected = false;
-                    setTimeout(() => this._connect(), 2500);
-                });
-            },
-            destroy() {
-                removeNavigateRule('audioNorm');
-                SharedAudio.unregister('audioNormalization');
-                this._compressor = null; this._makeupGain = null; this._connected = false;
-            }
-        },
-        {
             id: 'popOutPlayer',
             name: 'Pop-Out Player',
             description: 'Detach the video into a resizable floating Picture-in-Picture window with transport controls',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'external-link',
             pages: [PageTypes.WATCH],
             _btn: null,
@@ -8254,12 +7853,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const controls = document.querySelector('.ytp-right-controls');
                 if (!controls || controls.querySelector('.ytkit-popout-btn')) return;
                 const btn = document.createElement('button');
-                btn.className = 'ytp-button ytkit-popout-btn';
+                btn.className = 'ytp-button ytkit-player-btn ytkit-popout-btn';
                 btn.title = 'Pop-out Player (YTKit)';
-                TrustedHTML.setHTML(btn, '<svg height="100%" viewBox="0 0 24 24" width="100%" fill="white"><path d="M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>');
-                btn.style.cssText = 'opacity:0.8;transition:opacity 0.2s;';
-                btn.onmouseenter = () => { btn.style.opacity = '1'; };
-                btn.onmouseleave = () => { btn.style.opacity = '0.8'; };
+                TrustedHTML.setHTML(btn, '<svg viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>');
                 btn.onclick = (e) => { e.stopPropagation(); this._activate(); };
                 controls.insertBefore(btn, controls.firstChild);
                 this._btn = btn;
@@ -8279,92 +7875,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
         // ─── v3.2.0 Wave 3: Audio EQ, Watch Tracking, Player Polish ───
 
-        {
-            id: 'audioEqualizer',
-            name: 'Audio Equalizer',
-            description: '10-band equalizer with presets (Bass Boost, Vocal, Treble, etc.) via Web Audio API',
-            group: 'Watch Page',
-            icon: 'sliders-horizontal',
-            pages: [PageTypes.WATCH],
-            type: 'select',
-            options: {
-                'flat': 'Flat',
-                'bass-boost': 'Bass Boost',
-                'treble-boost': 'Treble Boost',
-                'vocal': 'Vocal Clarity',
-                'v-shape': 'V-Shape',
-                'loudness': 'Loudness',
-                'acoustic': 'Acoustic',
-                'electronic': 'Electronic',
-                'podcast': 'Podcast'
-            },
-            settingKey: 'audioEqPreset',
-            _filters: [],
-            _connected: false,
-            // Frequencies: 60, 170, 310, 600, 1K, 3K, 6K, 12K, 14K, 16K
-            _freqs: [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000],
-            _presets: {
-                'flat':          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                'bass-boost':    [6, 5, 4, 2, 0, 0, 0, 0, 0, 0],
-                'treble-boost':  [0, 0, 0, 0, 0, 2, 4, 5, 6, 6],
-                'vocal':         [-2, -1, 0, 2, 4, 4, 3, 1, 0, -1],
-                'v-shape':       [5, 4, 2, 0, -2, -2, 0, 2, 4, 5],
-                'loudness':      [4, 3, 0, 0, -1, 0, 0, -1, 3, 4],
-                'acoustic':      [3, 2, 1, 0, 1, 1, 2, 3, 2, 1],
-                'electronic':    [5, 4, 1, 0, -1, 2, 1, 3, 4, 5],
-                'podcast':       [-3, -1, 0, 3, 5, 5, 3, 1, 0, -2]
-            },
-
-            _connect() {
-                const video = document.querySelector('video.html5-main-video');
-                if (!video || this._connected) return;
-                try {
-                    const ctx = SharedAudio.getContext();
-                    SharedAudio.getSource(video);
-                    // Create filter chain
-                    this._filters = this._freqs.map((freq, i) => {
-                        const filter = ctx.createBiquadFilter();
-                        filter.type = i === 0 ? 'lowshelf' : (i === this._freqs.length - 1 ? 'highshelf' : 'peaking');
-                        filter.frequency.value = freq;
-                        filter.Q.value = 1.0;
-                        filter.gain.value = 0;
-                        return filter;
-                    });
-                    // Chain filters together
-                    for (let i = 0; i < this._filters.length - 1; i++) {
-                        this._filters[i].connect(this._filters[i + 1]);
-                    }
-                    // Register first filter as input, last as output
-                    SharedAudio.register('audioEqualizer', this._filters[0], this._filters[this._filters.length - 1]);
-                    this._connected = true;
-                    this._applyPreset();
-                    DebugManager.log('AudioEQ', 'Equalizer connected via SharedAudio');
-                } catch(e) { DebugManager.log('AudioEQ', 'Failed: ' + e.message); }
-            },
-
-            _applyPreset() {
-                const preset = appState.settings.audioEqPreset || 'flat';
-                const gains = this._presets[preset] || this._presets.flat;
-                this._filters.forEach((f, i) => { f.gain.value = gains[i] || 0; });
-            },
-
-            init() {
-                setTimeout(() => this._connect(), 2500);
-                addNavigateRule('audioEq', () => {
-                    SharedAudio.unregister('audioEqualizer');
-                    this._connected = false; this._filters = [];
-                    setTimeout(() => this._connect(), 2500);
-                });
-                this._settingsHandler = () => this._applyPreset();
-                document.addEventListener('ytkit-settings-changed', this._settingsHandler);
-            },
-            destroy() {
-                removeNavigateRule('audioEq');
-                document.removeEventListener('ytkit-settings-changed', this._settingsHandler);
-                SharedAudio.unregister('audioEqualizer');
-                this._filters = []; this._connected = false;
-            }
-        },
         {
             id: 'watchTimeTracker',
             name: 'Watch Time Tracker',
@@ -8437,7 +7947,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'sortCommentsNewest',
             name: 'Sort Comments Newest First',
             description: 'Automatically switch the comment sort order to "Newest first" on every video',
-            group: 'Watch Page',
+            group: 'Comments',
             icon: 'arrow-down',
             pages: [PageTypes.WATCH],
 
@@ -8589,12 +8099,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (!controls || controls.querySelector('.ytkit-chapter-nav')) return;
                 const makeBtn = (label, dir) => {
                     const btn = document.createElement('button');
-                    btn.className = 'ytp-button ytkit-chapter-nav';
+                    btn.className = 'ytp-button ytkit-player-btn ytkit-player-btn--text ytkit-chapter-nav';
                     btn.title = `${label} Chapter`;
-                    btn.style.cssText = 'font-size:12px;font-weight:700;opacity:0.8;transition:opacity 0.2s;padding:0 4px;';
                     btn.textContent = dir === 'prev' ? '|<' : '>|';
-                    btn.onmouseenter = () => { btn.style.opacity = '1'; };
-                    btn.onmouseleave = () => { btn.style.opacity = '0.8'; };
                     btn.onclick = (e) => { e.stopPropagation(); this._navigate(dir); };
                     return btn;
                 };
@@ -8628,7 +8135,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'videoLoopButton',
             name: 'Video Loop Button',
             description: 'Add a loop toggle button to the player controls for one-click video looping',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'repeat',
             pages: [PageTypes.WATCH],
             _btn: null,
@@ -8637,17 +8144,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const controls = document.querySelector('.ytp-right-controls');
                 if (!controls || controls.querySelector('.ytkit-loop-btn')) return;
                 const btn = document.createElement('button');
-                btn.className = 'ytp-button ytkit-loop-btn';
+                btn.className = 'ytp-button ytkit-player-btn ytkit-loop-btn';
                 btn.title = 'Toggle Loop';
-                TrustedHTML.setHTML(btn, '<svg height="100%" viewBox="0 0 24 24" width="100%" fill="white"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>');
-                btn.style.cssText = 'opacity:0.5;transition:opacity 0.2s;';
+                TrustedHTML.setHTML(btn, '<svg viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>');
                 btn.onclick = (e) => {
                     e.stopPropagation();
                     const video = document.querySelector('video.html5-main-video');
                     if (video) {
                         video.loop = !video.loop;
-                        btn.style.opacity = video.loop ? '1' : '0.5';
-                        btn.style.color = video.loop ? '#22c55e' : '#fff';
+                        btn.classList.toggle('ytkit-player-btn--active', video.loop);
                         showToast(video.loop ? 'Loop enabled' : 'Loop disabled', video.loop ? '#22c55e' : '#f97316');
                     }
                 };
@@ -8670,7 +8175,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'persistentSpeed',
             name: 'Persistent Playback Speed',
             description: 'Remember your preferred playback speed globally and auto-apply it to every video',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'gauge',
             pages: [PageTypes.WATCH],
             type: 'select',
@@ -8704,7 +8209,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'codecSelector',
             name: 'Codec Selector',
             description: 'Choose which video codec to prefer: Auto, H.264 (low CPU), VP9, or AV1 (best quality). Shares codec engine with Force H.264.',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'cpu',
             type: 'select',
             options: {
@@ -8756,7 +8261,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'ageRestrictionBypass',
             name: 'Age Restriction Bypass',
             description: 'Bypass age verification by fetching video data from YouTube\'s embed endpoint. No sign-in required.',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'shield-off',
             pages: [PageTypes.WATCH],
 
@@ -8863,7 +8368,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'thumbnailPreviewSize',
             name: 'Large Thumbnail Previews',
             description: 'Increase the size of thumbnail hover previews for easier viewing on large screens',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'maximize',
             _styleEl: null,
 
@@ -8887,7 +8392,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'cinemaAmbientGlow',
             name: 'Cinema Ambient Glow',
             description: 'Projects dominant video colors as a soft glow behind the player for an immersive cinema feel',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'monitor',
             _canvas: null,
             _ctx: null,
@@ -9064,7 +8569,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'searchFilterDefaults',
             name: 'Search Filter Defaults',
             description: 'Automatically apply a default sort order (upload date, view count, or rating) to YouTube search results',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'filter',
             type: 'select',
             options: [
@@ -9104,7 +8609,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'forceStandardFps',
             name: 'Force Standard Frame Rate',
             description: 'Block 60fps streams to reduce CPU/GPU load — plays 30fps versions instead',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'film',
 
             _observer: null,
@@ -9251,7 +8756,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'autoTheaterMode',
             name: 'Auto Theater Mode',
             description: 'Automatically enter theater (wide) mode when opening a video',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'maximize-2',
 
             _apply() {
@@ -9275,7 +8780,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'resumePlayback',
             name: 'Resume Playback Position',
             description: 'Remember where you stopped watching and automatically resume from that point',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'play-circle',
             _saveInterval: null,
             _positions: null,
@@ -9363,7 +8868,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'miniPlayerBar',
             name: 'Mini Player Bar',
             description: 'Shows a floating mini-player bar at the bottom when you scroll past the video',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'picture-in-picture',
             _bar: null,
             _observer: null,
@@ -9470,7 +8975,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'playbackStatsOverlay',
             name: 'Playback Stats Overlay',
             description: 'Shows video codec, resolution, bitrate, and dropped frame count as a togglable overlay',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'activity',
             _overlay: null,
             _interval: null,
@@ -9489,9 +8994,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 // Toggle visibility with 'i' key while focused on player — NO, user rules say no keyboard shortcuts
                 // Instead, add a button to the player controls
                 const btn = document.createElement('button');
-                btn.className = 'ytp-button ytkit-stats-btn';
+                btn.className = 'ytp-button ytkit-player-btn ytkit-player-btn--text ytkit-stats-btn';
                 btn.title = 'Toggle Stats';
-                btn.style.cssText = 'font-size:11px;color:#fff;opacity:0.7;padding:0 6px;font-family:monospace;';
                 btn.textContent = 'STATS';
                 btn.addEventListener('click', () => {
                     overlay.style.display = overlay.style.display === 'none' ? 'block' : 'none';
@@ -9569,7 +9073,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'autoPauseOnSwitch',
             name: 'Auto-Pause on Tab Switch',
             description: 'Pauses playback when you switch to another tab, resumes when you return',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'pause-circle',
             _handler: null,
             _wasPlaying: false,
@@ -9605,7 +9109,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'creatorCommentHighlight',
             name: 'Highlight Creator Comments',
             description: 'Makes comments from the video creator stand out with a colored border and badge',
-            group: 'Watch Page',
+            group: 'Comments',
             icon: 'user-check',
             _styleEl: null,
 
@@ -9757,7 +9261,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'speedIndicatorOverlay',
             name: 'Speed Indicator Overlay',
             description: 'Shows the current playback speed as a small overlay on the video when not at 1x',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'gauge',
             _overlay: null,
             _interval: null,
@@ -9816,7 +9320,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'fullscreenOnDoubleClick',
             name: 'Double-Click Fullscreen',
             description: 'Double-click anywhere on the video to toggle fullscreen (replaces default seek behavior)',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'maximize',
             _handler: null,
 
@@ -9848,51 +9352,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         // ═══════════════════════════════════════════════════════════════
 
         {
-            id: 'volumeScrollWheel',
-            name: 'Volume Scroll Wheel',
-            description: 'Scroll the mouse wheel over the video player to adjust volume',
-            group: 'Watch Page',
-            icon: 'volume-2',
-            _handler: null,
-
-            init() {
-                this._handler = (e) => {
-                    // Let videoZoom handle Ctrl+wheel
-                    if (e.ctrlKey) return;
-                    const player = e.target.closest('#movie_player, .html5-video-player');
-                    if (!player) return;
-                    const video = player.querySelector('video');
-                    if (!video) return;
-
-                    e.preventDefault();
-                    const delta = e.deltaY > 0 ? -0.05 : 0.05;
-                    const newVol = Math.max(0, Math.min(1, video.volume + delta));
-                    video.volume = newVol;
-                    video.muted = false;
-
-                    // Show YouTube's native volume display
-                    try {
-                        const playerApi = document.querySelector('#movie_player');
-                        if (playerApi?.setVolume) playerApi.setVolume(Math.round(newVol * 100));
-                    } catch(e) { /* player API might not be available */ }
-
-                    // Update rememberVolume if active
-                    if (appState.settings.rememberVolume) {
-                        appState.settings.rememberVolumeLevel = Math.round(newVol * 100);
-                        settingsManager.save(appState.settings);
-                    }
-                };
-                document.addEventListener('wheel', this._handler, { passive: false, capture: true });
-            },
-            destroy() {
-                if (this._handler) { document.removeEventListener('wheel', this._handler, true); this._handler = null; }
-            }
-        },
-        {
             id: 'rememberVolume',
             name: 'Remember Volume',
             description: 'Persist your volume level across videos and sessions',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'volume-1',
 
             _apply() {
@@ -9933,7 +9396,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'pipButton',
             name: 'Picture-in-Picture Button',
             description: 'Adds a one-click PiP button to the player controls for native browser Picture-in-Picture',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'airplay',
             _btn: null,
 
@@ -9944,14 +9407,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (controls.querySelector('.ytkit-pip-btn')) return;
 
                 const btn = document.createElement('button');
-                btn.className = 'ytp-button ytkit-pip-btn';
+                btn.className = 'ytp-button ytkit-player-btn ytkit-player-btn--text ytkit-pip-btn';
                 btn.title = 'Picture-in-Picture';
-                btn.style.cssText = 'font-size:14px;opacity:0.9;padding:0 6px;position:relative;top:0;';
-                // Use a simple text label since we can't easily inject SVG with trustedTypes
                 btn.textContent = 'PiP';
-                btn.style.fontSize = '11px';
-                btn.style.fontWeight = '600';
-                btn.style.letterSpacing = '0.5px';
 
                 btn.addEventListener('click', async () => {
                     // Skip if video is in a Document PiP pop-out
@@ -9991,7 +9449,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'autoSubtitles',
             name: 'Auto-Enable Subtitles',
             description: 'Automatically turns on closed captions when a video starts playing',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'subtitles',
 
             _enable() {
@@ -10055,7 +9513,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'thumbnailQualityUpgrade',
             name: 'HD Thumbnails',
             description: 'Upgrades video thumbnails to maximum resolution where available',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'image',
 
             _upgradeAll() {
@@ -10089,7 +9547,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'watchLaterQuickAdd',
             name: 'Watch Later Quick Button',
             description: 'Adds a clock icon on every thumbnail for one-click Watch Later saving',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'clock',
 
             _addButtons() {
@@ -10224,7 +9682,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'commentSearch',
             name: 'Comment Search',
             description: 'Adds a search bar above comments to filter and find specific comments',
-            group: 'Watch Page',
+            group: 'Comments',
             icon: 'search',
             _bar: null,
 
@@ -10312,7 +9770,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'videoZoom',
             name: 'Video Zoom & Pan',
             description: 'Hold Ctrl and scroll on the video to zoom in, then drag to pan around',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'zoom-in',
             _scale: 1,
             _translateX: 0,
@@ -10487,7 +9945,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'autoClosePopups',
             name: 'Auto-Close Popups',
             description: 'Automatically dismisses cookie consent, survey prompts, and other YouTube popups',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'x-circle',
 
             _dismiss() {
@@ -10522,7 +9980,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'videoResolutionBadge',
             name: 'Resolution Badge on Thumbnails',
             description: 'Shows a 4K, HD, or SD badge on video thumbnails based on available quality',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'monitor',
 
             _addBadges() {
@@ -10709,7 +10167,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'grayscaleThumbnails',
             name: 'Grayscale Thumbnails',
             description: 'Shows thumbnails in grayscale to reduce visual distraction — color restores on hover',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'droplet',
             _styleEl: null,
 
@@ -10737,7 +10195,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'disableAutoplayNext',
             name: 'Disable Autoplay Next Video',
             description: 'Prevents the next video from automatically playing when the current one finishes',
-            group: 'Watch Page',
+            group: 'Playback',
             icon: 'skip-forward',
 
             _disable() {
@@ -10802,7 +10260,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'customSpeedButtons',
             name: 'Speed Preset Buttons',
             description: 'Adds quick speed buttons (0.5x, 1x, 1.25x, 1.5x, 2x, 3x) below the video player',
-            group: 'Watch Page',
+            group: 'Video Player',
             icon: 'fast-forward',
             _container: null,
 
@@ -10869,7 +10327,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'openInNewTab',
             name: 'Open Videos in New Tab',
             description: 'Makes video links on the home/subscriptions page open in a new tab instead of navigating away',
-            group: 'Home / Subscriptions',
+            group: 'Content',
             icon: 'external-link',
             _handler: null,
 
@@ -10899,96 +10357,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (this._handler) { document.removeEventListener('click', this._handler, true); this._handler = null; }
             }
         },
-        {
-            id: 'muteAdAudio',
-            name: 'Mute During Ads',
-            description: 'Automatically mutes audio during detected ad segments and unmutes when the video resumes',
-            group: 'Ad Blocker',
-            icon: 'volume-x',
-            _observer: null,
-            _wasMuted: false,
-            _interval: null,
-
-            _check() {
-                const player = document.querySelector('#movie_player');
-                if (!player) return;
-                const video = document.querySelector('video');
-                if (!video) return;
-
-                const isAd = player.classList.contains('ad-showing') ||
-                             player.classList.contains('ad-interrupting') ||
-                             document.querySelector('.ytp-ad-player-overlay, .ytp-ad-text, .ad-showing');
-
-                if (isAd) {
-                    if (!video.muted) {
-                        this._wasMuted = false;
-                        video.muted = true;
-                    }
-                } else {
-                    if (video.muted && !this._wasMuted) {
-                        video.muted = false;
-                    }
-                    this._wasMuted = video.muted;
-                }
-            },
-
-            init() {
-                this._wasMuted = document.querySelector('video')?.muted || false;
-                this._interval = setInterval(() => this._check(), 500);
-            },
-            destroy() {
-                if (this._interval) { clearInterval(this._interval); this._interval = null; }
-                // Unmute if we muted
-                const video = document.querySelector('video');
-                if (video && video.muted && !this._wasMuted) video.muted = false;
-            }
-        },
 
         // ═══════════════════════════════════════════════════════════════
         //  WAVE 8: RESTORED ARCHIVE FEATURES
         // ═══════════════════════════════════════════════════════════════
 
-        // ── SponsorBlock Per-Category Controls ──
-        {
-            id: 'sbCat_sponsor', name: 'Skip: Sponsor', description: 'Auto-skip sponsor segments',
-            group: 'Ad Blocker', icon: 'skip-forward', isSubFeature: true, parentId: 'skipSponsors',
-            _arrayKey: 'sponsorBlockCategories', _arrayValue: 'sponsor', init(){}, destroy(){}
-        },
-        {
-            id: 'sbCat_selfpromo', name: 'Skip: Self Promotion', description: 'Auto-skip self-promotion segments',
-            group: 'Ad Blocker', icon: 'skip-forward', isSubFeature: true, parentId: 'skipSponsors',
-            _arrayKey: 'sponsorBlockCategories', _arrayValue: 'selfpromo', init(){}, destroy(){}
-        },
-        {
-            id: 'sbCat_interaction', name: 'Skip: Interaction Reminder', description: 'Auto-skip subscribe/like reminders',
-            group: 'Ad Blocker', icon: 'skip-forward', isSubFeature: true, parentId: 'skipSponsors',
-            _arrayKey: 'sponsorBlockCategories', _arrayValue: 'interaction', init(){}, destroy(){}
-        },
-        {
-            id: 'sbCat_intro', name: 'Skip: Intro', description: 'Auto-skip intro animations',
-            group: 'Ad Blocker', icon: 'skip-forward', isSubFeature: true, parentId: 'skipSponsors',
-            _arrayKey: 'sponsorBlockCategories', _arrayValue: 'intro', init(){}, destroy(){}
-        },
-        {
-            id: 'sbCat_outro', name: 'Skip: Outro', description: 'Auto-skip outro/credits',
-            group: 'Ad Blocker', icon: 'skip-forward', isSubFeature: true, parentId: 'skipSponsors',
-            _arrayKey: 'sponsorBlockCategories', _arrayValue: 'outro', init(){}, destroy(){}
-        },
-        {
-            id: 'sbCat_music_offtopic', name: 'Skip: Off-Topic Music', description: 'Auto-skip non-music in music videos',
-            group: 'Ad Blocker', icon: 'skip-forward', isSubFeature: true, parentId: 'skipSponsors',
-            _arrayKey: 'sponsorBlockCategories', _arrayValue: 'music_offtopic', init(){}, destroy(){}
-        },
-        {
-            id: 'sbCat_preview', name: 'Skip: Preview/Recap', description: 'Auto-skip preview or recap sections',
-            group: 'Ad Blocker', icon: 'skip-forward', isSubFeature: true, parentId: 'skipSponsors',
-            _arrayKey: 'sponsorBlockCategories', _arrayValue: 'preview', init(){}, destroy(){}
-        },
-        {
-            id: 'sbCat_filler', name: 'Skip: Filler', description: 'Auto-skip filler/tangent sections',
-            group: 'Ad Blocker', icon: 'skip-forward', isSubFeature: true, parentId: 'skipSponsors',
-            _arrayKey: 'sponsorBlockCategories', _arrayValue: 'filler', init(){}, destroy(){}
-        },
 
         // ── CSS-Only Features ──
         cssFeature('hideNotificationButton', 'Hide Notification Bell', 'Remove the notification bell icon from the header', 'Interface', 'bell-off',
@@ -11098,7 +10471,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'chronologicalNotifications',
             name: 'Sort Notifications',
             description: 'Sort notifications chronologically (newest first)',
-            group: 'Interface',
+            group: 'Advanced',
             icon: 'bell-ring',
             _observer: null,
             init() {
@@ -11196,7 +10569,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'commentNavigator',
             name: 'Comment Navigator',
             description: 'Quick-jump between top-level comments with floating prev/next buttons',
-            group: 'Clutter',
+            group: 'Advanced',
             icon: 'messages-square',
             _container: null,
             _currentIndex: -1,
@@ -11283,7 +10656,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'themeAccentColor',
             name: 'Accent Color',
             description: 'Custom accent color for highlights, progress bar, and active UI elements',
-            group: 'Appearance',
+            group: 'Theme',
             icon: 'palette',
             type: 'color',
             _styleElement: null,
@@ -11348,8 +10721,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const player = document.querySelector('#movie_player, .html5-video-player');
                     if (!player || !player.contains(e.target)) return;
                     if (e.target.closest('.ytp-chrome-bottom, .ytp-settings-menu')) return;
-                    // Yield to volumeScrollWheel when it's active
-                    if (appState.settings.volumeScrollWheel && !e.shiftKey) return;
+                    if (!e.shiftKey) return; // Require Shift+scroll for speed adjustment
                     const video = player.querySelector('video');
                     if (!video) return;
                     e.preventDefault();
@@ -11500,7 +10872,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             id: 'enableHandleRevealer',
             name: 'Comment Handle Revealer',
             description: 'Show the original channel name next to @handle in comments',
-            group: 'Clutter',
+            group: 'Advanced',
             icon: 'at-sign',
             _observer: null,
             _nameMap: null,
@@ -11791,97 +11163,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         },
 
-        // ── Embed Player ──
-        {
-            id: 'enableEmbedPlayer',
-            name: 'Embed Player',
-            description: 'Replace YouTube player with a custom HTML5 player (requires YTYT-Downloader/MediaDL server)',
-            group: 'Downloads',
-            icon: 'monitor-play',
-            _styleElement: null,
-            _videoEl: null,
-            _audioEl: null,
-            _keyHandler: null,
-            init() {
-                const self = this;
-                const css = `
-                    .ytkit-embed-active > *:not(.ytkit-embed-video):not(.ytkit-embed-audio) { display: none !important; }
-                    .ytkit-embed-video { position:absolute;width:100%;height:100%;z-index:99999;object-fit:contain;background:#000; }
-                `;
-                this._styleElement = injectStyle(css, this.id, true);
-                const createButton = () => {
-                    const btn = document.createElement('a');
-                    btn.className = 'ytkit-embed-btn';
-                    btn.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border-radius:18px;background:#06b6d4;color:#fff;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;transition:opacity 0.2s;margin-left:6px;';
-                    btn.textContent = 'Embed';
-                    btn.title = 'Use custom embed player';
-                    btn.addEventListener('click', async () => {
-                        try {
-                            const controller = new AbortController();
-                            setTimeout(() => controller.abort(), 3000);
-                            await fetch('http://127.0.0.1:9751/status', { signal: controller.signal });
-                        } catch(e) {
-                            showToast('MediaDL server not running. Install from Settings.', '#ef4444');
-                            return;
-                        }
-                        const params = new URLSearchParams(window.location.search);
-                        const videoId = params.get('v');
-                        if (!videoId) return;
-                        try {
-                            const resp = await fetch(`http://127.0.0.1:9751/stream?id=${videoId}`);
-                            const data = await resp.json();
-                            if (!data.success) { showToast('Embed failed: ' + (data.error || 'Unknown error'), '#ef4444'); return; }
-                            self._activateEmbed(data);
-                        } catch(e) { showToast('Embed error: ' + e.message, '#ef4444'); }
-                    });
-                    return btn;
-                };
-                registerPersistentButton('embedButton', '#top-level-buttons-computed', '.ytkit-embed-btn', createButton);
-                startButtonChecker();
-            },
-            _activateEmbed(data) {
-                const player = document.getElementById('movie_player');
-                if (!player) return;
-                player.classList.add('ytkit-embed-active');
-                const ytVideo = player.querySelector('video');
-                if (ytVideo) { ytVideo.pause(); ytVideo.src = ''; }
-                const video = document.createElement('video');
-                video.className = 'ytkit-embed-video';
-                video.controls = true; video.autoplay = true; video.src = data.videoUrl;
-                player.appendChild(video);
-                this._videoEl = video;
-                if (data.audioUrl && data.audioUrl !== data.videoUrl) {
-                    const audio = document.createElement('audio');
-                    audio.className = 'ytkit-embed-audio';
-                    audio.src = data.audioUrl;
-                    audio.style.display = 'none';
-                    player.appendChild(audio);
-                    this._audioEl = audio;
-                    video.addEventListener('play', () => audio.play());
-                    video.addEventListener('pause', () => audio.pause());
-                    video.addEventListener('seeked', () => { audio.currentTime = video.currentTime; });
-                    video.addEventListener('ratechange', () => { audio.playbackRate = video.playbackRate; });
-                }
-                this._keyHandler = (e) => {
-                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-                    if (e.key === ' ' || e.key === 'k') { e.preventDefault(); video.paused ? video.play() : video.pause(); }
-                    if (e.key === 'f') { e.preventDefault(); document.fullscreenElement ? document.exitFullscreen() : video.requestFullscreen(); }
-                    if (e.key === 'm') { e.preventDefault(); video.muted = !video.muted; }
-                    if (e.key === 'ArrowLeft') { e.preventDefault(); video.currentTime -= 5; }
-                    if (e.key === 'ArrowRight') { e.preventDefault(); video.currentTime += 5; }
-                };
-                document.addEventListener('keydown', this._keyHandler);
-                showToast('Embed player active', '#06b6d4');
-            },
-            destroy() {
-                unregisterPersistentButton('embedButton');
-                this._styleElement?.remove(); this._styleElement = null;
-                document.querySelector('.ytkit-embed-btn')?.remove();
-                if (this._keyHandler) document.removeEventListener('keydown', this._keyHandler);
-                this._videoEl?.remove(); this._audioEl?.remove();
-                document.getElementById('movie_player')?.classList.remove('ytkit-embed-active');
-            }
-        },
 
         // ── DeArrow ──
         {
@@ -12708,12 +11989,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
     };
 
     const CATEGORY_CONFIG = {
-        'Watch Page': { icon: 'player', color: '#a78bfa' },
+        'Video Player': { icon: 'player', color: '#a78bfa' },
+        'Playback': { icon: 'skip-forward', color: '#c084fc' },
+        'Comments': { icon: 'message-square', color: '#22d3ee' },
+        'Watch Page': { icon: 'monitor', color: '#6366f1' },
+        'Content': { icon: 'eye-off', color: '#f472b6' },
         'Home / Subscriptions': { icon: 'interface', color: '#60a5fa' },
-        'Theme': { icon: 'appearance', color: '#f472b6' },
-        'Ad Blocker': { icon: 'shield', color: '#10b981' },
+        'Theme': { icon: 'appearance', color: '#fb923c' },
         'Live Chat': { icon: 'livechat', color: '#4ade80' },
         'Downloads': { icon: 'downloads', color: '#f97316' },
+        'Advanced': { icon: 'settings', color: '#94a3b8' },
     };
 
     function injectSettingsButton() {
@@ -12773,7 +12058,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _wasPanelOpen = isOpen;
         }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
-        const categoryOrder = ['Watch Page', 'Home / Subscriptions', 'Theme', 'Ad Blocker', 'Live Chat', 'Downloads'];
+        const categoryOrder = ['Video Player', 'Playback', 'Comments', 'Watch Page', 'Content', 'Home / Subscriptions', 'Theme', 'Live Chat', 'Downloads', 'Advanced'];
 
         // Group labels: maps first category of each group → label text
         const categoryGroupLabels = {};
@@ -12924,19 +12209,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
 
 
-            // Ad Blocker sidebar — live ad count
-            if (cat === 'Ad Blocker') {
-                const config = CATEGORY_CONFIG[cat];
-                const st = window.__ytab?.stats;
-                const { btn, countSpan } = makeNavBtn(cat, config, (ICONS.shield || ICONS.settings)(), st ? `${st.blocked}` : '0', 'Ads blocked this session', index === 0 ? ' active' : '');
-                const _adCountInterval = setInterval(() => {
-                    const s = window.__ytab?.stats;
-                    if (s) countSpan.textContent = `${s.blocked}`;
-                }, 3000);
-                _panelCleanups.push(() => clearInterval(_adCountInterval));
-                sidebar.appendChild(btn);
-                return;
-            }
 
             const categoryFeatures = featuresByCategory[cat];
             if (!categoryFeatures || categoryFeatures.length === 0) return;
@@ -12975,415 +12247,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         // Content
         const content = document.createElement('div');
         content.className = 'ytkit-content';
-
-        //  Ad Blocker Custom Pane
-        function buildAdBlockPane(config) {
-            const adblockFeature = features.find(f => f.id === 'ytAdBlock');
-            const subFeatures = features.filter(f => f.parentId === 'ytAdBlock');
-
-            const pane = document.createElement('section');
-            pane.id = 'ytkit-pane-Ad-Blocker';
-            pane.className = 'ytkit-pane';
-
-            // ── Header ──
-            const paneHeader = document.createElement('div');
-            paneHeader.className = 'ytkit-pane-header';
-
-            const paneTitle = document.createElement('div');
-            paneTitle.className = 'ytkit-pane-title';
-
-            const paneTitleH2 = document.createElement('h2');
-            paneTitleH2.textContent = 'Ad Blocker';
-
-            paneTitle.appendChild(paneTitleH2);
-
-            // Master toggle
-            const toggleLabel = document.createElement('label');
-            toggleLabel.className = 'ytkit-toggle-all';
-            toggleLabel.style.marginLeft = 'auto';
-
-            const toggleText = document.createElement('span');
-            toggleText.textContent = 'Enabled';
-
-            const toggleSwitch = document.createElement('div');
-            toggleSwitch.className = 'ytkit-switch' + (appState.settings.ytAdBlock ? ' active' : '');
-
-            const toggleInput = document.createElement('input');
-            toggleInput.type = 'checkbox';
-            toggleInput.id = 'ytkit-toggle-ytAdBlock';
-            toggleInput.checked = appState.settings.ytAdBlock;
-            toggleInput.onchange = async () => {
-                appState.settings.ytAdBlock = toggleInput.checked;
-                toggleSwitch.classList.toggle('active', toggleInput.checked);
-                settingsManager.save(appState.settings);
-                if (toggleInput.checked) adblockFeature?.init?.(); else adblockFeature?.destroy?.();
-                updateAllToggleStates();
-            };
-
-            const toggleTrack = document.createElement('span');
-            toggleTrack.className = 'ytkit-switch-track';
-            const toggleThumb = document.createElement('span');
-            toggleThumb.className = 'ytkit-switch-thumb';
-            toggleTrack.appendChild(toggleThumb);
-            toggleSwitch.appendChild(toggleInput);
-            toggleSwitch.appendChild(toggleTrack);
-            toggleLabel.appendChild(toggleText);
-            toggleLabel.appendChild(toggleSwitch);
-
-            paneHeader.appendChild(paneTitle);
-            paneHeader.appendChild(toggleLabel);
-            pane.appendChild(paneHeader);
-
-            // ── Sub-feature toggles ──
-            const subGrid = document.createElement('div');
-            subGrid.className = 'ytkit-features-grid';
-            subFeatures.forEach(sf => { subGrid.appendChild(buildFeatureCard(sf, config.color, true)); });
-            pane.appendChild(subGrid);
-
-            // ── Shared styles for this pane ──
-            const sectionStyle = 'background:var(--ytkit-bg-elevated);border-radius:8px;padding:12px;margin-top:8px;';
-            const labelStyle = 'font-size:12px;font-weight:600;color:var(--ytkit-text);margin-bottom:6px;display:flex;align-items:center;gap:5px;';
-            const inputStyle = 'width:100%;background:var(--ytkit-bg-card);color:var(--ytkit-text);border:1px solid var(--ytkit-border);border-radius:5px;padding:6px 8px;font-size:12px;font-family:inherit;outline:none;transition:border-color 0.2s;';
-            const btnStyle = `background:${config.color};color:#000;border:none;padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;transition:opacity 0.2s;`;
-            const btnSecStyle = 'background:var(--ytkit-bg-card);color:var(--ytkit-text);border:1px solid var(--ytkit-border);padding:5px 12px;border-radius:5px;font-size:11px;font-weight:500;cursor:pointer;transition:opacity 0.2s;';
-
-            // ── Stats Section ──
-            const statsSection = document.createElement('div');
-            statsSection.style.cssText = sectionStyle;
-
-            function makeStat(label, valueGetter, color, scope) {
-                const box = document.createElement('div');
-                box.style.cssText = 'background:var(--ytkit-bg-card);padding:8px;border-radius:6px;text-align:center;';
-                const num = document.createElement('div');
-                num.style.cssText = `font-size:18px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;`;
-                num.textContent = valueGetter();
-                num.dataset.statKey = label;
-                num.dataset.statScope = scope || 'session';
-                const lbl = document.createElement('div');
-                lbl.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);margin-top:2px;';
-                lbl.textContent = label;
-                box.appendChild(num);
-                box.appendChild(lbl);
-                return box;
-            }
-
-            // Session stats
-            const sessionLabel = document.createElement('div');
-            sessionLabel.style.cssText = labelStyle;
-            sessionLabel.textContent = 'Session';
-            statsSection.appendChild(sessionLabel);
-
-            const statsGrid = document.createElement('div');
-            statsGrid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:8px;';
-            const s = window.__ytab?.stats || { blocked: 0, pruned: 0, ssapSkipped: 0 };
-            statsGrid.appendChild(makeStat('Ads Blocked', () => s.blocked, config.color, 'session'));
-            statsGrid.appendChild(makeStat('JSON Pruned', () => s.pruned, '#a78bfa', 'session'));
-            statsGrid.appendChild(makeStat('SSAP Skipped', () => s.ssapSkipped, '#f59e0b', 'session'));
-            statsSection.appendChild(statsGrid);
-
-            // Lifetime stats
-            const lifetimeLabel = document.createElement('div');
-            lifetimeLabel.style.cssText = labelStyle + 'margin-top:8px;';
-            lifetimeLabel.textContent = 'Lifetime';
-            statsSection.appendChild(lifetimeLabel);
-
-            const lifetimeGrid = document.createElement('div');
-            lifetimeGrid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:8px;';
-            const lt = _lifetimeStats.get();
-            lifetimeGrid.appendChild(makeStat('Ads Blocked', () => lt.blocked, config.color, 'lifetime'));
-            lifetimeGrid.appendChild(makeStat('JSON Pruned', () => lt.pruned, '#a78bfa', 'lifetime'));
-            lifetimeGrid.appendChild(makeStat('SSAP Skipped', () => lt.ssapSkipped, '#f59e0b', 'lifetime'));
-            statsSection.appendChild(lifetimeGrid);
-
-            // Auto-refresh stats
-            let statsInterval = null;
-            const refreshStats = () => {
-                const st = window.__ytab?.stats || { blocked: 0, pruned: 0, ssapSkipped: 0 };
-                _lifetimeStats.accumulate(st);
-                const ltNow = _lifetimeStats.get();
-                statsSection.querySelectorAll('[data-stat-key]').forEach(el => {
-                    const key = el.dataset.statKey;
-                    const scope = el.dataset.statScope;
-                    const src = scope === 'lifetime' ? ltNow : st;
-                    if (key === 'Ads Blocked') el.textContent = src.blocked;
-                    else if (key === 'JSON Pruned') el.textContent = src.pruned;
-                    else if (key === 'SSAP Skipped') el.textContent = src.ssapSkipped;
-                });
-            };
-            // Start/stop interval when pane is visible
-            const _statsPaneObserver = new MutationObserver(() => {
-                if (pane.classList.contains('active')) {
-                    refreshStats();
-                    if (!statsInterval) statsInterval = setInterval(refreshStats, 2000);
-                } else {
-                    if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
-                }
-            });
-            _statsPaneObserver.observe(pane, { attributes: true, attributeFilter: ['class'] });
-            _panelCleanups.push(() => { _statsPaneObserver.disconnect(); if (statsInterval) { clearInterval(statsInterval); statsInterval = null; } });
-
-            pane.appendChild(statsSection);
-
-            // ── Filter List Management ──
-            const filterSection = document.createElement('div');
-            filterSection.style.cssText = sectionStyle;
-
-            const filterLabel = document.createElement('div');
-            filterLabel.style.cssText = labelStyle;
-            filterLabel.textContent = 'Remote Filter List';
-            filterSection.appendChild(filterLabel);
-
-            // URL row
-            const urlRow = document.createElement('div');
-            urlRow.style.cssText = 'display:flex;gap:8px;align-items:center;';
-            const urlInput = document.createElement('input');
-            urlInput.type = 'text';
-            urlInput.style.cssText = inputStyle + 'flex:1;';
-            urlInput.value = appState.settings.adblockFilterUrl || '';
-            urlInput.placeholder = 'Filter list URL (.txt format)';
-            urlInput.spellcheck = false;
-
-            const saveUrlBtn = document.createElement('button');
-            saveUrlBtn.style.cssText = btnSecStyle;
-            saveUrlBtn.textContent = 'Save';
-            saveUrlBtn.onclick = async () => {
-                appState.settings.adblockFilterUrl = urlInput.value.trim();
-                settingsManager.save(appState.settings);
-                createToast('Filter URL saved', 'success');
-            };
-
-            urlRow.appendChild(urlInput);
-            urlRow.appendChild(saveUrlBtn);
-            filterSection.appendChild(urlRow);
-
-            // Info + Update row
-            const infoRow = document.createElement('div');
-            infoRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-top:8px;';
-
-            const filterInfo = document.createElement('div');
-            filterInfo.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);';
-            const cachedTime = GM_getValue('ytab_filter_update_time', 0);
-            const cachedCount = GM_getValue('ytab_cached_selector_count', 0);
-            filterInfo.textContent = cachedTime
-                ? `${cachedCount} selectors | Updated ${new Date(cachedTime).toLocaleString()}`
-                : 'No filters loaded yet';
-
-            const updateBtn = document.createElement('button');
-            updateBtn.style.cssText = btnStyle;
-            updateBtn.textContent = 'Update Filters';
-            updateBtn.onclick = () => {
-                updateBtn.textContent = 'Fetching...';
-                updateBtn.style.opacity = '0.6';
-                const url = (appState.settings.adblockFilterUrl || '').trim();
-                if (!url) { createToast('No filter URL set', 'error'); updateBtn.textContent = 'Update Filters'; updateBtn.style.opacity = '1'; return; }
-
-                GM.xmlHttpRequest({
-                    method: 'GET',
-                    url: url + '?_=' + Date.now(),
-                    timeout: 15000,
-                    onload(resp) {
-                        if (resp.status >= 200 && resp.status < 400) {
-                            const text = resp.responseText || '';
-                            const selectors = window.__ytab?.parseFilterList?.(text) || [];
-                            const selectorStr = selectors.join(',\n');
-                            GM_setValue('ytab_cached_selectors', selectorStr);
-                            GM_setValue('ytab_filter_update_time', Date.now());
-                            GM_setValue('ytab_cached_selector_count', selectors.length);
-                            GM_setValue('ytab_raw_filters', text);
-                            // Apply live
-                            const custom = GM_getValue('ytab_custom_filters', '');
-                            const combined = [selectorStr, custom].filter(Boolean).join(',\n');
-                            window.__ytab?.updateCSS?.(combined);
-                            filterInfo.textContent = `${selectors.length} selectors | Updated ${new Date().toLocaleString()}`;
-                            createToast(`Filters updated: ${selectors.length} cosmetic selectors parsed`, 'success');
-                            // Refresh preview if open
-                            if (previewArea.style.display !== 'none') renderPreview();
-                        } else {
-                            createToast(`Filter fetch failed: HTTP ${resp.status}`, 'error');
-                        }
-                        updateBtn.textContent = 'Update Filters';
-                        updateBtn.style.opacity = '1';
-                    },
-                    onerror() { createToast('Filter fetch failed (network error)', 'error'); updateBtn.textContent = 'Update Filters'; updateBtn.style.opacity = '1'; },
-                    ontimeout() { createToast('Filter fetch timed out', 'error'); updateBtn.textContent = 'Update Filters'; updateBtn.style.opacity = '1'; }
-                });
-            };
-
-            infoRow.appendChild(filterInfo);
-            infoRow.appendChild(updateBtn);
-            filterSection.appendChild(infoRow);
-
-            // ── Bootstrap Status Indicator ──
-            const statusRow = document.createElement('div');
-            statusRow.style.cssText = 'display:flex;align-items:center;gap:5px;margin-top:8px;padding:6px 8px;background:var(--ytkit-bg-card);border-radius:5px;';
-            const statusDot = document.createElement('span');
-            const isActive = !!window.__ytab?.active;
-            statusDot.style.cssText = `width:6px;height:6px;border-radius:50%;background:${isActive ? config.color : '#ef4444'};flex-shrink:0;`;
-            const statusText = document.createElement('span');
-            statusText.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);';
-            statusText.textContent = isActive
-                ? 'Proxy engines active (installed at document-start)'
-                : 'Proxies not installed - enable Ad Blocker and reload page';
-            statusRow.appendChild(statusDot);
-            statusRow.appendChild(statusText);
-            filterSection.appendChild(statusRow);
-
-            // ── Live Ad-Block Stats ──
-            if (isActive) {
-                const statsRow = document.createElement('div');
-                statsRow.style.cssText = 'display:flex;gap:10px;margin-top:6px;padding:6px 8px;background:var(--ytkit-bg-card);border-radius:5px;';
-                const abStats = window.__ytab?.stats || { blocked: 0, pruned: 0, ssapSkipped: 0 };
-                const statItems = [
-                    { label: 'Blocked', value: abStats.blocked, color: '#22c55e' },
-                    { label: 'Pruned', value: abStats.pruned, color: '#3b82f6' },
-                    { label: 'Skipped', value: abStats.ssapSkipped, color: '#f59e0b' }
-                ];
-                statItems.forEach(s => {
-                    const item = document.createElement('div');
-                    item.style.cssText = 'display:flex;align-items:center;gap:4px;';
-                    const dot = document.createElement('span');
-                    dot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:' + s.color + ';flex-shrink:0;';
-                    const lbl = document.createElement('span');
-                    lbl.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
-                    lbl.textContent = s.label + ': ' + s.value;
-                    item.appendChild(dot);
-                    item.appendChild(lbl);
-                    statsRow.appendChild(item);
-                });
-                filterSection.appendChild(statsRow);
-                // Auto-refresh stats every 5s while panel is open
-                const filterStatsInterval = setInterval(() => {
-                    const live = window.__ytab?.stats || {};
-                    const labels = statsRow.querySelectorAll('span:last-child');
-                    if (labels[0]) labels[0].textContent = 'Blocked: ' + (live.blocked || 0);
-                    if (labels[1]) labels[1].textContent = 'Pruned: ' + (live.pruned || 0);
-                    if (labels[2]) labels[2].textContent = 'Skipped: ' + (live.ssapSkipped || 0);
-                }, 5000);
-                _panelCleanups.push(() => clearInterval(filterStatsInterval));
-            }
-
-            pane.appendChild(filterSection);
-
-            // ── Custom Filters Section ──
-            const customSection = document.createElement('div');
-            customSection.style.cssText = sectionStyle;
-
-            const customLabel = document.createElement('div');
-            customLabel.style.cssText = labelStyle;
-            customLabel.textContent = 'Custom Filters';
-
-            const customHint = document.createElement('span');
-            customHint.style.cssText = 'font-weight:400;color:var(--ytkit-text-muted);font-size:10px;';
-            customHint.textContent = '(CSS selectors, one per line)';
-            customLabel.appendChild(customHint);
-            customSection.appendChild(customLabel);
-
-            const customTextarea = document.createElement('textarea');
-            customTextarea.style.cssText = inputStyle + 'min-height:80px;resize:vertical;font-family:"Cascadia Code","Fira Code",monospace;font-size:11px;line-height:1.4;';
-            customTextarea.value = (GM_getValue('ytab_custom_filters', '') || '').replace(/,\n/g, '\n').replace(/,/g, '\n');
-            customTextarea.placeholder = 'ytd-merch-shelf-renderer\n.ytp-ad-overlay-slot\n#custom-ad-element';
-            customTextarea.spellcheck = false;
-
-            customSection.appendChild(customTextarea);
-
-            const customBtnRow = document.createElement('div');
-            customBtnRow.style.cssText = 'display:flex;gap:6px;margin-top:8px;';
-
-            const saveCustomBtn = document.createElement('button');
-            saveCustomBtn.style.cssText = btnStyle;
-            saveCustomBtn.textContent = 'Apply Filters';
-            saveCustomBtn.onclick = () => {
-                const lines = customTextarea.value.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('!') && !l.startsWith('//'));
-                const selectorStr = lines.join(',\n');
-                GM_setValue('ytab_custom_filters', selectorStr);
-                // Apply live
-                const remote = GM_getValue('ytab_cached_selectors', '');
-                const combined = [remote, selectorStr].filter(Boolean).join(',\n');
-                window.__ytab?.updateCSS?.(combined);
-                createToast(`${lines.length} custom filter${lines.length !== 1 ? 's' : ''} applied`, 'success');
-            };
-
-            const clearCustomBtn = document.createElement('button');
-            clearCustomBtn.style.cssText = btnSecStyle;
-            clearCustomBtn.textContent = 'Clear';
-            clearCustomBtn.onclick = () => {
-                customTextarea.value = '';
-                GM_setValue('ytab_custom_filters', '');
-                const remote = GM_getValue('ytab_cached_selectors', '');
-                window.__ytab?.updateCSS?.(remote);
-                createToast('Custom filters cleared', 'success');
-            };
-
-            customBtnRow.appendChild(saveCustomBtn);
-            customBtnRow.appendChild(clearCustomBtn);
-            customSection.appendChild(customBtnRow);
-            pane.appendChild(customSection);
-
-            // ── Active Filters Preview (collapsible) ──
-            const previewSection = document.createElement('div');
-            previewSection.style.cssText = sectionStyle;
-
-            const previewHeader = document.createElement('div');
-            previewHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;cursor:pointer;';
-
-            const previewLabel = document.createElement('div');
-            previewLabel.style.cssText = labelStyle + 'margin-bottom:0;';
-            previewLabel.textContent = 'Active Filters Preview';
-
-            const previewToggle = document.createElement('span');
-            previewToggle.style.cssText = 'font-size:10px;color:var(--ytkit-text-muted);';
-            previewToggle.textContent = 'Show';
-
-            previewHeader.appendChild(previewLabel);
-            previewHeader.appendChild(previewToggle);
-
-            const previewArea = document.createElement('pre');
-            previewArea.style.cssText = 'display:none;margin-top:8px;padding:8px;background:var(--ytkit-bg-card);border-radius:5px;font-size:10px;color:var(--ytkit-text-muted);font-family:"Cascadia Code","Fira Code",monospace;max-height:250px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.5;';
-
-            function renderPreview() {
-                const remote = (GM_getValue('ytab_cached_selectors', '') || '').split(',\n').filter(Boolean);
-                const custom = (GM_getValue('ytab_custom_filters', '') || '').split(',\n').filter(Boolean);
-                let text = '';
-                if (remote.length) text += `/* Remote (${remote.length}) */\n` + remote.join('\n') + '\n\n';
-                if (custom.length) text += `/* Custom (${custom.length}) */\n` + custom.join('\n');
-                if (!text) text = 'No filters loaded. Click "Update Filters" to fetch from remote URL.';
-                previewArea.textContent = text;
-            }
-
-            previewHeader.onclick = () => {
-                const showing = previewArea.style.display !== 'none';
-                previewArea.style.display = showing ? 'none' : 'block';
-                previewToggle.textContent = showing ? 'Show' : 'Hide';
-                if (!showing) renderPreview();
-            };
-
-            previewSection.appendChild(previewHeader);
-            previewSection.appendChild(previewArea);
-            pane.appendChild(previewSection);
-
-            // ── SponsorBlock & other Ad Blocker features ──
-            const otherAdFeatures = features.filter(f => f.group === 'Ad Blocker' && f.id !== 'ytAdBlock' && f.parentId !== 'ytAdBlock' && !f.isSubFeature);
-            if (otherAdFeatures.length > 0) {
-                const otherGrid = document.createElement('div');
-                otherGrid.className = 'ytkit-features-grid';
-                otherGrid.style.marginTop = '12px';
-                otherAdFeatures.forEach(f => {
-                    otherGrid.appendChild(buildFeatureCard(f, config.color));
-                    const children = features.filter(sf => sf.parentId === f.id);
-                    if (children.length > 0) {
-                        const subContainer = document.createElement('div');
-                        subContainer.className = 'ytkit-sub-features';
-                        subContainer.dataset.parentId = f.id;
-                        if (!appState.settings[f.id]) subContainer.style.display = 'none';
-                        children.forEach(sf => subContainer.appendChild(buildFeatureCard(sf, config.color, true)));
-                        otherGrid.appendChild(subContainer);
-                    }
-                });
-                pane.appendChild(otherGrid);
-            }
-
-            return pane;
-        }
 
         //  Video Hider Custom Pane
         function buildVideoHiderPane(config) {
@@ -13761,12 +12624,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         }
 
         categoryOrder.forEach((cat, index) => {
-            // Special handling for Ad Blocker
-            if (cat === 'Ad Blocker') {
-                const config = CATEGORY_CONFIG[cat];
-                content.appendChild(buildAdBlockPane(config));
-                return;
-            }
 
             const categoryFeatures = featuresByCategory[cat];
             if (!categoryFeatures || categoryFeatures.length === 0) return;
@@ -13879,6 +12736,168 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             paneHeader.appendChild(resetBtn);
             paneHeader.appendChild(toggleAllLabel);
             pane.appendChild(paneHeader);
+
+            // MediaDL status banner for Downloads pane
+            if (cat === 'Downloads') {
+                const banner = document.createElement('div');
+                banner.id = 'ytkit-mediadl-banner';
+                banner.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:10px;padding:14px 16px;margin-bottom:16px;';
+
+                const bannerTop = document.createElement('div');
+                bannerTop.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;';
+
+                const bannerLeft = document.createElement('div');
+                bannerLeft.style.cssText = 'display:flex;align-items:center;gap:10px;flex:1;min-width:0;';
+                const statusDot = document.createElement('span');
+                statusDot.id = 'ytkit-mediadl-status-dot';
+                statusDot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#6b7280;flex-shrink:0;transition:background 0.3s;';
+                const bannerInfo = document.createElement('div');
+                bannerInfo.style.cssText = 'min-width:0;';
+                const bannerTitle = document.createElement('div');
+                bannerTitle.style.cssText = 'font-size:13px;font-weight:600;color:var(--ytkit-text-primary);';
+                bannerTitle.textContent = 'MediaDL Server';
+                const bannerStatus = document.createElement('div');
+                bannerStatus.id = 'ytkit-mediadl-status-text';
+                bannerStatus.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);margin-top:2px;';
+                bannerStatus.textContent = 'Checking...';
+                bannerInfo.appendChild(bannerTitle);
+                bannerInfo.appendChild(bannerStatus);
+                bannerLeft.appendChild(statusDot);
+                bannerLeft.appendChild(bannerInfo);
+
+                const bannerActions = document.createElement('div');
+                bannerActions.id = 'ytkit-mediadl-banner-actions';
+                bannerActions.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+
+                bannerTop.appendChild(bannerLeft);
+                bannerTop.appendChild(bannerActions);
+                banner.appendChild(bannerTop);
+
+                // Feature comparison (shown when not installed)
+                const comparison = document.createElement('div');
+                comparison.id = 'ytkit-mediadl-comparison';
+                comparison.style.cssText = 'display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--ytkit-border);';
+                banner.appendChild(comparison);
+
+                pane.appendChild(banner);
+
+                // Check MediaDL status and update banner
+                (async () => {
+                    const result = await MediaDLManager.check();
+                    const dot = document.getElementById('ytkit-mediadl-status-dot');
+                    const text = document.getElementById('ytkit-mediadl-status-text');
+                    const actions = document.getElementById('ytkit-mediadl-banner-actions');
+                    const comp = document.getElementById('ytkit-mediadl-comparison');
+                    if (!dot || !text || !actions) return;
+
+                    if (result.ok) {
+                        dot.style.background = '#22c55e';
+                        text.textContent = `Running${result.version ? ' (v' + result.version + ')' : ''} \u2014 1080p+ downloads with muxing`;
+                        // Add a "Check" refresh button
+                        const refreshBtn = document.createElement('button');
+                        refreshBtn.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid var(--ytkit-border);background:transparent;color:var(--ytkit-text-secondary);font-size:11px;cursor:pointer;';
+                        refreshBtn.textContent = 'Refresh';
+                        refreshBtn.onclick = async () => {
+                            refreshBtn.textContent = '...';
+                            const r = await MediaDLManager.check(true);
+                            dot.style.background = r.ok ? '#22c55e' : '#ef4444';
+                            text.textContent = r.ok ? `Running${r.version ? ' (v' + r.version + ')' : ''} \u2014 1080p+ downloads with muxing` : 'Not running';
+                            refreshBtn.textContent = 'Refresh';
+                        };
+                        actions.appendChild(refreshBtn);
+                    } else {
+                        dot.style.background = '#f59e0b';
+                        text.textContent = 'Not installed \u2014 downloads limited to 720p combined streams';
+
+                        const btnStyle = 'padding:5px 12px;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;transition:background 0.2s;';
+
+                        // "Try Start" button — attempts auto-start via mediadl:// protocol
+                        const startBtn = document.createElement('button');
+                        startBtn.style.cssText = btnStyle + 'border:1px solid var(--ytkit-border);background:transparent;color:var(--ytkit-text-secondary);';
+                        startBtn.textContent = 'Start';
+                        startBtn.title = 'Try to start the MediaDL server';
+                        startBtn.onclick = async () => {
+                            startBtn.textContent = '...';
+                            startBtn.style.pointerEvents = 'none';
+                            MediaDLManager.resetAutoStart();
+                            const r = await MediaDLManager.tryAutoStart(5);
+                            if (r.ok) {
+                                dot.style.background = '#22c55e';
+                                text.textContent = `Running${r.version ? ' (v' + r.version + ')' : ''} \u2014 1080p+ downloads with muxing`;
+                                startBtn.textContent = 'Running';
+                                startBtn.style.background = '#22c55e'; startBtn.style.color = 'white'; startBtn.style.border = 'none';
+                                if (comp) comp.style.display = 'none';
+                            } else {
+                                startBtn.textContent = 'Start';
+                                startBtn.style.pointerEvents = 'auto';
+                                showToast('Server did not start. Try installing below.', '#f59e0b', { duration: 4 });
+                            }
+                        };
+                        actions.appendChild(startBtn);
+
+                        // "Install" button — copies PowerShell command
+                        const installBtn = document.createElement('button');
+                        installBtn.style.cssText = btnStyle + 'border:none;background:#22c55e;color:white;';
+                        installBtn.textContent = 'Install';
+                        installBtn.title = 'Copy install command for PowerShell';
+                        installBtn.onclick = async () => {
+                            try {
+                                await navigator.clipboard.writeText(MediaDLManager.INSTALLER_COMMAND);
+                                installBtn.textContent = 'Copied!';
+                                installBtn.style.background = '#16a34a';
+                                showToast('Paste in PowerShell (Win+X \u2192 Terminal) to install.', '#22c55e', { duration: 8 });
+                                setTimeout(() => { installBtn.textContent = 'Install'; installBtn.style.background = '#22c55e'; }, 3000);
+                            } catch (_) {
+                                window.open(MediaDLManager.INSTALLER_URL, '_blank');
+                            }
+                        };
+                        actions.appendChild(installBtn);
+
+                        // "Download .ps1" button — downloads installer script
+                        const dlBtn = document.createElement('button');
+                        dlBtn.style.cssText = btnStyle + 'border:1px solid var(--ytkit-border);background:transparent;color:var(--ytkit-text-secondary);';
+                        dlBtn.textContent = 'Download .ps1';
+                        dlBtn.title = 'Download the installer script to run manually';
+                        dlBtn.onclick = () => {
+                            triggerDownload(MediaDLManager.INSTALLER_URL, 'Install-YTYT.ps1').catch(() => {
+                                window.open(MediaDLManager.INSTALLER_URL, '_blank');
+                            });
+                            showToast('Installer downloaded! Right-click \u2192 Run with PowerShell', '#3b82f6', { duration: 6 });
+                        };
+                        actions.appendChild(dlBtn);
+
+                        // Show comparison table
+                        if (comp) {
+                            comp.style.display = 'block';
+                            const table = document.createElement('div');
+                            table.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;font-size:11px;';
+                            const rows = [
+                                ['', 'Without MediaDL', 'With MediaDL'],
+                                ['Video Quality', 'Up to 720p', 'Up to 4K'],
+                                ['Audio Downloads', 'WebM/M4A', 'MP3 (converted)'],
+                                ['Audio+Video Merge', 'No', 'Yes (ffmpeg)'],
+                                ['Progress Tracking', 'No', 'Yes'],
+                                ['Background DL', 'No', 'Yes'],
+                            ];
+                            rows.forEach((row, ri) => {
+                                row.forEach((cell, ci) => {
+                                    const el = document.createElement('div');
+                                    el.style.cssText = `padding:6px 8px;${ri === 0 ? 'font-weight:600;color:var(--ytkit-text-primary);' : 'color:var(--ytkit-text-secondary);'}${ci > 0 ? 'text-align:center;' : ''}${ri > 0 ? 'border-top:1px solid var(--ytkit-border);' : ''}`;
+                                    if (ri > 0 && ci === 2) el.style.color = '#22c55e';
+                                    el.textContent = cell;
+                                    table.appendChild(el);
+                                });
+                            });
+                            comp.appendChild(table);
+
+                            const hint = document.createElement('div');
+                            hint.style.cssText = 'margin-top:10px;font-size:11px;color:var(--ytkit-text-muted);line-height:1.5;';
+                            hint.textContent = 'MediaDL installs yt-dlp + ffmpeg locally. Runs as a background service on port 9751. Windows only.';
+                            comp.appendChild(hint);
+                        }
+                    }
+                })();
+            }
 
             // Features grid
             const grid = document.createElement('div');
@@ -14625,7 +13644,7 @@ pause
 
     //  SECTION 5: STYLES
     function injectPanelStyles() {
-        GM_addStyle(`@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');:root{--ytkit-font:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--ytkit-bg-base:#0a0a0b;--ytkit-bg-elevated:#111113;--ytkit-bg-surface:#18181b;--ytkit-bg-hover:#1f1f23;--ytkit-bg-active:#27272a;--ytkit-border:#27272a;--ytkit-border-subtle:#1f1f23;--ytkit-text-primary:#fafafa;--ytkit-text-secondary:#a1a1aa;--ytkit-text-muted:#71717a;--ytkit-accent:#ff4e45;--ytkit-accent-soft:rgba(255,78,69,0.15);--ytkit-success:#22c55e;--ytkit-error:#ef4444;--ytkit-radius-sm:6px;--ytkit-radius-md:10px;--ytkit-radius-lg:14px;--ytkit-radius-xl:20px;--ytkit-shadow-sm:0 1px 2px rgba(0,0,0,0.3);--ytkit-shadow-md:0 4px 12px rgba(0,0,0,0.4);--ytkit-shadow-lg:0 8px 32px rgba(0,0,0,0.5);--ytkit-shadow-xl:0 24px 64px rgba(0,0,0,0.6);--ytkit-transition:200ms cubic-bezier(0.4,0,0.2,1);} .ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn,.ytkit-transcript-btn,.ytkit-mpv-btn,.ytkit-dlplay-btn,.ytkit-embed-btn{display:inline-flex !important;visibility:visible !important;opacity:1 !important;z-index:9999 !important;position:relative !important;} /* z-index for action buttons kept at 9999 to ensure visibility within YT layout */ .ytkit-button-container{display:flex !important;gap:8px !important;margin:8px 0 !important;flex-wrap:wrap !important;visibility:visible !important;} .ytkit-trigger-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;margin:0 4px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-trigger-btn svg{width:22px;height:22px;color:var(--yt-spec-icon-inactive,#aaa);transition:all var(--ytkit-transition);} .ytkit-trigger-btn:hover{background:var(--yt-spec-badge-chip-background,rgba(255,255,255,0.1));} .ytkit-trigger-btn:hover svg{color:var(--yt-spec-text-primary,#fff);transform:rotate(45deg);} #ytkit-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:80000;opacity:0;pointer-events:none;transition:opacity 300ms ease;} body.ytkit-panel-open #ytkit-overlay{opacity:1;pointer-events:auto;} #ytkit-settings-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.96);z-index:80001;display:flex;flex-direction:column;width:95%;max-width:1100px;height:85vh;max-height:800px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-xl);box-shadow:var(--ytkit-shadow-xl),0 0 0 1px rgba(255,255,255,0.05) inset;font-family:var(--ytkit-font);color:var(--ytkit-text-primary);opacity:0;pointer-events:none;transition:all 300ms cubic-bezier(0.32,0.72,0,1);overflow:hidden;} body.ytkit-panel-open #ytkit-settings-panel{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);} .ytkit-header{display:flex;align-items:center;justify-content:space-between;padding:4px 20px;background:linear-gradient(180deg,var(--ytkit-bg-elevated) 0%,var(--ytkit-bg-base) 100%);border-bottom:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-brand{display:flex;align-items:center;gap:10px;} .ytkit-title{font-size:20px;font-weight:700;letter-spacing:-0.5px;margin:0;} .ytkit-title-yt{background:linear-gradient(135deg,#ff4e45 0%,#ff0000 50%,#ff4e45 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ytkit-shimmer 3s linear infinite;} .ytkit-title-kit{color:var(--ytkit-text-primary);} @keyframes ytkit-shimmer{0%{background-position:0% center;} 100%{background-position:200% center;} } .ytkit-badge{padding:2px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#fff;background:linear-gradient(135deg,#ff4e45,#ff0000);border-radius:100px;box-shadow:0 2px 8px rgba(255,78,69,0.4);} .ytkit-close{display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-close svg{width:16px;height:16px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-close:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);} .ytkit-close:hover svg{color:#fff;} .ytkit-body{display:flex;flex:1;overflow:hidden;} .ytkit-sidebar{display:flex;flex-direction:column;width:220px;padding:4px 0;background:var(--ytkit-bg-elevated);border-right:1px solid var(--ytkit-border);overflow-y:auto;flex-shrink:0;} .ytkit-search-container{position:relative;margin:4px 4px 8px;} .ytkit-search-input{width:100%;padding:2px 10px 2px 32px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-primary);font-size:12px;transition:all var(--ytkit-transition);} .ytkit-search-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px rgba(255,78,69,0.15);} .ytkit-search-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-search-icon{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--ytkit-text-muted);pointer-events:none;} .ytkit-sidebar-divider{height:1px;background:var(--ytkit-border);margin:4px 0 6px;} .ytkit-pane.ytkit-search-active{display:block;} .ytkit-pane.ytkit-search-active .ytkit-pane-header{display:none;} .ytkit-nav-btn{display:flex;align-items:center;gap:8px;width:100%;padding:3px 8px;margin:0;background:transparent;border:none;border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);text-align:left;} .ytkit-nav-btn:hover{background:var(--ytkit-bg-hover);} .ytkit-nav-btn.active{background:var(--ytkit-bg-active);} .ytkit-nav-icon{display:flex;align-items:center;justify-content:center;width:26px;height:26px;background:var(--ytkit-bg-surface);border-radius:4px;flex-shrink:0;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon{background:var(--cat-color,var(--ytkit-accent));box-shadow:0 2px 8px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 40%,transparent);} .ytkit-nav-icon svg{width:14px;height:14px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon svg{color:#fff;} .ytkit-nav-label{flex:1;font-size:12px;font-weight:500;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .ytkit-nav-btn.active .ytkit-nav-label{color:var(--ytkit-text-primary);} .ytkit-nav-count{font-size:10px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:1px 5px;border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-count{background:rgba(255,255,255,0.15);color:var(--ytkit-text-primary);} .ytkit-nav-arrow{display:flex;opacity:0;transition:opacity var(--ytkit-transition);} .ytkit-nav-arrow svg{width:14px;height:14px;color:var(--ytkit-text-muted);} .ytkit-nav-btn.active .ytkit-nav-arrow{opacity:1;} .ytkit-nav-group-label{padding:3px 10px 1px;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--ytkit-text-muted);user-select:none;pointer-events:none;} .ytkit-content{flex:1;padding:16px 20px;overflow-y:auto;background:var(--ytkit-bg-base);} .ytkit-pane{display:none;animation:ytkit-fade-in 300ms ease;} .ytkit-pane.active{display:block;} .ytkit-pane.ytkit-vh-pane.active{display:flex;flex-direction:column;height:100%;max-height:calc(85vh - 180px);} #ytkit-vh-content{flex:1;overflow-y:auto;padding-right:8px;} @keyframes ytkit-fade-in{from{opacity:0;transform:translateX(8px);} to{opacity:1;transform:translateX(0);} } @keyframes ytkit-badge-pulse{0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.5;transform:scale(1.3);} } .ytkit-pane-header{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px 0;padding:4px 0 10px 0;border-bottom:1px solid var(--ytkit-border);} .ytkit-pane-title{display:flex;align-items:center;gap:10px;} .ytkit-pane-title h2{font-size:16px;font-weight:600;margin:0;color:var(--ytkit-text-primary);} .ytkit-toggle-all{display:flex;align-items:center;gap:8px;cursor:pointer;} .ytkit-toggle-all span{font-size:12px;font-weight:500;color:var(--ytkit-text-secondary);} .ytkit-reset-group-btn{padding:4px 10px;margin-right:8px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-muted);font-size:11px;font-weight:500;cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-reset-group-btn:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);color:#fff;} .ytkit-features-grid{display:flex;flex-direction:column;gap:4px;} .ytkit-feature-card{display:flex;align-items:center;justify-content:space-between;padding:4px 12px;margin:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border-subtle);border-left:3px solid transparent;border-radius:var(--ytkit-radius-sm);transition:all var(--ytkit-transition);} .ytkit-feature-card:hover{background:var(--ytkit-bg-hover);border-color:var(--ytkit-border);border-left-color:transparent;} .ytkit-feature-card.ytkit-card-enabled{border-left-color:var(--cat-color,var(--ytkit-accent));} .ytkit-sub-card{margin-left:20px;background:var(--ytkit-bg-elevated);border-left:2px solid var(--ytkit-accent-soft);} .ytkit-sub-features{display:flex;flex-direction:column;gap:4px;} .ytkit-feature-info{flex:1;min-width:0;padding-right:12px;} .ytkit-feature-name{font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin:0 0 1px 0;} .ytkit-feature-desc{font-size:11px;color:var(--ytkit-text-muted);margin:0;line-height:1.35;} .ytkit-textarea-card{flex-direction:column;align-items:stretch;gap:8px;} .ytkit-textarea-card .ytkit-feature-info{padding-right:0;} .ytkit-input{width:100%;padding:7px 10px;font-family:var(--ytkit-font);font-size:12px;color:var(--ytkit-text-primary);background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);resize:vertical;min-height:50px;transition:all var(--ytkit-transition);} .ytkit-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px var(--ytkit-accent-soft);} .ytkit-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-switch{position:relative;width:38px;height:20px;flex-shrink:0;} .ytkit-switch input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1;margin:0;} .ytkit-switch-track{position:absolute;inset:0;background:var(--ytkit-bg-active);border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-switch.active .ytkit-switch-track{background:var(--switch-color,var(--ytkit-accent));box-shadow:0 0 12px color-mix(in srgb,var(--switch-color,var(--ytkit-accent)) 50%,transparent);} .ytkit-switch-thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:50%;box-shadow:var(--ytkit-shadow-sm);transition:all var(--ytkit-transition);display:flex;align-items:center;justify-content:center;} .ytkit-switch.active .ytkit-switch-thumb{transform:translateX(18px);} .ytkit-switch-icon{display:flex;opacity:0;transform:scale(0.5);transition:all var(--ytkit-transition);} .ytkit-switch-icon svg{width:10px;height:10px;color:var(--switch-color,var(--ytkit-accent));} .ytkit-switch.active .ytkit-switch-icon{opacity:1;transform:scale(1);} .ytkit-footer{display:flex;align-items:center;justify-content:space-between;padding:4px 20px;background:var(--ytkit-bg-elevated);border-top:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-footer-left{display:flex;align-items:center;gap:12px;} .ytkit-github{display:flex;align-items:center;justify-content:center;width:28px;height:28px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);border-radius:4px;transition:all var(--ytkit-transition);} .ytkit-github:hover{color:var(--ytkit-text-primary);background:var(--ytkit-bg-hover);} .ytkit-github svg{width:16px;height:16px;} .ytkit-version{font-size:11px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:2px 8px;border-radius:100px;} .ytkit-shortcut{font-size:10px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:2px 6px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace;} .ytkit-footer-right{display:flex;gap:8px;} .ytkit-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;font-family:var(--ytkit-font);font-size:12px;font-weight:600;border:none;border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-btn svg{width:14px;height:14px;} .ytkit-btn-secondary{color:var(--ytkit-text-secondary);background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);} .ytkit-btn-secondary:hover{background:var(--ytkit-bg-hover);color:var(--ytkit-text-primary);} .ytkit-btn-primary{color:#fff;background:linear-gradient(135deg,#ff4e45,#e6423a);box-shadow:0 2px 8px rgba(255,78,69,0.3);} .ytkit-btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(255,78,69,0.4);} .ytkit-toast{position:fixed;bottom:-80px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:10px 16px;font-family:var(--ytkit-font);font-size:13px;font-weight:500;color:#fff;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);box-shadow:var(--ytkit-shadow-lg);z-index:90000;transition:all 400ms cubic-bezier(0.68,-0.55,0.27,1.55);} .ytkit-toast.show{bottom:24px;} .ytkit-toast-success{border-color:var(--ytkit-success);box-shadow:0 4px 20px rgba(34,197,94,0.2);} .ytkit-toast-error{border-color:var(--ytkit-error);box-shadow:0 4px 20px rgba(239,68,68,0.2);}ytd-watch-metadata.watch-active-metadata{margin-top:180px !important;} ytd-live-chat-frame:not([style*="position"]){margin-top:-57px !important;width:402px !important;} .ytkit-sidebar::-webkit-scrollbar,.ytkit-content::-webkit-scrollbar{width:6px;} .ytkit-sidebar::-webkit-scrollbar-track,.ytkit-content::-webkit-scrollbar-track{background:transparent;} .ytkit-sidebar::-webkit-scrollbar-thumb,.ytkit-content::-webkit-scrollbar-thumb{background:var(--ytkit-border);border-radius:100px;} .ytkit-sidebar::-webkit-scrollbar-thumb:hover,.ytkit-content::-webkit-scrollbar-thumb:hover{background:var(--ytkit-text-muted);}  .ytkit-css-editor{width:100%;min-height:150px;padding:12px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-family:'Monaco','Menlo','Ubuntu Mono',monospace;font-size:13px;line-height:1.5;resize:vertical;} .ytkit-css-editor:focus{outline:none;border-color:var(--ytkit-accent);} .ytkit-bulk-bar{animation:slideDown 0.2s ease-out;} @keyframes slideDown{from{opacity:0;transform:translateY(-10px);} to{opacity:1;transform:translateY(0);} }
+        GM_addStyle(`@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');:root{--ytkit-font:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--ytkit-bg-base:#0a0a0b;--ytkit-bg-elevated:#111113;--ytkit-bg-surface:#17171a;--ytkit-bg-hover:#1e1e22;--ytkit-bg-active:#27272a;--ytkit-border:#2a2a2e;--ytkit-border-subtle:#1e1e22;--ytkit-text-primary:#f0f0f0;--ytkit-text-secondary:#a1a1aa;--ytkit-text-muted:#71717a;--ytkit-accent:#ff4e45;--ytkit-accent-soft:rgba(255,78,69,0.12);--ytkit-success:#22c55e;--ytkit-error:#ef4444;--ytkit-radius-sm:8px;--ytkit-radius-md:12px;--ytkit-radius-lg:16px;--ytkit-radius-xl:20px;--ytkit-shadow-sm:0 1px 2px rgba(0,0,0,0.3);--ytkit-shadow-md:0 4px 16px rgba(0,0,0,0.35);--ytkit-shadow-lg:0 8px 32px rgba(0,0,0,0.45);--ytkit-shadow-xl:0 24px 64px rgba(0,0,0,0.55);--ytkit-transition:180ms cubic-bezier(0.4,0,0.2,1);} .ytkit-vlc-btn,.ytkit-local-dl-btn,.ytkit-mp3-dl-btn,.ytkit-transcript-btn,.ytkit-mpv-btn,.ytkit-dlplay-btn,.ytkit-embed-btn{display:inline-flex !important;visibility:visible !important;opacity:1 !important;z-index:9999 !important;position:relative !important;} .ytkit-button-container{display:flex !important;gap:8px !important;margin:8px 0 !important;flex-wrap:wrap !important;visibility:visible !important;} .ytkit-trigger-btn{display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;margin:0 4px;background:transparent;border:none;border-radius:var(--ytkit-radius-md);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-trigger-btn svg{width:22px;height:22px;color:var(--yt-spec-icon-inactive,#aaa);transition:all var(--ytkit-transition);} .ytkit-trigger-btn:hover{background:var(--yt-spec-badge-chip-background,rgba(255,255,255,0.1));} .ytkit-trigger-btn:hover svg{color:var(--yt-spec-text-primary,#fff);transform:rotate(45deg);} #ytkit-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:80000;opacity:0;pointer-events:none;transition:opacity 300ms ease;} body.ytkit-panel-open #ytkit-overlay{opacity:1;pointer-events:auto;} #ytkit-settings-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.96);z-index:80001;display:flex;flex-direction:column;width:95%;max-width:1100px;height:85vh;max-height:820px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-xl);box-shadow:var(--ytkit-shadow-xl),0 0 0 1px rgba(255,255,255,0.04) inset;font-family:var(--ytkit-font);color:var(--ytkit-text-primary);opacity:0;pointer-events:none;transition:all 300ms cubic-bezier(0.32,0.72,0,1);overflow:hidden;} body.ytkit-panel-open #ytkit-settings-panel{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);} .ytkit-header{display:flex;align-items:center;justify-content:space-between;padding:10px 24px;background:var(--ytkit-bg-elevated);border-bottom:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-brand{display:flex;align-items:center;gap:12px;} .ytkit-title{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin:0;} .ytkit-title-yt{background:linear-gradient(135deg,#ff4e45 0%,#ff0000 50%,#ff4e45 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ytkit-shimmer 3s linear infinite;} .ytkit-title-kit{color:var(--ytkit-text-primary);} @keyframes ytkit-shimmer{0%{background-position:0% center;} 100%{background-position:200% center;} } .ytkit-badge{padding:3px 10px;font-size:9px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#fff;background:linear-gradient(135deg,#ff4e45,#e6302a);border-radius:100px;box-shadow:0 2px 8px rgba(255,78,69,0.35);} .ytkit-close{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-close svg{width:16px;height:16px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-close:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);} .ytkit-close:hover svg{color:#fff;} .ytkit-body{display:flex;flex:1;overflow:hidden;} .ytkit-sidebar{display:flex;flex-direction:column;width:230px;padding:8px 6px;background:var(--ytkit-bg-elevated);border-right:1px solid var(--ytkit-border);overflow-y:auto;flex-shrink:0;gap:2px;} .ytkit-search-container{position:relative;margin:0 2px 10px;} .ytkit-search-input{width:100%;padding:8px 12px 8px 34px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-primary);font-size:13px;font-family:var(--ytkit-font);transition:all var(--ytkit-transition);box-sizing:border-box;} .ytkit-search-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px rgba(255,78,69,0.12);} .ytkit-search-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--ytkit-text-muted);pointer-events:none;} .ytkit-sidebar-divider{height:1px;background:var(--ytkit-border);margin:6px 4px 8px;} .ytkit-pane.ytkit-search-active{display:block;} .ytkit-pane.ytkit-search-active .ytkit-pane-header{display:none;} .ytkit-nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;margin:0;background:transparent;border:none;border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);text-align:left;} .ytkit-nav-btn:hover{background:var(--ytkit-bg-hover);} .ytkit-nav-btn.active{background:var(--ytkit-bg-active);} .ytkit-nav-icon{display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:var(--ytkit-bg-surface);border-radius:6px;flex-shrink:0;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon{background:var(--cat-color,var(--ytkit-accent));box-shadow:0 2px 10px color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 40%,transparent);} .ytkit-nav-icon svg{width:15px;height:15px;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-icon svg{color:#fff;} .ytkit-nav-label{flex:1;font-size:13px;font-weight:500;color:var(--ytkit-text-secondary);transition:color var(--ytkit-transition);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .ytkit-nav-btn.active .ytkit-nav-label{color:var(--ytkit-text-primary);font-weight:600;} .ytkit-nav-count{font-size:10px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:2px 7px;border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-nav-btn.active .ytkit-nav-count{background:rgba(255,255,255,0.12);color:var(--ytkit-text-primary);} .ytkit-nav-arrow{display:flex;opacity:0;transition:opacity var(--ytkit-transition);} .ytkit-nav-arrow svg{width:14px;height:14px;color:var(--ytkit-text-muted);} .ytkit-nav-btn.active .ytkit-nav-arrow{opacity:1;} .ytkit-nav-group-label{padding:8px 12px 4px;font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--ytkit-text-muted);user-select:none;pointer-events:none;} .ytkit-content{flex:1;padding:20px 24px;overflow-y:auto;background:var(--ytkit-bg-base);} .ytkit-pane{display:none;animation:ytkit-fade-in 250ms ease;} .ytkit-pane.active{display:block;} .ytkit-pane.ytkit-vh-pane.active{display:flex;flex-direction:column;height:100%;max-height:calc(85vh - 180px);} #ytkit-vh-content{flex:1;overflow-y:auto;padding-right:8px;} @keyframes ytkit-fade-in{from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} } @keyframes ytkit-badge-pulse{0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.5;transform:scale(1.3);} } .ytkit-pane-header{display:flex;align-items:center;justify-content:space-between;margin:0 0 16px 0;padding:0 0 14px 0;border-bottom:1px solid var(--ytkit-border);} .ytkit-pane-title{display:flex;align-items:center;gap:10px;} .ytkit-pane-title h2{font-size:18px;font-weight:700;margin:0;color:var(--ytkit-text-primary);letter-spacing:-0.3px;} .ytkit-toggle-all{display:flex;align-items:center;gap:8px;cursor:pointer;} .ytkit-toggle-all span{font-size:12px;font-weight:500;color:var(--ytkit-text-secondary);} .ytkit-reset-group-btn{padding:5px 12px;margin-right:10px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);color:var(--ytkit-text-muted);font-size:11px;font-weight:500;cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-reset-group-btn:hover{background:var(--ytkit-error);border-color:var(--ytkit-error);color:#fff;} .ytkit-features-grid{display:grid;grid-template-columns:1fr;gap:6px;} .ytkit-feature-card{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;margin:0;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border-subtle);border-left:3px solid transparent;border-radius:var(--ytkit-radius-sm);transition:all var(--ytkit-transition);} .ytkit-feature-card:hover{background:var(--ytkit-bg-hover);border-color:var(--ytkit-border);border-left-color:transparent;transform:translateX(2px);} .ytkit-feature-card.ytkit-card-enabled{border-left-color:var(--cat-color,var(--ytkit-accent));background:color-mix(in srgb,var(--cat-color,var(--ytkit-accent)) 4%,var(--ytkit-bg-surface));} .ytkit-sub-card{margin-left:20px;background:var(--ytkit-bg-elevated);border-left:2px solid var(--ytkit-accent-soft);} .ytkit-sub-features{display:grid;grid-template-columns:1fr;gap:6px;} .ytkit-feature-info{flex:1;min-width:0;padding-right:16px;} .ytkit-feature-name{font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin:0 0 2px 0;} .ytkit-feature-desc{font-size:11px;color:var(--ytkit-text-muted);margin:0;line-height:1.4;} .ytkit-textarea-card{flex-direction:column;align-items:stretch;gap:8px;} .ytkit-textarea-card .ytkit-feature-info{padding-right:0;} .ytkit-input{width:100%;padding:7px 10px;font-family:var(--ytkit-font);font-size:12px;color:var(--ytkit-text-primary);background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-sm);resize:vertical;min-height:50px;transition:all var(--ytkit-transition);} .ytkit-input:focus{outline:none;border-color:var(--ytkit-accent);box-shadow:0 0 0 3px var(--ytkit-accent-soft);} .ytkit-input::placeholder{color:var(--ytkit-text-muted);} .ytkit-switch{position:relative;width:40px;height:22px;flex-shrink:0;} .ytkit-switch input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1;margin:0;} .ytkit-switch-track{position:absolute;inset:0;background:var(--ytkit-bg-active);border:1px solid var(--ytkit-border);border-radius:100px;transition:all var(--ytkit-transition);} .ytkit-switch.active .ytkit-switch-track{background:var(--switch-color,var(--ytkit-accent));border-color:transparent;box-shadow:0 0 14px color-mix(in srgb,var(--switch-color,var(--ytkit-accent)) 45%,transparent);} .ytkit-switch-thumb{position:absolute;top:3px;left:3px;width:16px;height:16px;background:#fff;border-radius:50%;box-shadow:var(--ytkit-shadow-sm);transition:all var(--ytkit-transition);display:flex;align-items:center;justify-content:center;} .ytkit-switch.active .ytkit-switch-thumb{transform:translateX(18px);} .ytkit-switch-icon{display:flex;opacity:0;transform:scale(0.5);transition:all var(--ytkit-transition);} .ytkit-switch-icon svg{width:10px;height:10px;color:var(--switch-color,var(--ytkit-accent));} .ytkit-switch.active .ytkit-switch-icon{opacity:1;transform:scale(1);} .ytkit-footer{display:flex;align-items:center;justify-content:space-between;padding:10px 24px;background:var(--ytkit-bg-elevated);border-top:1px solid var(--ytkit-border);flex-shrink:0;} .ytkit-footer-left{display:flex;align-items:center;gap:12px;} .ytkit-github{display:flex;align-items:center;justify-content:center;width:30px;height:30px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);border-radius:6px;transition:all var(--ytkit-transition);} .ytkit-github:hover{color:var(--ytkit-text-primary);background:var(--ytkit-bg-hover);} .ytkit-github svg{width:16px;height:16px;} .ytkit-version{font-size:11px;font-weight:600;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:3px 10px;border-radius:100px;} .ytkit-shortcut{font-size:10px;color:var(--ytkit-text-muted);background:var(--ytkit-bg-surface);padding:3px 8px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace;} .ytkit-footer-right{display:flex;gap:8px;} .ytkit-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;font-family:var(--ytkit-font);font-size:12px;font-weight:600;border:none;border-radius:var(--ytkit-radius-sm);cursor:pointer;transition:all var(--ytkit-transition);} .ytkit-btn svg{width:14px;height:14px;} .ytkit-btn-secondary{color:var(--ytkit-text-secondary);background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);} .ytkit-btn-secondary:hover{background:var(--ytkit-bg-hover);color:var(--ytkit-text-primary);} .ytkit-btn-primary{color:#fff;background:linear-gradient(135deg,#ff4e45,#e6302a);box-shadow:0 2px 8px rgba(255,78,69,0.3);} .ytkit-btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(255,78,69,0.4);} .ytkit-toast{position:fixed;bottom:-80px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:12px 20px;font-family:var(--ytkit-font);font-size:13px;font-weight:500;color:#fff;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);box-shadow:var(--ytkit-shadow-lg);z-index:90000;transition:all 400ms cubic-bezier(0.68,-0.55,0.27,1.55);} .ytkit-toast.show{bottom:24px;} .ytkit-toast-success{border-color:var(--ytkit-success);box-shadow:0 4px 20px rgba(34,197,94,0.15);} .ytkit-toast-error{border-color:var(--ytkit-error);box-shadow:0 4px 20px rgba(239,68,68,0.15);}ytd-watch-metadata.watch-active-metadata{margin-top:180px !important;} ytd-live-chat-frame:not([style*="position"]){margin-top:-57px !important;width:402px !important;} .ytkit-sidebar::-webkit-scrollbar,.ytkit-content::-webkit-scrollbar{width:5px;} .ytkit-sidebar::-webkit-scrollbar-track,.ytkit-content::-webkit-scrollbar-track{background:transparent;} .ytkit-sidebar::-webkit-scrollbar-thumb,.ytkit-content::-webkit-scrollbar-thumb{background:var(--ytkit-border);border-radius:100px;} .ytkit-sidebar::-webkit-scrollbar-thumb:hover,.ytkit-content::-webkit-scrollbar-thumb:hover{background:var(--ytkit-text-muted);}  .ytkit-css-editor{width:100%;min-height:150px;padding:12px;background:var(--ytkit-bg-base);border:1px solid var(--ytkit-border);border-radius:var(--ytkit-radius-md);color:var(--ytkit-text-primary);font-family:'Monaco','Menlo','Ubuntu Mono',monospace;font-size:13px;line-height:1.5;resize:vertical;} .ytkit-css-editor:focus{outline:none;border-color:var(--ytkit-accent);} .ytkit-bulk-bar{animation:slideDown 0.2s ease-out;} @keyframes slideDown{from{opacity:0;transform:translateY(-10px);} to{opacity:1;transform:translateY(0);} }
 
 /* ─── Drag-reorder sidebar ─── */
 .ytkit-nav-btn{cursor:grab;user-select:none;}
@@ -14642,13 +13661,13 @@ pause
 
 /* ─── Responsive Breakpoints ─── */
 @media (max-width:900px){
-    #ytkit-settings-panel{width:98%;height:92vh;max-height:none;border-radius:12px;}
-    .ytkit-sidebar{width:185px;padding:4px 0;}
-    .ytkit-nav-label{font-size:11px;}
-    .ytkit-nav-icon{width:24px;height:24px;}
-    .ytkit-nav-icon svg{width:12px;height:12px;}
-    .ytkit-content{padding:12px;}
-    .ytkit-pane-title h2{font-size:15px;}
+    #ytkit-settings-panel{width:98%;height:92vh;max-height:none;border-radius:14px;}
+    .ytkit-sidebar{width:190px;padding:6px 4px;}
+    .ytkit-nav-label{font-size:12px;}
+    .ytkit-nav-icon{width:26px;height:26px;}
+    .ytkit-nav-icon svg{width:13px;height:13px;}
+    .ytkit-content{padding:14px 16px;}
+    .ytkit-pane-title h2{font-size:16px;}
 }
 @media (max-width:700px){
     .ytkit-body{flex-direction:column;}
@@ -14738,7 +13757,6 @@ pause
         watch: [
             { id: 'stickyVideo',                 label: 'Theater Split' },
             { id: 'expandVideoWidth',            label: 'Expand Width' },
-            { id: 'skipSponsors',                label: 'SponsorBlock' },
             { id: 'autoMaxResolution',           label: 'Max Resolution' },
         ],
         channel: [
@@ -15002,8 +14020,6 @@ pause
         updateAllToggleStates();
 
         // ── Lifetime Ad Block Stats Flush ──
-        setInterval(() => { const s = window.__ytab?.stats; if (s) _lifetimeStats.accumulate(s); }, 30000);
-        window.addEventListener('beforeunload', () => { const s = window.__ytab?.stats; if (s) _lifetimeStats.accumulate(s); });
 
         // ── Safe Mode + Diagnostics ──
         const isSafeMode = new URLSearchParams(window.location.search).get('ytkit') === 'safe' ||
@@ -15016,21 +14032,6 @@ pause
                 if (on === undefined) return DebugManager._enabled;
                 on ? DebugManager.enable() : DebugManager.disable();
                 console.log('[YTKit] Debug ' + (on ? 'enabled' : 'disabled'));
-            },
-            stats() {
-                const ab = window.__ytab?.stats || {};
-                console.table({ 'Ads Blocked': ab.blocked || 0, 'Responses Pruned': ab.pruned || 0, 'SSAP Skipped': ab.ssapSkipped || 0 });
-                return ab;
-            },
-            diagCSS() {
-                document.getElementById('ytab-cosmetic')?.remove();
-                document.getElementById('ytkit-opened-fix')?.remove();
-                console.log('[YTKit Diag] Removed ad-blocker cosmetic CSS + .opened fix');
-            },
-            diagAdblock(enable = false) {
-                GM_setValue('ytab_enabled', enable);
-                console.log(`[YTKit Diag] Ad blocker ${enable ? 'enabled' : 'disabled'} — reloading...`);
-                location.reload();
             },
             testOnly(id) {
                 const s = { ...appState.settings };
@@ -15071,19 +14072,17 @@ pause
             console.log('%c[YTKit] SAFE MODE — All features disabled. ytkit.unsafe() to exit.', 'color:#f97316;font-weight:bold;font-size:16px;');
             showToast('SAFE MODE — All features disabled. Console: ytkit.unsafe() to exit.', '#f97316', { duration: 10 });
         } else {
-            // TIER 0: Critical — adblock, cosmetics, CSS-only, Theater Split.
+            // TIER 0: Critical — CSS-only, Theater Split.
             //         Must run synchronously before any page content paints.
             // TIER 1: Normal — all other non-watch-page-specific features.
             //         Run in rAF to avoid blocking first paint.
             // TIER 2: Watch-page-only — heavy features that aren't needed until
             //         the video is playing. Deferred 1500ms via requestIdleCallback.
             const CRITICAL_IDS = new Set([
-                'ytAdBlock','adblockCosmeticHide','adblockSsapAutoSkip','adblockAntiDetect',
                 'uiStyleManager',
             ]);
             const LAZY_IDS = new Set([
                 // Only defer watch-page-only features that are heavy or network-bound
-                'skipSponsors',
             ]);
 
             const initFeature = (f) => {

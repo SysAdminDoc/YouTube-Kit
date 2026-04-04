@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="astraLeft" x1="18" y1="52" x2="35" y2="14" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff8a62"/>
+      <stop offset="1" stop-color="#ffb27d"/>
+    </linearGradient>
+    <linearGradient id="astraRight" x1="44" y1="52" x2="31" y2="12" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#66d6ff"/>
+      <stop offset="1" stop-color="#9ae7ff"/>
+    </linearGradient>
+  </defs>
+  <path d="M16 52 28.6 12h6.2L22.4 52H16Z" fill="url(#astraLeft)"/>
+  <path d="M48 52 35.4 12h-6.2L41.6 52H48Z" fill="url(#astraRight)"/>
+  <path d="M24.5 35.5h15.2l-1.9 6H22.7l1.8-6Z" fill="#f5f7fb"/>
+  <path d="m46.5 15 1.8 3.6 3.7 1.8-3.7 1.8-1.8 3.6-1.8-3.6-3.7-1.8 3.7-1.8L46.5 15Z" fill="#ffd166"/>
+</svg>

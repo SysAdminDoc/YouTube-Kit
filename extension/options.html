@@ -2,135 +2,1070 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>YTKit Settings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Astra Deck Settings</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            color-scheme: dark;
+            --page-bg: #08090c;
+            --panel-bg: rgba(15, 20, 28, 0.94);
+            --panel-bg-strong: #111722;
+            --panel-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f4f6fb;
+            --text-secondary: #c8d2e1;
+            --text-muted: #8894a8;
+            --accent: #ff6b4a;
+            --accent-soft: rgba(255, 107, 74, 0.14);
+            --success: #35c77f;
+            --error: #ff7480;
+            --radius-md: 16px;
+            --radius-lg: 22px;
+            --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.34);
+            --focus-ring: 0 0 0 3px rgba(255, 107, 74, 0.18);
+            --font-sans: 'Aptos Display', 'Aptos', 'Segoe UI Variable Display', 'Avenir Next', 'Trebuchet MS', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0a0a0b;
-            color: #cdd6f4;
+            margin: 0;
             min-height: 100vh;
+            font-family: var(--font-sans);
+            color: var(--text-primary);
+            background:
+                radial-gradient(circle at top left, rgba(255, 107, 74, 0.08), transparent 24%),
+                radial-gradient(circle at top right, rgba(89, 146, 255, 0.06), transparent 22%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 14%),
+                var(--page-bg);
+            padding: 24px 18px 34px;
+        }
+
+        .page-shell {
+            max-width: 1180px;
+            margin: 0 auto;
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1.3fr) minmax(220px, 0.7fr);
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+
+        .hero-card,
+        .panel,
+        .action-card {
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
+                var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .hero-card {
+            padding: 20px;
+        }
+
+        .hero-lockup {
             display: flex;
             align-items: center;
-            justify-content: center;
-            padding: 24px;
+            gap: 12px;
         }
-        .container {
-            background: #11111b;
-            border: 1px solid rgba(255,255,255,0.06);
+
+        .hero-mark-shell {
+            width: 48px;
+            height: 48px;
+            display: grid;
+            place-items: center;
             border-radius: 16px;
-            padding: 32px;
-            max-width: 480px;
-            width: 100%;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            background:
+                linear-gradient(145deg, rgba(255, 107, 74, 0.18), rgba(102, 214, 255, 0.04)),
+                rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
         }
-        header {
-            display: flex;
-            align-items: baseline;
-            gap: 10px;
-            margin-bottom: 28px;
+
+        .hero-mark {
+            width: 28px;
+            height: 28px;
+            display: block;
         }
-        h1 {
-            font-size: 22px;
+
+        .hero-branding {
+            min-width: 0;
+        }
+
+        .hero-kicker {
+            display: block;
+            margin-top: 4px;
+            color: var(--text-muted);
+            font-size: 11px;
             font-weight: 700;
-            color: #cdd6f4;
-        }
-        h1 span { color: #ff4e45; }
-        .version {
-            font-size: 12px;
-            color: #585b70;
-            background: rgba(255,255,255,0.04);
-            padding: 2px 8px;
-            border-radius: 4px;
-        }
-        section {
-            margin-bottom: 24px;
-        }
-        section:last-child { margin-bottom: 0; }
-        h2 {
-            font-size: 13px;
-            font-weight: 600;
-            color: #a6adc8;
+            letter-spacing: 0.08em;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 12px;
         }
-        .button-group {
+
+        .eyebrow {
+            display: inline-flex;
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            border: 1px solid rgba(255, 107, 74, 0.2);
+            color: #ffb59f;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 14px 0 8px;
+            font-size: clamp(28px, 4vw, 40px);
+            line-height: 1;
+            letter-spacing: -0.045em;
+            text-wrap: balance;
+        }
+
+        .brand-accent {
+            background: linear-gradient(135deg, #ff8f70, #ff5f4a);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-copy {
+            margin: 0;
+            max-width: 62ch;
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .hero-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .pill {
+            padding: 6px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .version-card {
             display: flex;
             flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+        }
+
+        .version-label {
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .version-value {
+            margin-top: 8px;
+            font-size: clamp(30px, 3vw, 38px);
+            font-weight: 800;
+            letter-spacing: -0.06em;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .version-note {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .stat-card {
+            padding: 14px;
+            border-radius: var(--radius-md);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+                var(--panel-bg-strong);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .stat-label {
+            display: block;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            display: block;
+            margin-top: 8px;
+            font-size: clamp(22px, 2.6vw, 30px);
+            font-weight: 800;
+            letter-spacing: -0.05em;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .stat-subtext {
+            display: block;
+            margin-top: 4px;
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .action-card {
+            padding: 16px;
+        }
+
+        .action-title {
+            margin: 0 0 6px;
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            text-wrap: balance;
+        }
+
+        .action-copy {
+            margin: 0 0 12px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        button {
+            min-height: 38px;
+            padding: 0 14px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease;
+            outline: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        button:hover {
+            border-color: rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        button:active:not(:disabled) {
+            transform: scale(0.985);
+        }
+
+        button:disabled {
+            opacity: 0.46;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        button.primary {
+            background: rgba(255, 107, 74, 0.18);
+            border-color: rgba(255, 107, 74, 0.28);
+            color: #fff;
+            box-shadow: none;
+        }
+
+        button.primary:hover {
+            background: rgba(255, 107, 74, 0.24);
+            border-color: rgba(255, 107, 74, 0.34);
+        }
+
+        button.danger {
+            color: #fff;
+            background: rgba(255, 116, 128, 0.12);
+            border-color: rgba(255, 116, 128, 0.24);
+        }
+
+        button.danger:hover {
+            background: rgba(255, 116, 128, 0.18);
+            border-color: rgba(255, 116, 128, 0.34);
+        }
+
+        .panel {
+            padding: 18px 20px;
+        }
+
+        .panel h2 {
+            margin: 0 0 10px;
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+        }
+
+        .panel p {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        .notes-list {
+            margin: 12px 0 0;
+            padding: 0;
+            list-style: none;
+            display: grid;
             gap: 8px;
         }
-        button {
-            background: #1e1e2e;
-            color: #cdd6f4;
-            border: 1px solid rgba(255,255,255,0.08);
-            padding: 10px 16px;
-            border-radius: 8px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.15s, border-color 0.15s;
-        }
-        button:hover {
-            background: #313244;
-            border-color: rgba(255,255,255,0.12);
-        }
-        button.danger {
-            color: #f38ba8;
-            border-color: rgba(243,139,168,0.15);
-        }
-        button.danger:hover {
-            background: rgba(243,139,168,0.1);
-            border-color: rgba(243,139,168,0.3);
-        }
-        .status {
-            margin-top: 10px;
+
+        .notes-list li {
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.035);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--text-secondary);
             font-size: 12px;
-            padding: 8px 12px;
-            border-radius: 6px;
-            display: none;
+            line-height: 1.55;
         }
+
+        .notes-list strong {
+            color: var(--text-primary);
+        }
+
+        .status {
+            margin-top: 14px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            display: none;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.55;
+        }
+
         .status.success {
             display: block;
-            background: rgba(166,227,161,0.08);
-            color: #a6e3a1;
-            border: 1px solid rgba(166,227,161,0.15);
+            color: #d7ffe8;
+            background: rgba(53, 199, 127, 0.12);
+            border: 1px solid rgba(53, 199, 127, 0.26);
         }
+
         .status.error {
             display: block;
-            background: rgba(243,139,168,0.08);
-            color: #f38ba8;
-            border: 1px solid rgba(243,139,168,0.15);
+            color: #ffe0e4;
+            background: rgba(255, 116, 128, 0.12);
+            border: 1px solid rgba(255, 116, 128, 0.26);
         }
-        #storage-info {
+
+        .status.info {
+            display: block;
+            color: #ddecff;
+            background: rgba(89, 146, 255, 0.12);
+            border: 1px solid rgba(89, 146, 255, 0.24);
+        }
+
+        .settings-modal-shell[hidden] {
+            display: none;
+        }
+
+        .settings-modal-shell {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+        }
+
+        .settings-modal-backdrop {
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(circle at top left, rgba(255, 107, 74, 0.1), transparent 26%),
+                linear-gradient(180deg, rgba(4, 7, 10, 0.74), rgba(4, 7, 10, 0.9));
+        }
+
+        .settings-modal {
+            position: relative;
+            width: min(1120px, calc(100vw - 20px));
+            max-height: calc(100vh - 20px);
+            margin: 10px auto;
+            overflow: hidden;
+            border-radius: 22px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
+                rgba(8, 11, 16, 0.98);
+            box-shadow: 0 26px 60px rgba(0, 0, 0, 0.48);
+            display: grid;
+            grid-template-rows: auto auto 1fr;
+            overscroll-behavior: contain;
+        }
+
+        .settings-modal-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .settings-modal-brand {
+            min-width: 0;
+        }
+
+        .settings-modal-eyebrow {
+            display: none;
+        }
+
+        .settings-modal-title {
+            margin: 0 0 4px;
+            font-size: clamp(18px, 1.8vw, 24px);
+            line-height: 1.05;
+            letter-spacing: -0.04em;
+            text-wrap: balance;
+        }
+
+        .settings-modal-summary {
+            margin: 0;
+            max-width: 58ch;
+            color: var(--text-muted);
             font-size: 12px;
-            color: #585b70;
-            background: rgba(255,255,255,0.02);
-            padding: 8px 12px;
-            border-radius: 6px;
-            border: 1px solid rgba(255,255,255,0.04);
+            line-height: 1.55;
+        }
+
+        .settings-modal-header-actions {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .settings-chip-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .settings-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 9px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .settings-chip strong {
+            color: var(--text-primary);
+            font-size: 10px;
+            letter-spacing: 0;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .icon-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 34px;
+            padding: 0;
+            border-radius: 12px;
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        .settings-modal-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            background: rgba(255, 255, 255, 0.015);
+        }
+
+        .settings-search-shell {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .settings-search-input {
+            width: 100%;
+            min-height: 36px;
+            padding: 0 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-primary);
+            font: inherit;
+            font-size: 12px;
+        }
+
+        .settings-search-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .settings-toolbar-actions {
+            justify-content: flex-end;
+        }
+
+        .settings-modal-body {
+            display: grid;
+            grid-template-columns: 220px minmax(0, 1fr);
+            min-height: 0;
+        }
+
+        .settings-groups {
+            padding: 10px 8px 10px 10px;
+            border-right: 1px solid rgba(255, 255, 255, 0.06);
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            overscroll-behavior: contain;
+        }
+
+        .settings-group-button {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            min-height: 36px;
+            padding: 0 10px;
+            border-radius: 12px;
+            border: 1px solid transparent;
+            background: transparent;
+            text-align: left;
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 700;
+            transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
+        }
+
+        .settings-group-button:hover {
+            color: var(--text-primary);
+        }
+
+        .settings-group-button.active {
+            border-color: rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+        }
+
+        .settings-group-count {
+            padding: 3px 6px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--text-muted);
+            font-size: 9px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .settings-editor {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .settings-modal-status {
+            display: none;
+            margin: 10px 12px 0;
+            padding: 10px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.5;
+        }
+
+        .settings-modal-status.success {
+            display: block;
+            color: #d7ffe8;
+            background: rgba(53, 199, 127, 0.12);
+            border: 1px solid rgba(53, 199, 127, 0.26);
+        }
+
+        .settings-modal-status.error {
+            display: block;
+            color: #ffe0e4;
+            background: rgba(255, 116, 128, 0.12);
+            border: 1px solid rgba(255, 116, 128, 0.26);
+        }
+
+        .settings-modal-status.info {
+            display: block;
+            color: #ddecff;
+            background: rgba(89, 146, 255, 0.12);
+            border: 1px solid rgba(89, 146, 255, 0.24);
+        }
+
+        .settings-list {
+            padding: 10px 12px 14px;
+            overflow: auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+            gap: 10px;
+            align-content: start;
+            overscroll-behavior: contain;
+        }
+
+        .settings-empty {
+            display: grid;
+            place-items: center;
+            min-height: 240px;
+            padding: 24px;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        .settings-item {
+            display: grid;
+            gap: 10px;
+            padding: 12px;
+            border-radius: 14px;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+                rgba(11, 16, 23, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        }
+
+        .settings-item.is-dirty {
+            border-color: rgba(255, 107, 74, 0.2);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+                rgba(19, 18, 20, 0.9);
+        }
+
+        .settings-item.is-invalid {
+            border-color: rgba(255, 116, 128, 0.26);
+        }
+
+        .settings-item-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .settings-item-copy {
+            min-width: 0;
+        }
+
+        .settings-item-title {
+            margin: 0 0 4px;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+        }
+
+        .settings-item-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .settings-item-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 7px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--text-muted);
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .settings-item-state {
+            color: #ffb59f;
+        }
+
+        .settings-item-description {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 11px;
+            line-height: 1.6;
+        }
+
+        .settings-item-control {
+            min-width: 0;
+        }
+
+        .settings-item-control input[type="text"],
+        .settings-item-control input[type="url"],
+        .settings-item-control input[type="number"],
+        .settings-item-control textarea {
+            width: 100%;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            background: rgba(7, 10, 15, 0.86);
+            color: var(--text-primary);
+            font: inherit;
+            font-size: 12px;
+            padding: 12px 13px;
+        }
+
+        .settings-item-control textarea {
+            min-height: 112px;
+            resize: vertical;
+            line-height: 1.55;
+        }
+
+        .settings-item-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .settings-item-toggle input {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .settings-item-toggle-track {
+            position: relative;
+            width: 50px;
+            height: 30px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: background-color 160ms ease, border-color 160ms ease;
+        }
+
+        .settings-item-toggle-track::after {
+            content: '';
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 5px 14px rgba(0, 0, 0, 0.3);
+            transition: transform 160ms ease;
+        }
+
+        .settings-item-toggle input:checked + .settings-item-toggle-track {
+            background: linear-gradient(135deg, #ff8668, #ff5f4a);
+            border-color: transparent;
+        }
+
+        .settings-item-toggle input:checked + .settings-item-toggle-track::after {
+            transform: translateX(20px);
+        }
+
+        .settings-item-toggle-label {
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .settings-item-footer {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .settings-item-hint {
+            color: var(--text-muted);
+            font-size: 10px;
+            line-height: 1.5;
+        }
+
+        .settings-reset-inline {
+            min-height: 30px;
+            padding: 0 10px;
+            border-radius: 10px;
+            font-size: 10px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        button:focus-visible,
+        input:focus-visible {
+            outline: none;
+            box-shadow: var(--focus-ring);
+            border-color: rgba(255, 107, 74, 0.3);
+        }
+
+        @media (max-width: 960px) {
+            .hero,
+            .action-grid,
+            .settings-modal-body {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .settings-modal {
+                width: min(100vw - 16px, 1180px);
+                max-height: calc(100vh - 16px);
+                margin: 8px auto;
+            }
+
+            .settings-modal-toolbar,
+            .settings-modal-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .settings-modal-header-actions {
+                align-items: stretch;
+            }
+
+            .settings-chip-row,
+            .settings-toolbar-actions {
+                justify-content: flex-start;
+            }
+
+            .settings-groups {
+                border-right: none;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+                max-height: 220px;
+            }
+
+            .settings-list {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            body {
+                padding: 18px 12px 28px;
+            }
+
+            .hero-card,
+            .panel,
+            .action-card {
+                border-radius: 18px;
+            }
+
+            .settings-modal {
+                border-radius: 18px;
+            }
+
+            .settings-modal-header,
+            .settings-modal-toolbar {
+                padding-left: 12px;
+                padding-right: 12px;
+            }
+
+            .settings-list {
+                padding-left: 10px;
+                padding-right: 10px;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>YT<span>Kit</span></h1>
-            <span class="version" id="version"></span>
-        </header>
-        <section>
-            <h2>Settings Management</h2>
-            <div class="button-group">
-                <button id="export-btn">Export Settings</button>
-                <button id="import-btn">Import Settings</button>
-                <input type="file" id="import-file" accept=".json" hidden>
-                <button id="reset-btn" class="danger">Reset All Settings</button>
+    <div class="page-shell">
+        <section class="hero">
+            <div class="hero-card">
+                <div class="hero-lockup">
+                    <div class="hero-mark-shell" aria-hidden="true">
+                        <img class="hero-mark" src="icons/brand-glyph.svg" alt="">
+                    </div>
+                    <div class="hero-branding">
+                        <span class="eyebrow">Astra Deck</span>
+                        <span class="hero-kicker">Options</span>
+                    </div>
+                </div>
+                <h1>Astra <span class="brand-accent">Deck</span> Settings</h1>
+                <p class="hero-copy">
+                    Back up settings, restore a saved setup, and inspect what the extension stores locally.
+                    Use the modal below when you want the full settings editor outside YouTube.
+                </p>
+                <div class="hero-pills">
+                    <span class="pill">Export Ready</span>
+                    <span class="pill">Import Ready</span>
+                    <span class="pill">Local Storage Only</span>
+                </div>
             </div>
-            <div class="status" id="status"></div>
+            <div class="hero-card version-card">
+                <div>
+                    <div class="version-label">Current Version</div>
+                    <div class="version-value" id="version"></div>
+                </div>
+                <p class="version-note">
+                    Use this page for backups, resets, and quick storage inspection.
+                </p>
+            </div>
         </section>
-        <section>
-            <h2>Storage</h2>
-            <div id="storage-info">Loading...</div>
+
+        <section class="stats-grid" aria-label="Storage statistics">
+            <div class="stat-card">
+                <span class="stat-label">Keys</span>
+                <span class="stat-value" id="stat-keys">0</span>
+                <span class="stat-subtext">items stored</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Storage</span>
+                <span class="stat-value" id="stat-size">0 KB</span>
+                <span class="stat-subtext">estimated usage</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Hidden Videos</span>
+                <span class="stat-value" id="stat-hidden-videos">0</span>
+                <span class="stat-subtext">video rules</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Blocked Channels</span>
+                <span class="stat-value" id="stat-blocked-channels">0</span>
+                <span class="stat-subtext">channel rules</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Bookmarks</span>
+                <span class="stat-value" id="stat-bookmarks">0</span>
+                <span class="stat-subtext">saved items</span>
+            </div>
+        </section>
+
+        <section class="action-grid" aria-label="Settings actions">
+            <article class="action-card">
+                <h2 class="action-title">Settings</h2>
+                <p class="action-copy">
+                    Open the full settings editor to search, edit, and save extension preferences without loading YouTube.
+                </p>
+                <div class="button-row">
+                    <button id="open-settings-modal-btn" class="primary" type="button">Open Settings</button>
+                </div>
+            </article>
+
+            <article class="action-card">
+                <h2 class="action-title">Export Snapshot</h2>
+                <p class="action-copy">
+                    Save your current settings, hidden content rules, and bookmarks to a portable JSON file.
+                </p>
+                <div class="button-row">
+                    <button id="export-btn" class="primary" type="button">Export Settings</button>
+                </div>
+            </article>
+
+            <article class="action-card">
+                <h2 class="action-title">Import Setup</h2>
+                <p class="action-copy">
+                    Restore a previous Astra Deck configuration from an export file and reload your YouTube tabs after.
+                </p>
+                <div class="button-row">
+                    <button id="import-btn" type="button">Import Settings</button>
+                    <input type="file" id="import-file" accept=".json,application/json" hidden>
+                </div>
+            </article>
+
+            <article class="action-card">
+                <h2 class="action-title">Reset Storage</h2>
+                <p class="action-copy">
+                    Clear everything stored by the extension if you want to start fresh or remove stale state.
+                </p>
+                <div class="button-row">
+                    <button id="reset-btn" class="danger" type="button">Reset All Settings</button>
+                </div>
+            </article>
+        </section>
+
+        <section class="panel" aria-label="Storage notes">
+            <h2>What Gets Stored</h2>
+            <p id="storage-info">Loading storage details…</p>
+            <ul class="notes-list">
+                <li><strong>Export</strong> includes core settings, hidden videos, blocked channels, and bookmarks.</li>
+                <li><strong>Import</strong> replaces matching stored data with what is found in the selected file.</li>
+                <li><strong>Reset</strong> clears extension storage only. It does not remove built artifacts or local downloader files.</li>
+            </ul>
+            <div class="status" id="status" aria-live="polite"></div>
+        </section>
+    </div>
+
+    <div class="settings-modal-shell" id="settings-modal-shell" hidden>
+        <div class="settings-modal-backdrop" data-close-settings-modal></div>
+        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+            <header class="settings-modal-header">
+                <div class="settings-modal-brand">
+                    <span class="settings-modal-eyebrow">Settings</span>
+                    <h2 class="settings-modal-title" id="settings-modal-title">Settings</h2>
+                    <p class="settings-modal-summary" id="settings-modal-summary">
+                        Browse and edit the extension’s stored settings directly from the options page.
+                    </p>
+                </div>
+                <div class="settings-modal-header-actions">
+                    <div class="settings-chip-row">
+                        <div class="settings-chip"><strong id="settings-total-count">0</strong> settings</div>
+                        <div class="settings-chip"><strong id="settings-dirty-count">0</strong> unsaved</div>
+                    </div>
+                    <button id="close-settings-modal-btn" class="icon-button" type="button" aria-label="Close settings modal">×</button>
+                </div>
+            </header>
+
+            <div class="settings-modal-toolbar">
+                <label class="settings-search-shell" for="settings-search">
+                    <input class="settings-search-input" id="settings-search" type="search" placeholder="Search settings, keys, or groups…">
+                </label>
+                <div class="button-row settings-toolbar-actions">
+                    <button id="settings-restore-defaults-btn" type="button">Restore Defaults</button>
+                    <button id="settings-discard-btn" type="button">Discard Draft</button>
+                    <button id="settings-save-btn" class="primary" type="button">Save Settings</button>
+                </div>
+            </div>
+
+            <div class="settings-modal-body">
+                <aside class="settings-groups" id="settings-groups" aria-label="Setting groups"></aside>
+                <div class="settings-editor">
+                    <div class="settings-modal-status" id="settings-modal-status" aria-live="polite"></div>
+                    <div class="settings-empty" id="settings-empty" hidden>
+                        No settings match your current search.
+                    </div>
+                    <div class="settings-list" id="settings-list"></div>
+                </div>
+            </div>
         </section>
     </div>
     <script src="options.js"></script>

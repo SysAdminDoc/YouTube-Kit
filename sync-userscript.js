@@ -27,8 +27,13 @@ const header = `// ==UserScript==
 // @grant        GM.xmlHttpRequest
 // @connect      sponsor.ajay.app
 // @connect      returnyoutubedislikeapi.com
-// @connect      cobalt.meowing.de
+// @connect      cobalt.tools
+// @connect      *.cobalt.tools
+// @connect      *.imput.net
 // @connect      *.meowing.de
+// @connect      *.canine.tools
+// @connect      capi.3kh0.net
+// @connect      downloadapi.stuff.solutions
 // @connect      raw.githubusercontent.com
 // @connect      localhost
 // @connect      127.0.0.1
@@ -44,16 +49,33 @@ const preamble = `(function() {
     const GM = { xmlHttpRequest: GM_xmlhttpRequest };
     // GM_cookie not available in userscripts — provide no-op
     const GM_cookie = { list(filter, cb) { cb(null, 'GM_cookie not available in userscript mode'); } };
+    // triggerDownload — open URL directly in userscript mode (no chrome.downloads API)
+    function triggerDownload(url, filename) {
+        return new Promise((resolve) => {
+            const a = document.createElement('a');
+            a.href = url;
+            if (filename) a.download = filename;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { try { document.body.removeChild(a); } catch(_) {} resolve({ ok: true }); }, 200);
+        });
+    }
 
 `;
 
-// Find where the extension preamble ends (after the GM = gm.GM; line)
-// The body starts after: const GM = gm.GM;
-const bodyStartMarker = 'const GM = gm.GM;';
-const bodyStartIdx = ext.indexOf(bodyStartMarker);
+// Find where the extension preamble ends (after the triggerDownload line)
+// The body starts after: const triggerDownload = gm.triggerDownload.bind(gm);
+const bodyStartMarker = 'const triggerDownload = gm.triggerDownload.bind(gm);';
+let bodyStartIdx = ext.indexOf(bodyStartMarker);
 if (bodyStartIdx === -1) {
-    console.error('Could not find body start marker');
-    process.exit(1);
+    // Fallback to older marker if triggerDownload not found
+    const fallback = 'const GM = gm.GM;';
+    bodyStartIdx = ext.indexOf(fallback);
+    if (bodyStartIdx === -1) {
+        console.error('Could not find body start marker');
+        process.exit(1);
+    }
 }
 // Skip past the marker and the next newline(s)
 let afterMarker = bodyStartIdx + bodyStartMarker.length;
@@ -62,7 +84,7 @@ let body = ext.slice(afterMarker);
 
 // Replace the _rw bridge object and references
 // Remove the entire _rw bridge block (multi-line const _rw = { ... };)
-body = body.replace(/\s*\/\/ Bridge to page context:[\s\S]*?_prCacheHref: ''\r?\n\s*\};/,
+body = body.replace(/\s*\/\/ Bridge to page context[^\n]*[\s\S]*?_prCacheHref: ''\r?\n\s*\};/,
     '\n    // In userscript context, window.ytInitialPlayerResponse and window.__ytab\n    // are directly accessible (same page context, no ISOLATED/MAIN world split)');
 
 // Replace all _rw.ytInitialPlayerResponse with window.ytInitialPlayerResponse

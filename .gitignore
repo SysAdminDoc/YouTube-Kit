@@ -1,3 +1,7 @@
 node_modules/
 build/
 *.pem
+*.mhtml
+*.bak
+comments.png
+YTKit-v1.2.0.user.js
