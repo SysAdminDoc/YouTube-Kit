@@ -18,7 +18,6 @@ const ALLOWED_FETCH_ORIGINS = [
     'https://music.youtube.com',
     'https://youtu.be',
     'https://www.youtube-nocookie.com',
-    'https://returnyoutubedislikeapi.com',
     'https://sponsor.ajay.app',
     'http://127.0.0.1:9751',
     'http://localhost:9751',

@@ -3,6 +3,8 @@
     'use strict';
 
     const BRAND_NAME = 'Astra Deck';
+    const DEFAULT_SETTINGS_URL = chrome.runtime.getURL('default-settings.json');
+    const SETTINGS_META_URL = chrome.runtime.getURL('settings-meta.json');
     const SETTINGS_SOURCE_URL = chrome.runtime.getURL('ytkit.js');
 
     const STORAGE_KEYS = {
@@ -11,6 +13,19 @@
         blockedChannels: 'ytkit-blocked-channels',
         bookmarks: 'ytkit-bookmarks'
     };
+
+    const RETIRED_SETTING_KEYS = new Set([
+        'autoExpandComments',
+        'chatStyleComments',
+        'commentEnhancements',
+        'commentNavigator',
+        'commentSearch',
+        'condenseComments',
+        'hideCommentActionMenu',
+        'hideCommentDislikeButton',
+        'hideCommentTeaser',
+        'hidePinnedComments'
+    ]);
 
     const GROUPS = [
         { id: 'all', label: 'All Settings' },
@@ -65,7 +80,8 @@
         invalidKeys: new Set(),
         activeGroup: 'all',
         search: '',
-        defaultsLoaded: false
+        defaultsLoaded: false,
+        settingsVersion: 1
     };
 
     elements.version.textContent = 'v' + manifest.version;
@@ -116,9 +132,29 @@
         return safeSerialize(left) === safeSerialize(right);
     }
 
+    function sanitizeSettingsObject(settings) {
+        if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return {};
+        const sanitized = {};
+        for (const [key, value] of Object.entries(settings)) {
+            if (!RETIRED_SETTING_KEYS.has(key)) {
+                sanitized[key] = value;
+            }
+        }
+        return sanitized;
+    }
+
+    function applySettingsVersion(settings) {
+        if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return {};
+        const next = sanitizeSettingsObject(settings);
+        if (Number.isFinite(state.settingsVersion) && state.settingsVersion > 0) {
+            next._settingsVersion = state.settingsVersion;
+        }
+        return next;
+    }
+
     function buildExportData(allStorage) {
         return {
-            settings: allStorage[STORAGE_KEYS.settings] || {},
+            settings: sanitizeSettingsObject(allStorage[STORAGE_KEYS.settings] || {}),
             hiddenVideos: allStorage[STORAGE_KEYS.hiddenVideos] || [],
             blockedChannels: allStorage[STORAGE_KEYS.blockedChannels] || [],
             bookmarks: allStorage[STORAGE_KEYS.bookmarks] || {},
@@ -198,7 +234,9 @@
             ...Object.keys(state.draftSettings || {})
         ]);
 
-        return Array.from(keySet).sort((left, right) => humanizeKey(left).localeCompare(humanizeKey(right)));
+        return Array.from(keySet)
+            .filter((key) => !RETIRED_SETTING_KEYS.has(key))
+            .sort((left, right) => humanizeKey(left).localeCompare(humanizeKey(right)));
     }
 
     function matchesSearch(key, value) {
@@ -312,19 +350,60 @@
         if (state.defaultsLoaded) return;
 
         try {
-            const response = await fetch(SETTINGS_SOURCE_URL);
-            const source = await response.text();
-            const objectLiteral = findBalancedObjectLiteral(source, 'defaults:');
-            if (!objectLiteral) {
-                throw new Error('Settings defaults were not found in ytkit.js');
+            let defaults = null;
+            let settingsVersion = null;
+
+            try {
+                const defaultSettingsResponse = await fetch(DEFAULT_SETTINGS_URL, { cache: 'no-store' });
+                if (defaultSettingsResponse.ok) {
+                    const json = await defaultSettingsResponse.json();
+                    if (json && typeof json === 'object' && !Array.isArray(json)) {
+                        defaults = json;
+                    }
+                }
+            } catch {
+                // Fall back to source parsing for unpacked/debug builds if the generated catalog is missing.
             }
 
-            const defaults = Function('"use strict"; return (' + objectLiteral + ');')();
+            try {
+                const settingsMetaResponse = await fetch(SETTINGS_META_URL, { cache: 'no-store' });
+                if (settingsMetaResponse.ok) {
+                    const json = await settingsMetaResponse.json();
+                    if (json && Number.isFinite(json.settingsVersion)) {
+                        settingsVersion = Number(json.settingsVersion);
+                    }
+                }
+            } catch {
+                // Fall back to source parsing for unpacked/debug builds if the generated catalog is missing.
+            }
+
+            if (!defaults || !settingsVersion) {
+                const response = await fetch(SETTINGS_SOURCE_URL, { cache: 'no-store' });
+                const source = await response.text();
+                if (!defaults) {
+                    const objectLiteral = findBalancedObjectLiteral(source, 'defaults:');
+                    if (!objectLiteral) {
+                        throw new Error('Settings defaults were not found in ytkit.js');
+                    }
+                    defaults = Function('"use strict"; return (' + objectLiteral + ');')();
+                }
+                if (!settingsVersion) {
+                    const versionMatch = source.match(/SETTINGS_VERSION:\s*(\d+)/);
+                    if (!versionMatch) {
+                        throw new Error('Settings version was not found in ytkit.js');
+                    }
+                    settingsVersion = Number(versionMatch[1]);
+                }
+            }
+
             if (!defaults || typeof defaults !== 'object' || Array.isArray(defaults)) {
                 throw new Error('Settings defaults are not a plain object');
             }
 
-            state.defaultSettings = deepClone(defaults);
+            if (Number.isFinite(settingsVersion) && settingsVersion > 0) {
+                state.settingsVersion = settingsVersion;
+            }
+            state.defaultSettings = sanitizeSettingsObject(deepClone(defaults));
             state.defaultsLoaded = true;
         } catch {
             state.defaultSettings = {};
@@ -394,16 +473,16 @@
 
             const writes = {};
             if (data.exportVersion >= 3) {
-                if (data.settings && typeof data.settings === 'object') writes[STORAGE_KEYS.settings] = data.settings;
+                if (data.settings && typeof data.settings === 'object') writes[STORAGE_KEYS.settings] = applySettingsVersion(data.settings);
                 if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = data.hiddenVideos;
                 if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = data.blockedChannels;
                 if (data.bookmarks && typeof data.bookmarks === 'object') writes[STORAGE_KEYS.bookmarks] = data.bookmarks;
             } else if (data.exportVersion >= 2) {
-                if (data.settings && typeof data.settings === 'object') writes[STORAGE_KEYS.settings] = data.settings;
+                if (data.settings && typeof data.settings === 'object') writes[STORAGE_KEYS.settings] = applySettingsVersion(data.settings);
                 if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = data.hiddenVideos;
                 if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = data.blockedChannels;
             } else {
-                writes[STORAGE_KEYS.settings] = data;
+                writes[STORAGE_KEYS.settings] = applySettingsVersion(data);
             }
 
             if (Object.keys(writes).length === 0) {
@@ -442,7 +521,11 @@
     async function refreshSettingsState({ resetDraft = false } = {}) {
         await loadDefaultSettingsFromSource();
         const result = await chrome.storage.local.get(STORAGE_KEYS.settings);
-        state.storedSettings = deepClone(result[STORAGE_KEYS.settings] || {});
+        const rawStoredSettings = deepClone(result[STORAGE_KEYS.settings] || {});
+        state.storedSettings = applySettingsVersion(rawStoredSettings);
+        if (!areValuesEqual(rawStoredSettings, state.storedSettings)) {
+            await chrome.storage.local.set({ [STORAGE_KEYS.settings]: state.storedSettings });
+        }
         state.resolvedSettings = {
             ...deepClone(state.defaultSettings),
             ...deepClone(state.storedSettings)
@@ -925,5 +1008,4 @@
     });
 
     renderStorageInfo();
-    loadDefaultSettingsFromSource();
 })();

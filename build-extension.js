@@ -11,6 +11,8 @@ const EXT_DIR = path.join(__dirname, 'extension');
 const BUILD_DIR = path.join(__dirname, 'build');
 const MANIFEST = path.join(EXT_DIR, 'manifest.json');
 const YTKIT_JS = path.join(EXT_DIR, 'ytkit.js');
+const DEFAULT_SETTINGS_JSON = path.join(EXT_DIR, 'default-settings.json');
+const SETTINGS_META_JSON = path.join(EXT_DIR, 'settings-meta.json');
 const USERSCRIPT = path.join(__dirname, 'ytkit.user.js');
 const CRX_KEY = path.join(__dirname, 'ytkit.pem');
 
@@ -23,6 +25,7 @@ const bumpType = bumpIndex !== -1 ? args[bumpIndex + 1] : null;
 // Read manifest
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
 let version = manifest.version;
+let ytkitSource = fs.readFileSync(YTKIT_JS, 'utf8');
 
 // Optional version bump
 if (bumpType) {
@@ -36,10 +39,10 @@ if (bumpType) {
     fs.writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 
     // Also update YTKIT_VERSION in ytkit.js
-    const ytkitSrc = fs.readFileSync(YTKIT_JS, 'utf8');
-    const updated = ytkitSrc.replace(/const YTKIT_VERSION = '[^']+';/, "const YTKIT_VERSION = '" + version + "';");
-    if (updated !== ytkitSrc) {
+    const updated = ytkitSource.replace(/const YTKIT_VERSION = '[^']+';/, "const YTKIT_VERSION = '" + version + "';");
+    if (updated !== ytkitSource) {
         fs.writeFileSync(YTKIT_JS, updated, 'utf8');
+        ytkitSource = updated;
         console.log('Updated YTKIT_VERSION in ytkit.js');
     }
 
@@ -55,6 +58,9 @@ if (bumpType) {
 
     console.log('Bumped version to ' + version);
 }
+
+writeDefaultSettingsCatalog(ytkitSource);
+writeSettingsMetaCatalog(ytkitSource);
 
 // Clean and create build dir
 if (fs.existsSync(BUILD_DIR)) fs.rmSync(BUILD_DIR, { recursive: true });
@@ -125,6 +131,142 @@ function listFiles(dir, base) {
         }
     }
     return files;
+}
+
+function findBalancedObjectLiteral(source, startToken) {
+    const start = source.indexOf(startToken);
+    if (start === -1) return null;
+
+    const openIndex = source.indexOf('{', start);
+    if (openIndex === -1) return null;
+
+    let depth = 0;
+    let inSingle = false;
+    let inDouble = false;
+    let inTemplate = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+    let escaping = false;
+
+    for (let index = openIndex; index < source.length; index += 1) {
+        const char = source[index];
+        const next = source[index + 1];
+
+        if (inLineComment) {
+            if (char === '\n') inLineComment = false;
+            continue;
+        }
+
+        if (inBlockComment) {
+            if (char === '*' && next === '/') {
+                inBlockComment = false;
+                index += 1;
+            }
+            continue;
+        }
+
+        if (inSingle) {
+            if (!escaping && char === '\'') inSingle = false;
+            escaping = char === '\\' && !escaping;
+            continue;
+        }
+
+        if (inDouble) {
+            if (!escaping && char === '"') inDouble = false;
+            escaping = char === '\\' && !escaping;
+            continue;
+        }
+
+        if (inTemplate) {
+            if (!escaping && char === '`') inTemplate = false;
+            escaping = char === '\\' && !escaping;
+            continue;
+        }
+
+        escaping = false;
+
+        if (char === '/' && next === '/') {
+            inLineComment = true;
+            index += 1;
+            continue;
+        }
+
+        if (char === '/' && next === '*') {
+            inBlockComment = true;
+            index += 1;
+            continue;
+        }
+
+        if (char === '\'') {
+            inSingle = true;
+            continue;
+        }
+
+        if (char === '"') {
+            inDouble = true;
+            continue;
+        }
+
+        if (char === '`') {
+            inTemplate = true;
+            continue;
+        }
+
+        if (char === '{') {
+            depth += 1;
+        } else if (char === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                return source.slice(openIndex, index + 1);
+            }
+        }
+    }
+
+    return null;
+}
+
+function writeDefaultSettingsCatalog(ytkitSource) {
+    const objectLiteral = findBalancedObjectLiteral(ytkitSource, 'defaults:');
+    if (!objectLiteral) {
+        throw new Error('Could not find settings defaults in ytkit.js');
+    }
+
+    const defaults = Function('"use strict"; return (' + objectLiteral + ');')();
+    if (!defaults || typeof defaults !== 'object' || Array.isArray(defaults)) {
+        throw new Error('Parsed defaults are not a plain object');
+    }
+
+    const retiredSettingKeys = [
+        'autoExpandComments',
+        'chatStyleComments',
+        'commentEnhancements',
+        'commentNavigator',
+        'commentSearch',
+        'condenseComments',
+        'hideCommentActionMenu',
+        'hideCommentDislikeButton',
+        'hideCommentTeaser',
+        'hidePinnedComments'
+    ];
+
+    for (const key of retiredSettingKeys) {
+        delete defaults[key];
+    }
+
+    fs.writeFileSync(DEFAULT_SETTINGS_JSON, JSON.stringify(defaults, null, 2) + '\n', 'utf8');
+}
+
+function writeSettingsMetaCatalog(ytkitSource) {
+    const settingsVersionMatch = ytkitSource.match(/SETTINGS_VERSION:\s*(\d+)/);
+    if (!settingsVersionMatch) {
+        throw new Error('Could not find settings version in ytkit.js');
+    }
+
+    const meta = {
+        settingsVersion: Number(settingsVersionMatch[1])
+    };
+
+    fs.writeFileSync(SETTINGS_META_JSON, JSON.stringify(meta, null, 2) + '\n', 'utf8');
 }
 
 function buildUserscriptSource(extensionSource, targetVersion) {
