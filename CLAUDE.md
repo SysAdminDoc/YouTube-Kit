@@ -59,7 +59,7 @@ Chrome + Firefox MV3 extension and Tampermonkey userscript for comprehensive You
 ### Not Yet Ported to Extension (userscript-only)
 The following features exist in the userscript but have NOT been implemented in the extension build:
 - **SharedAudio system** (volumeBoost, skipSilence, audioNormalization, audioEqualizer) — requires MAIN world access to Web Audio API
-- **SponsorBlock integration** (8 sbCat_* category toggles) — not ported
+- **SponsorBlock integration** — ported in v3.4.0 with 9 category toggles + progress bar segments
 - **Cobalt download fallback** (_tryCobaltApiDownload, _webDownloadFallback) — extension uses MediaDL-only path
 - **Direct YouTube stream download** (_tryDirectDownload) — extension uses MediaDL-only path
 - **muteAdAudio** — requires MAIN world ad detection
@@ -75,6 +75,7 @@ The following features exist in the userscript but have NOT been implemented in 
 - Timestamp Bookmarks persist in StorageManager with inline note editing
 - Cinema Ambient Glow uses requestAnimationFrame + 500ms throttled canvas sampling
 - Transcript Viewer fetches json3 format from YouTube caption tracks API
+- **SponsorBlock** fetches segments from `sponsor.ajay.app/api/skipSegments`, auto-skips during playback via 500ms interval check on `video.currentTime`, renders colored segment bars on the progress bar. 9 category toggles (all skip-categories on by default, poi_highlight off). Shows toast on skip.
 - **DeArrow** caches API responses with configurable TTL, formats titles (sentence/title case), falls back to original on API miss
 - **enableCPU_Tamer** patches `setTimeout`/`setInterval` to use `requestAnimationFrame` when tab is background
 - **sync-userscript.js** — converts extension source to userscript: strips gm-compat preamble, removes `_rw` bridge, replaces `_rw.` -> `window.`

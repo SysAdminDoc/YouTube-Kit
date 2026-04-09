@@ -2494,6 +2494,17 @@ return response;
             daFallbackFormat: true,
             daShowOriginalHover: true,
             daCacheTTL: '4',
+            sponsorBlock: true,
+            sbCat_sponsor: true,
+            sbCat_intro: true,
+            sbCat_outro: true,
+            sbCat_selfpromo: true,
+            sbCat_interaction: true,
+            sbCat_music_offtopic: true,
+            sbCat_preview: true,
+            sbCat_filler: true,
+            sbCat_poi_highlight: false,
+            sbShowSkipNotice: true,
             showStatisticsDashboard: false,
             settingsProfiles: false,
             debugMode: false,
@@ -14371,6 +14382,173 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             ],
             init() {}, destroy() {}
         },
+        // ── SponsorBlock ──
+        {
+            id: 'sponsorBlock',
+            name: 'SponsorBlock',
+            description: 'Automatically skip sponsored segments, intros, outros, and other non-content sections using crowdsourced data',
+            group: 'Content',
+            icon: 'skip-forward',
+            isParent: true,
+            pages: [PageTypes.WATCH],
+            _segments: [],
+            _videoId: null,
+            _skipHandler: null,
+            _navHandler: null,
+            _styleEl: null,
+            _barSegments: [],
+            _barObserver: null,
+
+            _CATEGORY_MAP: {
+                sbCat_sponsor: 'sponsor',
+                sbCat_intro: 'intro',
+                sbCat_outro: 'outro',
+                sbCat_selfpromo: 'selfpromo',
+                sbCat_interaction: 'interaction',
+                sbCat_music_offtopic: 'music_offtopic',
+                sbCat_preview: 'preview',
+                sbCat_filler: 'filler',
+                sbCat_poi_highlight: 'poi_highlight',
+            },
+            _CATEGORY_COLORS: {
+                sponsor: '#00d400',
+                selfpromo: '#ffff00',
+                interaction: '#cc00ff',
+                intro: '#00ffff',
+                outro: '#0202ed',
+                preview: '#008fd6',
+                music_offtopic: '#ff9900',
+                filler: '#7300FF',
+                poi_highlight: '#ff1684',
+            },
+
+            _getEnabledCategories() {
+                const cats = [];
+                for (const [key, apiName] of Object.entries(this._CATEGORY_MAP)) {
+                    if (appState.settings[key]) cats.push(apiName);
+                }
+                return cats;
+            },
+
+            async _fetchSegments(videoId) {
+                const cats = this._getEnabledCategories();
+                if (!cats.length) return [];
+                try {
+                    const { data } = await extensionFetchJson({
+                        method: 'GET',
+                        url: `https://sponsor.ajay.app/api/skipSegments?videoID=${encodeURIComponent(videoId)}&categories=${encodeURIComponent(JSON.stringify(cats))}`,
+                        timeout: 8000,
+                    });
+                    if (!Array.isArray(data)) return [];
+                    return data.filter(s => Array.isArray(s.segment) && s.segment.length === 2);
+                } catch (_) {
+                    return [];
+                }
+            },
+
+            async _loadForVideo() {
+                const videoId = getVideoId();
+                if (!videoId || videoId === this._videoId) return;
+                this._videoId = videoId;
+                this._segments = [];
+                this._clearBarSegments();
+                this._segments = await this._fetchSegments(videoId);
+                if (this._segments.length) {
+                    DebugManager.log('SponsorBlock', `Loaded ${this._segments.length} segments for ${videoId}`);
+                    this._renderBarSegments();
+                }
+            },
+
+            _checkSkip() {
+                if (!this._segments.length) return;
+                const video = document.querySelector('video.html5-main-video');
+                if (!video || video.paused) return;
+                const currentTime = video.currentTime;
+                const enabledCats = this._getEnabledCategories();
+                for (const seg of this._segments) {
+                    if (!enabledCats.includes(seg.category)) continue;
+                    const [start, end] = seg.segment;
+                    if (currentTime >= start && currentTime < end - 0.3) {
+                        video.currentTime = end;
+                        DebugManager.log('SponsorBlock', `Skipped ${seg.category}: ${start.toFixed(1)}s -> ${end.toFixed(1)}s`);
+                        if (appState.settings.sbShowSkipNotice) {
+                            const catName = seg.category.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                            showToast(`Skipped: ${catName}`, this._CATEGORY_COLORS[seg.category] || '#00d400', { duration: 2000 });
+                        }
+                        break;
+                    }
+                }
+            },
+
+            _renderBarSegments() {
+                this._clearBarSegments();
+                const video = document.querySelector('video.html5-main-video');
+                const progressBar = document.querySelector('.ytp-progress-bar');
+                if (!video || !progressBar || !video.duration) return;
+                const duration = video.duration;
+                for (const seg of this._segments) {
+                    const [start, end] = seg.segment;
+                    const left = (start / duration) * 100;
+                    const width = ((end - start) / duration) * 100;
+                    const bar = document.createElement('div');
+                    bar.className = 'ytkit-sb-segment';
+                    bar.style.cssText = `position:absolute;bottom:0;height:100%;left:${left}%;width:${width}%;background:${this._CATEGORY_COLORS[seg.category] || '#00d400'};opacity:0.7;pointer-events:none;z-index:35;`;
+                    bar.title = seg.category.replace(/_/g, ' ');
+                    progressBar.appendChild(bar);
+                    this._barSegments.push(bar);
+                }
+            },
+
+            _clearBarSegments() {
+                this._barSegments.forEach(el => el.remove());
+                this._barSegments = [];
+            },
+
+            init() {
+                const self = this;
+                this._styleEl = injectStyle('.ytkit-sb-segment { border-radius: 1px; }', this.id, true);
+                this._skipHandler = setInterval(() => self._checkSkip(), 500);
+                this._navHandler = () => {
+                    self._videoId = null;
+                    self._segments = [];
+                    self._clearBarSegments();
+                    setTimeout(() => self._loadForVideo(), 1000);
+                };
+                window.addEventListener('yt-navigate-finish', this._navHandler);
+                // Also watch for video duration becoming available (for bar rendering)
+                this._barObserver = new MutationObserver(() => {
+                    const video = document.querySelector('video.html5-main-video');
+                    if (video?.duration && this._segments.length && !this._barSegments.length) {
+                        this._renderBarSegments();
+                    }
+                });
+                const player = document.getElementById('movie_player');
+                if (player) this._barObserver.observe(player, { childList: true, subtree: true });
+                setTimeout(() => self._loadForVideo(), 500);
+            },
+
+            destroy() {
+                if (this._skipHandler) clearInterval(this._skipHandler);
+                if (this._navHandler) window.removeEventListener('yt-navigate-finish', this._navHandler);
+                this._barObserver?.disconnect();
+                this._clearBarSegments();
+                this._styleEl?.remove();
+                this._segments = [];
+                this._videoId = null;
+            }
+        },
+        // SponsorBlock category sub-features
+        { id: 'sbCat_sponsor', name: 'Skip Sponsors', description: 'Paid promotions and sponsorship segments', group: 'Content', icon: 'dollar-sign', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbCat_intro', name: 'Skip Intros', description: 'Intro animations and branding', group: 'Content', icon: 'skip-forward', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbCat_outro', name: 'Skip Outros', description: 'Endcards and outro sequences', group: 'Content', icon: 'skip-forward', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbCat_selfpromo', name: 'Skip Self-Promotion', description: 'Creator promoting their own products or channels', group: 'Content', icon: 'megaphone', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbCat_interaction', name: 'Skip Interaction Reminders', description: '"Like, subscribe, comment" reminders', group: 'Content', icon: 'bell', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbCat_music_offtopic', name: 'Skip Non-Music', description: 'Non-music sections in music videos', group: 'Content', icon: 'music', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbCat_preview', name: 'Skip Previews', description: 'Preview or recap of upcoming content', group: 'Content', icon: 'fast-forward', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbCat_filler', name: 'Skip Filler', description: 'Tangential or filler content', group: 'Content', icon: 'scissors', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbCat_poi_highlight', name: 'Highlight Point of Interest', description: 'Jump to the highlight/point of interest (disabled by default)', group: 'Content', icon: 'star', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+        { id: 'sbShowSkipNotice', name: 'Show Skip Notice', description: 'Show a toast notification when a segment is skipped', group: 'Content', icon: 'message-circle', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
+
         // ── DeArrow ──
         {
             id: 'deArrow',
