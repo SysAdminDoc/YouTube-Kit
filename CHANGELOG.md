@@ -4,6 +4,22 @@ All notable changes to YTKit are documented here. Versions are listed newest-fir
 
 ---
 
+## [3.6.0] - Runtime Modularization & Hardening
+
+### Changed
+
+- **Modular runtime architecture** — extracted shared helpers from the monolithic `ytkit.js` into seven dedicated `extension/core/*.js` modules: `env.js`, `storage.js`, `styles.js`, `url.js`, `page.js`, `navigation.js`, `player.js`. Modules are loaded in the ISOLATED world before `ytkit.js` via `manifest.json` `content_scripts`, cutting `ytkit.js` by roughly 3,100 lines and isolating state from feature code
+- **Hardened settings flow** — `options.js` now consumes the generated `default-settings.json` + `settings-meta.json` catalogs instead of re-implementing defaults inline; settings reads/writes go through `StorageManager` with consistent fallback/migration paths
+- **Hardened runtime paths** — player lookup, URL parsing, and navigation helpers now live behind a single source of truth (`core/player.js`, `core/url.js`, `core/navigation.js`); removed duplicated ad-hoc implementations in `ytkit.js`
+- **Background script hardening** — tightened `background.js` permission checks and message routing alongside the runtime extraction
+- **Build pipeline** — `build-extension.js` now emits `extension/default-settings.json` + `extension/settings-meta.json` on every build by brace-balanced parsing of the `defaults:` block and the `SETTINGS_VERSION` constant in `ytkit.js`, so the runtime catalog cannot drift from source
+
+### Notes
+
+No user-facing features added or removed. This release is a behind-the-scenes refactor to make future feature work faster and reduce regressions from shared-state bugs.
+
+---
+
 ## [3.2.0] - 115+ Features Mega Update
 
 ### Added
