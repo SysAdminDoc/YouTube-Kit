@@ -20,6 +20,11 @@ Chrome + Firefox MV3 extension and Tampermonkey userscript for comprehensive You
 - XPI is a renamed ZIP — Firefox's native extension format
 - `--bump` updates version in `manifest.json`, `ytkit.js` (YTKIT_VERSION), and `ytkit.user.js` header
 
+## Release Policy
+- **Always compile a CRX and an XPI for every release.** Don't wait to be asked. Running `node build-extension.js --bump <patch|minor|major>` already emits Chrome ZIP + CRX3 and Firefox ZIP + XPI in one pass — use it, and attach **all four** artifacts to the GitHub release (`.crx`, `.zip` Chrome, `.xpi`, `.zip` Firefox).
+- Standard release flow: bump + build → commit the version bump + CHANGELOG → push main → `gh release create vX.Y.Z` with all four build artifacts from `build/`.
+- Never ship a release that has only the ZIPs. Users install directly from the `.crx` / `.xpi` — missing them is a regression.
+
 ## Firefox Differences
 - Manifest uses `background.scripts` array instead of `service_worker` (broader Firefox MV3 compat)
 - `browser_specific_settings.gecko.id` set to `ytkit@sysadmindoc.github.io`
