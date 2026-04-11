@@ -4,6 +4,20 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.6.4] - Theater Split Audit Pass
+
+### Fixed
+
+- **Theater Split: wheel-gesture collision with YouTube volume.** The document-level `wheel` handler in `stickyVideo` was registered with `{ passive: true, capture: true }` but never called `stopPropagation()` on events it acted on, so YouTube's own wheel-to-volume listener on `#movie_player` fired on the same event. Scrolling over the player to expand the split, or scrolling the split-open right panel past the top to collapse, was also adjusting the video volume at the same time. `passive: true` only prevents `preventDefault()` — `stopPropagation()` is still legal and is now called in each action branch. Same treatment applied to the matching touchmove handler.
+- **Theater Split: `_entering` flag leak on early collapse.** `_expandSplit` sets `_entering = true` and arms a 500 ms fallback timer that calls `onExpanded()` if `_entering` is still true. `_collapseSplit` did not reset the flag, so collapsing the split before the expand transition finished left the fallback timer to fire on an already-collapsed panel, re-running `_triggerPlayerResize()` and `checkAllButtons()` on stale state. `_collapseSplit` now clears `_entering`.
+- **Theater Split: divider drag orphans on alt-tab.** The divider drag listener attaches `mousemove` / `mouseup` to `window` plus a full-viewport `dragShield` overlay. If the user alt-tabs mid-drag or the pointer leaves the document before releasing the mouse, `mouseup` may never deliver, leaving the shield covering the page and both listeners attached until the next drag replaces them. `onUp` is now also fired on `window.blur` and `document.mouseleave` so the drag cannot orphan.
+
+### Notes
+
+Fourth and final defensive-hardening pass. The wheel/volume collision is the highest-impact user-visible fix in this series — it's a direct UX regression that anyone using Theater Split with a mouse wheel would feel every time they expanded or collapsed the split.
+
+---
+
 ## [3.6.3] - Third QA Audit Pass
 
 ### Fixed

@@ -330,7 +330,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.6.3';
+    const YTKIT_VERSION = '3.6.4';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -5327,10 +5327,18 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         document.body.style.userSelect = '';
                         window.removeEventListener('mousemove', onMove);
                         window.removeEventListener('mouseup', onUp);
+                        window.removeEventListener('blur', onUp);
+                        document.removeEventListener('mouseleave', onUp);
                         this._triggerPlayerResize();
                     };
                     window.addEventListener('mousemove', onMove);
                     window.addEventListener('mouseup', onUp);
+                    // Safety: if the user alt-tabs or the pointer leaves the
+                    // document mid-drag, the browser may never deliver a mouseup
+                    // for the button they released. Treat blur + mouseleave as
+                    // drag-end so the shield and listeners can't orphan.
+                    window.addEventListener('blur', onUp);
+                    document.addEventListener('mouseleave', onUp);
                 });
             },
 
@@ -5480,10 +5488,22 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._wheelHandler = (e) => {
                     if (!this._isActive) return;
                     if (!isOverPlayer(e.target) && !isInRightContent(e.target)) return;
-                    if (!this._isSplit && e.deltaY > 0 && isOverPlayer(e.target)) { this._expandSplit(); return; }
+                    // Any time we take action on a wheel event (expand, collapse,
+                    // or manual scroll of the right panel), we must stop it from
+                    // continuing to propagate — otherwise YouTube's own
+                    // wheel-to-volume listener on #movie_player fires on the same
+                    // event and the user's scroll gesture also changes the volume.
+                    // `passive: true` only prevents preventDefault(); stopPropagation
+                    // is still legal and kills the bubble phase entirely.
+                    if (!this._isSplit && e.deltaY > 0 && isOverPlayer(e.target)) {
+                        e.stopPropagation();
+                        this._expandSplit();
+                        return;
+                    }
                     if (this._isSplit && !isInRightContent(e.target)) {
                         const scrollEl = this._scrollTarget;
                         if (scrollEl) {
+                            e.stopPropagation();
                             if (e.deltaY < 0 && scrollEl.scrollTop <= 0) {
                                 this._collapseSplit(false);
                                 return;
@@ -5497,11 +5517,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._touchMoveHandler = (e) => {
                     if (!this._isActive) return;
                     const t = e.touches[0]; if (!t) return;
-                    if (!this._isSplit && this._touchStartY - t.clientY > 30 && isOverPlayer(e.target)) { this._expandSplit(); return; }
+                    if (!this._isSplit && this._touchStartY - t.clientY > 30 && isOverPlayer(e.target)) {
+                        e.stopPropagation();
+                        this._expandSplit();
+                        return;
+                    }
                     if (this._isSplit && !isInRightContent(e.target)) {
                         const delta = this._touchStartY - t.clientY;
                         const scrollEl = this._scrollTarget;
                         if (scrollEl) {
+                            e.stopPropagation();
                             if (delta < -40 && scrollEl.scrollTop <= 0) {
                                 this._collapseSplit(false);
                                 return;
@@ -5657,6 +5682,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _collapseSplit(dismissed) {
                 if (!this._isSplit) return;
                 this._isSplit = false;
+                // Clear `_entering` in case we collapse before the expand
+                // transition completed. Otherwise the 500 ms fallback timer in
+                // `_expandSplit` would still see `_entering === true` and call
+                // `onExpanded()` on an already-collapsed panel, re-triggering
+                // `_triggerPlayerResize()` and `checkAllButtons()`.
+                this._entering = false;
                 document.documentElement.classList.remove('ytkit-split-open');
                 document.documentElement.style.removeProperty('--ytkit-split-right-width');
 

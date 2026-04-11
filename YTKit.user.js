@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         YTKit v3.6.3
+// @name         YTKit v3.6.4
 // @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      3.6.3
+// @version      3.6.4
 // @description  Ultimate YouTube customization with ad blocking, SponsorBlock, video/channel hiding, playback enhancements, and 115+ features
 // @author       Matthew Parker
 // @match        https://www.youtube.com/*
@@ -87,7 +87,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '3.6.3';
+    const YTKIT_VERSION = '3.6.4';
 
     // ── Z-Index Hierarchy ──
     const Z = {
