@@ -330,7 +330,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.6.1';
+    const YTKIT_VERSION = '3.6.2';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -342,6 +342,9 @@ return response;
         hiddenVideos: 'ytkit-hidden-videos',
         blockedChannels: 'ytkit-blocked-channels',
         bookmarks: 'ytkit-bookmarks'
+    });
+    const LEGACY_STORAGE_KEYS = Object.freeze({
+        sidebarOrder: 'ytkit_sidebar_order'
     });
     const PANEL_OPEN_CLASS = 'ytkit-panel-open';
     const PANEL_MESSAGE_TYPES = Object.freeze({
@@ -2340,6 +2343,20 @@ return response;
 
         load() {
             let savedSettings = StorageManager.get(STORAGE_KEYS.settings, {});
+            if (!savedSettings || typeof savedSettings !== 'object' || Array.isArray(savedSettings)) {
+                savedSettings = {};
+            }
+            const legacySidebarOrder = StorageManager.get(LEGACY_STORAGE_KEYS.sidebarOrder, null);
+            if (
+                Array.isArray(legacySidebarOrder) &&
+                legacySidebarOrder.length > 0 &&
+                (!Array.isArray(savedSettings.sidebarOrder) || savedSettings.sidebarOrder.length === 0)
+            ) {
+                savedSettings = {
+                    ...savedSettings,
+                    sidebarOrder: [...legacySidebarOrder]
+                };
+            }
             const storedVersion = savedSettings._settingsVersion;
             const rawSettingsSnapshot = this._sanitize(savedSettings);
             savedSettings = this._sanitize(this._migrate(savedSettings));
@@ -2521,6 +2538,10 @@ return response;
         return true;
     }
 
+    function isToggleFeature(feature) {
+        return !!feature && !feature._arrayKey && !feature.type && !isRetiredCommentFeature(feature);
+    }
+
     function safeDestroyFeature(feature, source = 'runtime') {
         if (!feature?._initialized) return;
         try {
@@ -2634,16 +2655,67 @@ return response;
         return !!document.body?.classList.contains(PANEL_OPEN_CLASS);
     }
 
+    function getFocusableUiElements(root) {
+        if (!root) return [];
+        return Array.from(root.querySelectorAll(
+            'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter((element) => {
+            if (!(element instanceof HTMLElement)) return false;
+            if (element.hidden) return false;
+            if (element.getAttribute('aria-hidden') === 'true') return false;
+            const style = window.getComputedStyle(element);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+        });
+    }
+
+    function trapFocusWithin(root, event) {
+        if (event.key !== 'Tab') return;
+        const focusable = getFocusableUiElements(root);
+        if (focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const activeElement = document.activeElement;
+
+        if (event.shiftKey) {
+            if (activeElement === first || !root.contains(activeElement)) {
+                event.preventDefault();
+                last.focus();
+            }
+            return;
+        }
+
+        if (activeElement === last || !root.contains(activeElement)) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+
+    let _settingsPanelLastFocus = null;
+
     function setSettingsPanelOpen(open) {
         if (!document.body || !shouldBuildPrimaryUI()) return false;
+        const wasOpen = isSettingsPanelOpen();
         if (open && !document.getElementById('ytkit-settings-panel')) buildSettingsPanel();
+        const panel = document.getElementById('ytkit-settings-panel');
+        if (open && !wasOpen && document.activeElement instanceof HTMLElement && !panel?.contains(document.activeElement)) {
+            _settingsPanelLastFocus = document.activeElement;
+        }
         document.body.classList.toggle(PANEL_OPEN_CLASS, !!open);
         document.getElementById('ytkit-overlay')?.setAttribute('aria-hidden', open ? 'false' : 'true');
-        document.getElementById('ytkit-settings-panel')?.setAttribute('aria-hidden', open ? 'false' : 'true');
+        panel?.setAttribute('aria-hidden', open ? 'false' : 'true');
         if (open) {
             requestAnimationFrame(() => {
-                document.getElementById('ytkit-search')?.focus({ preventScroll: true });
+                const searchInput = document.getElementById('ytkit-search');
+                const fallbackTarget = getFocusableUiElements(panel)[0];
+                (searchInput || fallbackTarget)?.focus({ preventScroll: true });
             });
+        } else if (wasOpen) {
+            const restoreTarget = _settingsPanelLastFocus && document.contains(_settingsPanelLastFocus)
+                ? _settingsPanelLastFocus
+                : document.getElementById('ytkit-watch-btn') || document.getElementById('ytkit-masthead-btn');
+            _settingsPanelLastFocus = null;
+            requestAnimationFrame(() => restoreTarget?.focus({ preventScroll: true }));
         }
         return true;
     }
@@ -2655,7 +2727,7 @@ return response;
     function applyExternalSettingsUpdate({ source = 'storage', nextSettings = null } = {}) {
         const previousSettings = appState.settings || settingsManager.load();
         const resolvedSettings = nextSettings
-            ? { ...settingsManager.defaults, ...nextSettings }
+            ? settingsManager._sanitize({ ...settingsManager.defaults, ...settingsManager._sanitize(nextSettings), _settingsVersion: settingsManager.SETTINGS_VERSION })
             : settingsManager.load();
         const changedKeys = getChangedSettingKeys(previousSettings, resolvedSettings);
         const changedKeysSet = new Set(changedKeys);
@@ -2663,7 +2735,7 @@ return response;
         appState.settings = resolvedSettings;
         appState.currentPage = getCurrentPage();
 
-        features.forEach(feature => {
+        liveFeatureList.forEach(feature => {
             if (feature._arrayKey) return;
 
             const shouldBeActive = shouldFeatureBeActive(feature);
@@ -9814,22 +9886,38 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 const ctx = canvas.getContext('2d');
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                canvas.toBlob(blob => {
-                    if (!blob) return;
-                    // Copy to clipboard
-                    navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).catch(() => {});
-                    // Download
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    const videoId = getVideoId() || 'video';
-                    const time = Math.floor(video.currentTime);
-                    a.href = url;
-                    a.download = `${videoId}_${time}s.png`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                    showToast('Screenshot captured', '#22c55e');
-                }, 'image/png');
+                // Cross-origin frames throw SecurityError from drawImage/toBlob — surface
+                // a clear message instead of leaving the user waiting on a silent fail.
+                try {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                } catch (e) {
+                    showToast('Screenshot blocked: cross-origin video frame', '#ef4444');
+                    return;
+                }
+                try {
+                    canvas.toBlob(blob => {
+                        if (!blob) {
+                            showToast('Screenshot failed', '#ef4444');
+                            return;
+                        }
+                        // Copy to clipboard
+                        try {
+                            navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).catch(() => {});
+                        } catch (_) { /* ClipboardItem unsupported — ignore */ }
+                        // Download
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        const videoId = getVideoId() || 'video';
+                        const time = Math.floor(video.currentTime);
+                        a.href = url;
+                        a.download = `${videoId}_${time}s.png`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        showToast('Screenshot captured', '#22c55e');
+                    }, 'image/png');
+                } catch (e) {
+                    showToast('Screenshot blocked: ' + (e.message || 'canvas tainted'), '#ef4444');
+                }
             },
 
             _inject() {
@@ -11254,6 +11342,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _sample(video) {
                 if (!this._active) return;
+                // Skip expensive canvas sampling entirely when the tab is hidden —
+                // the glow isn't visible and it was costing CPU/GPU on background tabs.
+                // Back off the polling interval to 2s while hidden so we don't spin.
+                if (document.hidden) {
+                    this._raf = requestAnimationFrame(() => setTimeout(() => this._sample(video), 2000));
+                    return;
+                }
                 try {
                     this._ctx.drawImage(video, 0, 0, 8, 8);
                     const d = this._ctx.getImageData(0, 0, 8, 8).data;
@@ -14045,22 +14140,24 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             group: 'Advanced',
             icon: 'cpu',
             _originals: null,
+            _pumpInterval: null,
             init() {
+                if (window.__ytkit_cpu_tamer) return;
+                // Snapshot native timers BEFORE setting the patch flag so destroy
+                // can always restore cleanly even if setup bails out mid-way.
                 this._originals = {
                     setTimeout: window.setTimeout,
                     setInterval: window.setInterval,
                     clearTimeout: window.clearTimeout,
                     clearInterval: window.clearInterval
                 };
-                const originals = this._originals;
                 const win = window;
-                if (win.__ytkit_cpu_tamer) return;
-                win.__ytkit_cpu_tamer = true;
-                const { setTimeout: origSetTimeout, setInterval: origSetInterval, clearTimeout: origClearTimeout, clearInterval: origClearInterval } = originals;
+                const { setTimeout: origSetTimeout, setInterval: origSetInterval } = this._originals;
                 const PromiseCtor = (async () => {})().constructor;
                 let canvas;
                 try { canvas = document.createElement('canvas'); } catch(e) { return; }
                 if (!(canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))) return;
+                win.__ytkit_cpu_tamer = true;
                 let afHandler = null;
                 const rafPromise = (resolve) => requestAnimationFrame(afHandler = resolve);
                 let p1 = { resolved: true }, p2 = { resolved: true };
@@ -14094,17 +14191,26 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 };
                 win.setTimeout = schedule(origSetTimeout);
                 win.setInterval = schedule(origSetInterval);
-                origSetInterval(() => {
+                // Track the pump interval so destroy() can stop it — previously this
+                // orphaned id was unreachable, leaving the pump firing after disable.
+                this._pumpInterval = origSetInterval(() => {
                     if (afHandler) { afHandler(); afHandler = null; }
                 }, 125);
             },
             destroy() {
+                // Use the preserved native clearInterval (not the patched one) so the
+                // pump is actually cleared even while the wrapper is still in place.
+                if (this._pumpInterval && this._originals?.clearInterval) {
+                    this._originals.clearInterval.call(window, this._pumpInterval);
+                }
+                this._pumpInterval = null;
                 if (this._originals) {
                     window.setTimeout = this._originals.setTimeout;
                     window.setInterval = this._originals.setInterval;
                     window.clearTimeout = this._originals.clearTimeout;
                     window.clearInterval = this._originals.clearInterval;
                 }
+                this._originals = null;
                 window.__ytkit_cpu_tamer = false;
             }
         },
@@ -14745,6 +14851,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
     }
 
     const featureIndex = new Map(features.map((feature) => [feature.id, feature]));
+    const liveFeatureList = features.filter((feature) => !isRetiredCommentFeature(feature));
+    const toggleFeatureList = liveFeatureList.filter((feature) => isToggleFeature(feature));
     const arraySettingKeysByParentId = new Map();
     for (const feature of features) {
         if (!feature.parentId || !feature._arrayKey) continue;
@@ -15365,8 +15473,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         // Group labels: maps first category of each group → label text
         const categoryGroupLabels = {};
         const featuresByCategory = categoryOrder.reduce((acc, cat) => ({...acc, [cat]: []}), {});
-        features.forEach(f => {
-            if (isRetiredCommentFeature(f)) return;
+        liveFeatureList.forEach(f => {
             if (f.group && featuresByCategory[f.group]) featuresByCategory[f.group].push(f);
         });
 
@@ -15518,7 +15625,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (e.clientY < midY) btn.before(draggedBtn);
                 else btn.after(draggedBtn);
                 const newOrder = Array.from(navList.querySelectorAll('.ytkit-nav-btn')).map(b => b.dataset.tab);
-                storageWriteJSON('ytkit_sidebar_order', newOrder);
+                appState.settings.sidebarOrder = newOrder;
+                settingsManager.save(appState.settings);
             });
         }
 
@@ -15546,7 +15654,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         });
 
         // Apply saved sidebar order
-        const savedOrder = storageReadJSON('ytkit_sidebar_order', null);
+        const savedOrder = Array.isArray(appState.settings.sidebarOrder) && appState.settings.sidebarOrder.length > 0
+            ? appState.settings.sidebarOrder
+            : storageReadJSON(LEGACY_STORAGE_KEYS.sidebarOrder, null);
         if (savedOrder && Array.isArray(savedOrder)) {
             const navBtns = Array.from(navList.querySelectorAll('.ytkit-nav-btn'));
             const groupLabels = Array.from(navList.querySelectorAll('.ytkit-nav-group-label'));
@@ -16632,6 +16742,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             doc.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape' && isSettingsPanelOpen()) {
                     setSettingsPanelOpen(false);
+                }
+                const activeDialog = _pageModalOpen
+                    ? document.getElementById('ytkit-page-modal')
+                    : isSettingsPanelOpen()
+                        ? document.getElementById('ytkit-settings-panel')
+                        : null;
+                if (e.key === 'Tab' && activeDialog) {
+                    trapFocusWithin(activeDialog, e);
                 }
                 if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'y') {
                     e.preventDefault();
@@ -17841,7 +17959,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
     border-color: rgba(255,255,255,0.08);
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 999px;
-    transition: all 180ms ease;
+    transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .ytkit-switch.active .ytkit-switch-track {
@@ -17859,7 +17977,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
     background: #fff;
     border-radius: 50%;
     box-shadow: 0 2px 6px rgba(0,0,0,0.24);
-    transition: all 180ms ease;
+    transition: transform 180ms ease, opacity 180ms ease, box-shadow 180ms ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -17873,7 +17991,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
     display: flex;
     opacity: 0;
     transform: scale(0.5);
-    transition: all 180ms ease;
+    transition: opacity 180ms ease, transform 180ms ease;
 }
 
 .ytkit-switch-icon svg {
@@ -18190,6 +18308,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
     let _pageModalOpen = false;
     let _pageModalEl = null;
     let _pageModalOverlay = null;
+    let _pageModalLastFocus = null;
 
     function closePageModal() {
         if (!_pageModalOpen) return;
@@ -18206,6 +18325,11 @@ body.ytkit-panel-open #ytkit-settings-panel {
         }
         document.querySelector('#ytkit-page-btn')?.classList.remove('active');
         document.querySelector('#ytkit-page-btn-watch')?.classList.remove('active');
+        const restoreTarget = _pageModalLastFocus && document.contains(_pageModalLastFocus)
+            ? _pageModalLastFocus
+            : document.getElementById('ytkit-page-btn') || document.getElementById('ytkit-page-btn-watch');
+        _pageModalLastFocus = null;
+        requestAnimationFrame(() => restoreTarget?.focus({ preventScroll: true }));
     }
 
     function openPageModal() {
@@ -18216,6 +18340,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
         const featureList = pageKey ? (PAGE_MODAL_CONFIG[pageKey] || []) : [];
         if (!featureList.length) return;
 
+        _pageModalLastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         _pageModalOpen = true;
         document.querySelector('#ytkit-page-btn')?.classList.add('active');
         document.querySelector('#ytkit-page-btn-watch')?.classList.add('active');
@@ -18350,7 +18475,10 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
         document.body.appendChild(modal);
         _pageModalEl = modal;
-        requestAnimationFrame(() => modal.classList.add('ytkit-pm-visible'));
+        requestAnimationFrame(() => {
+            modal.classList.add('ytkit-pm-visible');
+            (closeBtn || getFocusableUiElements(modal)[0])?.focus({ preventScroll: true });
+        });
 
         // Close on navigation
         document.addEventListener('yt-navigate-start', closePageModal, { once: true });
@@ -21318,23 +21446,28 @@ body.ytkit-panel-open #ytkit-settings-panel {
                 console.log('[YTKit] Debug ' + (on ? 'enabled' : 'disabled'));
             },
             testOnly(id) {
+                const target = getFeatureById(id);
+                if (!isToggleFeature(target)) {
+                    console.warn(`[YTKit] testOnly("${id}") only supports live toggle features.`);
+                    return false;
+                }
                 const s = { ...appState.settings };
-                features.forEach(f => { if (!f._arrayKey) s[f.id] = false; });
+                toggleFeatureList.forEach(f => { s[f.id] = false; });
                 s[id] = true;
                 settingsManager.save(s);
                 storageWrite('ytkit_safe_mode', false, { immediate: true });
                 location.reload();
+                return true;
             },
             disableAll() {
                 const s = { ...appState.settings };
-                features.forEach(f => { if (!f._arrayKey) s[f.id] = false; });
+                toggleFeatureList.forEach(f => { s[f.id] = false; });
                 settingsManager.save(s);
                 location.reload();
             },
             list() {
                 const enabled = [], disabled = [];
-                features.forEach(f => {
-                    if (f._arrayKey) return;
+                toggleFeatureList.forEach(f => {
                     (appState.settings[f.id] ? enabled : disabled).push(f.id);
                 });
                 console.log(`%c[YTKit] ${enabled.length} enabled:`, 'color:#22c55e;font-weight:bold');
@@ -21344,7 +21477,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
                 return { enabled, disabled };
             },
             get settings() { return appState.settings; },
-            features,
+            features: liveFeatureList,
+            allFeatures: features,
             version: YTKIT_VERSION,
         };
 
@@ -21424,7 +21558,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
             const critLog = [], normalLog = [], lazyLog = [];
             const normal = [], lazy = [];
 
-            const sortedFeatures = topoSort(features);
+            const sortedFeatures = topoSort(liveFeatureList);
             sortedFeatures.forEach(f => {
                 if (CRITICAL_IDS.has(f.id)) { initFeature(f); critLog.push(f.id); }
                 else if (LAZY_IDS.has(f.id)) lazy.push(f);
@@ -21475,7 +21609,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
                 DebugManager.log('Navigation', `Page changed: ${oldPage} -> ${newPage}`);
 
                 // Re-initialize features that are page-specific
-                features.forEach((f) => {
+                liveFeatureList.forEach((f) => {
                     if (f._arrayKey || !f.pages) return;
 
                     const wasActive = shouldFeatureBeActive(f, appState.settings, oldPage);

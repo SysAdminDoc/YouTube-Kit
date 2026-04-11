@@ -4,6 +4,30 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.6.2] - Second QA Audit Pass
+
+### Fixed
+
+- **Cinema Ambient Glow background-tab CPU waste** — the canvas sampling loop ran at full rate while the tab was hidden even though the glow was invisible. Now short-circuits when `document.hidden` is true and falls back to a 2 s poll until the tab is visible again
+- **Video Screenshot cross-origin silent failure** — `ctx.drawImage(video, ...)` on a tainted frame was throwing a `SecurityError` that the caller swallowed, leaving the user with no feedback. `drawImage` and `toBlob` are now wrapped in targeted try/catch blocks that surface a clear "Screenshot blocked: cross-origin video frame" toast
+- **CPU Tamer pump interval leak + destroy clarity** — the internal rAF pump `origSetInterval(..., 125)` was orphaned (no handle captured), so disabling the feature left the pump firing forever. The handle is now stored on `_pumpInterval` and destroy clears it using the *preserved native* `clearInterval` so teardown is robust even while the wrappers are still in place. Init also captures the originals before flipping the global flag so a failed setup does not desync restore state
+- **Options page: redundant toggle change listeners** — `renderToggleControl` was attaching two separate `change` handlers per toggle input (one for draft state, one for label text). Merged into a single handler; halves the per-click work without changing behavior
+
+### Build system
+
+- **`--bump` argument validation** — running `node build-extension.js --bump` with no type (or with a bogus type) previously silently no-op'd the bump because the falsy check skipped the whole block. Now fails loudly with a usage error and non-zero exit
+- **YTKIT_VERSION regex hard-fail** — if the `const YTKIT_VERSION = '...'` line in `ytkit.js` ever stops matching the replacement regex (e.g. refactored to template literal), the build now aborts with an explicit error instead of silently shipping a stale embedded version
+- **Userscript version sync** — `ytkit.user.js` is now kept in sync with the extension version on every `--bump`, regardless of the `--with-userscript` flag. The flag still controls whether a `build/` artifact copy is emitted. Fixes the drift where the repo-tracked userscript was stuck at 3.2.0 while the extension was at 3.6.x
+- **Build cleanup on failure** — the build function now wraps Chrome + Firefox staging in a `try/finally` so orphan `chrome-stage/` and `firefox-stage/` directories can't survive a mid-flight crash
+- **Skip `node_modules/` during staging** — an accidental `node_modules/` under `extension/` would previously get copied into the ZIP. Now unconditionally excluded
+- **Deleted dead `build.js`** — it targeted a `YTKit.user.js` file that no longer exists (renamed to lowercase) and produced a `YTKit.min.user.js` that nothing consumed. Confirmed disconnected from the pipeline before removal
+
+### Notes
+
+No user-visible feature changes. This is a second defensive-hardening pass following 3.6.1.
+
+---
+
 ## [3.6.1] - QA Audit Hardening
 
 ### Fixed

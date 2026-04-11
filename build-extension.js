@@ -20,7 +20,21 @@ const CRX_KEY = path.join(__dirname, 'ytkit.pem');
 const args = process.argv.slice(2);
 const INCLUDE_USERSCRIPT = args.includes('--with-userscript');
 const bumpIndex = args.indexOf('--bump');
-const bumpType = bumpIndex !== -1 ? args[bumpIndex + 1] : null;
+// Guard: `--bump` with no following arg previously silently no-op'd because
+// `bumpType` was undefined and fell through the `if (bumpType)` check. Fail
+// loudly instead so the user knows the bump didn't apply.
+let bumpType = null;
+if (bumpIndex !== -1) {
+    bumpType = args[bumpIndex + 1];
+    if (!bumpType || bumpType.startsWith('--')) {
+        console.error('--bump requires a type: patch | minor | major');
+        process.exit(1);
+    }
+    if (!['patch', 'minor', 'major'].includes(bumpType)) {
+        console.error('Invalid bump type: ' + bumpType + ' (use patch, minor, or major)');
+        process.exit(1);
+    }
+}
 
 // Read manifest
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
@@ -33,27 +47,36 @@ if (bumpType) {
     if (bumpType === 'major') { parts[0]++; parts[1] = 0; parts[2] = 0; }
     else if (bumpType === 'minor') { parts[1]++; parts[2] = 0; }
     else if (bumpType === 'patch') { parts[2]++; }
-    else { console.error('Invalid bump type: ' + bumpType + ' (use patch, minor, or major)'); process.exit(1); }
     version = parts.join('.');
     manifest.version = version;
     fs.writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 
-    // Also update YTKIT_VERSION in ytkit.js
-    const updated = ytkitSource.replace(/const YTKIT_VERSION = '[^']+';/, "const YTKIT_VERSION = '" + version + "';");
-    if (updated !== ytkitSource) {
-        fs.writeFileSync(YTKIT_JS, updated, 'utf8');
-        ytkitSource = updated;
-        console.log('Updated YTKIT_VERSION in ytkit.js');
+    // Update YTKIT_VERSION constant in ytkit.js — hard-fail if the regex no
+    // longer matches (e.g. string was refactored to template/backtick form),
+    // otherwise the built extension would ship with a stale embedded version.
+    const versionRegex = /const YTKIT_VERSION = '[^']+';/;
+    if (!versionRegex.test(ytkitSource)) {
+        console.error('Could not find `const YTKIT_VERSION = \'...\';` in ytkit.js — refusing to bump with stale version.');
+        process.exit(1);
     }
+    ytkitSource = ytkitSource.replace(versionRegex, "const YTKIT_VERSION = '" + version + "';");
+    fs.writeFileSync(YTKIT_JS, ytkitSource, 'utf8');
+    console.log('Updated YTKIT_VERSION in ytkit.js');
 
-    // Update userscript version header only when explicitly requested
-    if (INCLUDE_USERSCRIPT && fs.existsSync(USERSCRIPT)) {
+    // Always keep the repo-tracked userscript header in sync with the extension
+    // version — `Version everything` (CLAUDE.md) requires all version strings
+    // to match across files. The `--with-userscript` flag still controls
+    // whether a *build artifact* copy is emitted into `build/` later.
+    if (fs.existsSync(USERSCRIPT)) {
         let usSrc = fs.readFileSync(USERSCRIPT, 'utf8');
+        const before = usSrc;
         usSrc = usSrc.replace(/^(\/\/ @name\s+)YTKit v[\d.]+/m, '$1YTKit v' + version);
         usSrc = usSrc.replace(/^(\/\/ @version\s+)[\d.]+/m, '$1' + version);
         usSrc = usSrc.replace(/const YTKIT_VERSION = '[^']+';/, "const YTKIT_VERSION = '" + version + "';");
-        fs.writeFileSync(USERSCRIPT, usSrc, 'utf8');
-        console.log('Updated userscript version');
+        if (usSrc !== before) {
+            fs.writeFileSync(USERSCRIPT, usSrc, 'utf8');
+            console.log('Updated userscript version header in ytkit.user.js');
+        }
     }
 
     console.log('Bumped version to ' + version);
@@ -69,7 +92,8 @@ fs.mkdirSync(BUILD_DIR, { recursive: true });
 const STAGE_SKIP_NAMES = new Set([
     '.git',
     '.DS_Store',
-    'Thumbs.db'
+    'Thumbs.db',
+    'node_modules'
 ]);
 
 const STAGE_SKIP_SUFFIXES = [
@@ -346,6 +370,11 @@ function buildUserscriptSource(extensionSource, targetVersion) {
 async function build() {
     // ── Chrome Build ──
     const chromeStageDir = path.join(BUILD_DIR, 'chrome-stage');
+    // Wrap the whole build in try/finally so an exception mid-flight cannot
+    // leave orphan `chrome-stage/` or `firefox-stage/` directories behind in
+    // `build/` that would confuse the next run.
+    let firefoxStageDir = null;
+    try {
     copyDir(EXT_DIR, chromeStageDir);
 
 const chromeZipName = 'astra-deck-chrome-v' + version + '.zip';
@@ -389,7 +418,7 @@ const chromeCrxName = 'astra-deck-chrome-v' + version + '.crx';
     }
 
     // ── Firefox Build ──
-    const firefoxStageDir = path.join(BUILD_DIR, 'firefox-stage');
+    firefoxStageDir = path.join(BUILD_DIR, 'firefox-stage');
     copyDir(EXT_DIR, firefoxStageDir);
 
     // Modify manifest for Firefox
@@ -440,11 +469,16 @@ const firefoxXpiName = 'astra-deck-firefox-v' + version + '.xpi';
         console.log('Userscript:  skipped (extension-native build)');
     }
 
-    // Cleanup staging dirs
-    fs.rmSync(chromeStageDir, { recursive: true });
-    fs.rmSync(firefoxStageDir, { recursive: true });
-
     console.log('\nAll artifacts built for v' + version);
+    } finally {
+        // Cleanup staging dirs even when the build throws mid-way.
+        if (chromeStageDir && fs.existsSync(chromeStageDir)) {
+            try { fs.rmSync(chromeStageDir, { recursive: true, force: true }); } catch (_) {}
+        }
+        if (firefoxStageDir && fs.existsSync(firefoxStageDir)) {
+            try { fs.rmSync(firefoxStageDir, { recursive: true, force: true }); } catch (_) {}
+        }
+    }
 }
 
 build().catch(e => { console.error('Build failed:', e); process.exit(1); });

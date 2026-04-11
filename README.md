@@ -80,7 +80,7 @@ A userscript build is also available. Install [Tampermonkey](https://www.tamperm
 | Feature | Default |
 |---------|---------|
 | Watch Page Restyle — glassmorphism accents, refined metadata | On |
-| Refined Comments — card layout with clean thread lines | On |
+| Native Comments Layout — keep YouTube comments clean without extension restyling | On |
 | Expand Video Width / Disable Ambient Mode | On |
 | Hide Merch, AI Summary, Hashtags, Pinned Comments, Info Panels | On |
 | Clean Share URLs — strip tracking params | On |
@@ -128,11 +128,10 @@ A userscript build is also available. Install [Tampermonkey](https://www.tamperm
 
 | Feature | Default |
 |---------|---------|
-| Comment Search — filter bar above comments | Off |
-| Comment Navigator — J/K keyboard navigation | Off |
 | Sort Comments Newest First | Off |
 | Creator Comment Highlight | Off |
-| Handle Revealer — show original channel name next to @handle | Off |
+| Comment Handle Revealer — show original channel name next to @handle | Off |
+| Preload Comments | Off |
 
 ### Live Chat
 

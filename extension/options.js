@@ -11,7 +11,8 @@
         settings: 'ytSuiteSettings',
         hiddenVideos: 'ytkit-hidden-videos',
         blockedChannels: 'ytkit-blocked-channels',
-        bookmarks: 'ytkit-bookmarks'
+        bookmarks: 'ytkit-bookmarks',
+        legacySidebarOrder: 'ytkit_sidebar_order'
     };
 
     const RETIRED_SETTING_KEYS = new Set([
@@ -44,6 +45,7 @@
 
     const manifest = chrome.runtime.getManifest();
     const elements = {
+        pageShell: document.querySelector('.page-shell'),
         version: document.getElementById('version'),
         exportButton: document.getElementById('export-btn'),
         importButton: document.getElementById('import-btn'),
@@ -83,7 +85,9 @@
         activeGroup: 'all',
         search: '',
         defaultsLoaded: false,
-        settingsVersion: 1
+        settingsVersion: 1,
+        lastFocusedElement: null,
+        bodyOverflowBeforeModal: ''
     };
 
     elements.version.textContent = 'v' + manifest.version;
@@ -145,6 +149,23 @@
         return sanitized;
     }
 
+    function getLegacySidebarOrder(allStorage = {}) {
+        const legacyValue = allStorage[STORAGE_KEYS.legacySidebarOrder];
+        return Array.isArray(legacyValue) && legacyValue.length > 0 ? deepClone(legacyValue) : null;
+    }
+
+    function mergeLegacySettings(settings, legacySidebarOrder = null) {
+        const merged = sanitizeSettingsObject(settings);
+        if (
+            (!Array.isArray(merged.sidebarOrder) || merged.sidebarOrder.length === 0) &&
+            Array.isArray(legacySidebarOrder) &&
+            legacySidebarOrder.length > 0
+        ) {
+            merged.sidebarOrder = deepClone(legacySidebarOrder);
+        }
+        return merged;
+    }
+
     function isUserFacingSettingKey(key) {
         return !RETIRED_SETTING_KEYS.has(key) && !String(key).startsWith(INTERNAL_SETTING_KEY_PREFIX);
     }
@@ -159,8 +180,13 @@
     }
 
     function buildExportData(allStorage) {
+        const mergedSettings = mergeLegacySettings(
+            allStorage[STORAGE_KEYS.settings] || {},
+            getLegacySidebarOrder(allStorage)
+        );
+
         return {
-            settings: sanitizeSettingsObject(allStorage[STORAGE_KEYS.settings] || {}),
+            settings: applySettingsVersion(mergedSettings),
             hiddenVideos: allStorage[STORAGE_KEYS.hiddenVideos] || [],
             blockedChannels: allStorage[STORAGE_KEYS.blockedChannels] || [],
             bookmarks: allStorage[STORAGE_KEYS.bookmarks] || {},
@@ -217,6 +243,49 @@
         if (Array.isArray(value)) return value.length + (value.length === 1 ? ' item' : ' items');
         if (value && typeof value === 'object') return Object.keys(value).length + ' keys';
         return 'Not set';
+    }
+
+    function toDomIdFragment(key) {
+        return String(key)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'setting';
+    }
+
+    function getFocusableElements(root) {
+        if (!root) return [];
+        return Array.from(root.querySelectorAll(
+            'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter((element) => {
+            if (!(element instanceof HTMLElement)) return false;
+            if (element.hidden) return false;
+            if (element.getAttribute('aria-hidden') === 'true') return false;
+            const style = window.getComputedStyle(element);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+        });
+    }
+
+    function trapFocusWithin(root, event) {
+        if (event.key !== 'Tab') return;
+        const focusable = getFocusableElements(root);
+        if (focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const activeElement = document.activeElement;
+
+        if (event.shiftKey) {
+            if (activeElement === first || !root.contains(activeElement)) {
+                event.preventDefault();
+                last.focus();
+            }
+            return;
+        }
+
+        if (activeElement === last || !root.contains(activeElement)) {
+            event.preventDefault();
+            first.focus();
+        }
     }
 
     function inferGroup(key) {
@@ -526,8 +595,14 @@
 
     async function refreshSettingsState({ resetDraft = false } = {}) {
         await loadDefaultSettingsFromSource();
-        const result = await chrome.storage.local.get(STORAGE_KEYS.settings);
-        const rawStoredSettings = deepClone(result[STORAGE_KEYS.settings] || {});
+        const result = await chrome.storage.local.get([
+            STORAGE_KEYS.settings,
+            STORAGE_KEYS.legacySidebarOrder
+        ]);
+        const rawStoredSettings = mergeLegacySettings(
+            deepClone(result[STORAGE_KEYS.settings] || {}),
+            getLegacySidebarOrder(result)
+        );
         state.storedSettings = applySettingsVersion(rawStoredSettings);
         if (!areValuesEqual(rawStoredSettings, state.storedSettings)) {
             await chrome.storage.local.set({ [STORAGE_KEYS.settings]: state.storedSettings });
@@ -627,6 +702,20 @@
         return lines;
     }
 
+    function applyControlAccessibility(control, key, meta, options = {}) {
+        control.id = meta.controlId;
+        control.name = key;
+        control.setAttribute('aria-labelledby', meta.titleId);
+        control.setAttribute('aria-describedby', `${meta.descriptionId} ${meta.hintId}`);
+        if ('autocomplete' in control) {
+            control.autocomplete = options.autocomplete || 'off';
+        }
+        if ('spellcheck' in control && options.spellcheck === false) {
+            control.spellcheck = false;
+        }
+        return control;
+    }
+
     function inferControlKind(value, defaultValue) {
         const reference = value !== undefined ? value : defaultValue;
 
@@ -663,6 +752,7 @@
             button.type = 'button';
             button.className = 'settings-group-button' + (state.activeGroup === group.id ? ' active' : '');
             button.dataset.group = group.id;
+            button.setAttribute('aria-pressed', state.activeGroup === group.id ? 'true' : 'false');
 
             const label = document.createElement('span');
             label.textContent = group.label;
@@ -682,11 +772,14 @@
         });
     }
 
-    function renderTextControl(card, key, value, isMultiline) {
+    function renderTextControl(card, key, value, isMultiline, meta) {
         const input = document.createElement(isMultiline ? 'textarea' : 'input');
         if (!isMultiline) {
             input.type = /url/i.test(key) ? 'url' : 'text';
         }
+        applyControlAccessibility(input, key, meta, {
+            spellcheck: !/url|css|json|regex/i.test(key)
+        });
         input.value = value == null ? '' : String(value);
         input.addEventListener('input', () => {
             state.draftSettings[key] = input.value;
@@ -698,9 +791,11 @@
         return input;
     }
 
-    function renderNumberControl(card, key, value) {
+    function renderNumberControl(card, key, value, meta) {
         const input = document.createElement('input');
         input.type = 'number';
+        input.inputMode = Number.isInteger(value) ? 'numeric' : 'decimal';
+        applyControlAccessibility(input, key, meta);
         input.value = String(value ?? 0);
         input.step = Number.isInteger(value) ? '1' : 'any';
         input.addEventListener('input', () => {
@@ -722,20 +817,14 @@
         return input;
     }
 
-    function renderToggleControl(card, key, value) {
+    function renderToggleControl(card, key, value, meta) {
         const label = document.createElement('label');
         label.className = 'settings-item-toggle';
 
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.checked = Boolean(value);
-        input.addEventListener('change', () => {
-            state.draftSettings[key] = input.checked;
-            state.invalidKeys.delete(key);
-            updateDirtyStateForKey(key);
-            updateCardState(card, key);
-            updateModalHeaderState();
-        });
+        applyControlAccessibility(input, key, meta);
 
         const track = document.createElement('span');
         track.className = 'settings-item-toggle-track';
@@ -743,8 +832,17 @@
         const text = document.createElement('span');
         text.className = 'settings-item-toggle-label';
         text.textContent = input.checked ? 'Enabled' : 'Disabled';
+
+        // Single change listener handles state + label update together.
+        // Previously two separate listeners were attached which doubled the
+        // per-toggle work on every click for no benefit.
         input.addEventListener('change', () => {
+            state.draftSettings[key] = input.checked;
+            state.invalidKeys.delete(key);
             text.textContent = input.checked ? 'Enabled' : 'Disabled';
+            updateDirtyStateForKey(key);
+            updateCardState(card, key);
+            updateModalHeaderState();
         });
 
         label.appendChild(input);
@@ -753,8 +851,9 @@
         return label;
     }
 
-    function renderListControl(card, key, value, defaultValue) {
+    function renderListControl(card, key, value, defaultValue, meta) {
         const textarea = document.createElement('textarea');
+        applyControlAccessibility(textarea, key, meta, { spellcheck: false });
         textarea.value = Array.isArray(value) ? value.join('\n') : '';
         textarea.addEventListener('input', () => {
             try {
@@ -770,8 +869,9 @@
         return textarea;
     }
 
-    function renderJsonControl(card, key, value) {
+    function renderJsonControl(card, key, value, meta) {
         const textarea = document.createElement('textarea');
+        applyControlAccessibility(textarea, key, meta, { spellcheck: false });
         textarea.value = JSON.stringify(value ?? {}, null, 2);
         textarea.addEventListener('input', () => {
             try {
@@ -793,10 +893,18 @@
         const groupId = inferGroup(key);
         const groupLabel = GROUPS.find((group) => group.id === groupId)?.label || 'Advanced';
         const controlKind = inferControlKind(currentValue, defaultValue);
+        const idBase = toDomIdFragment(key);
+        const controlMeta = {
+            controlId: `settings-control-${idBase}`,
+            titleId: `settings-title-${idBase}`,
+            descriptionId: `settings-description-${idBase}`,
+            hintId: `settings-hint-${idBase}`
+        };
 
         const card = document.createElement('article');
         card.className = 'settings-item';
         card.dataset.key = key;
+        card.setAttribute('aria-labelledby', controlMeta.titleId);
 
         const header = document.createElement('div');
         header.className = 'settings-item-header';
@@ -806,6 +914,7 @@
 
         const title = document.createElement('h3');
         title.className = 'settings-item-title';
+        title.id = controlMeta.titleId;
         title.textContent = humanizeKey(key);
 
         const meta = document.createElement('div');
@@ -834,6 +943,7 @@
 
         const description = document.createElement('p');
         description.className = 'settings-item-description';
+        description.id = controlMeta.descriptionId;
         description.textContent = `Stored as ${controlKind}. Current value: ${formatValuePreview(currentValue)}.`;
 
         copy.appendChild(title);
@@ -846,15 +956,15 @@
         controlWrap.className = 'settings-item-control';
 
         if (controlKind === 'toggle') {
-            controlWrap.appendChild(renderToggleControl(card, key, currentValue));
+            controlWrap.appendChild(renderToggleControl(card, key, currentValue, controlMeta));
         } else if (controlKind === 'number') {
-            controlWrap.appendChild(renderNumberControl(card, key, currentValue));
+            controlWrap.appendChild(renderNumberControl(card, key, currentValue, controlMeta));
         } else if (controlKind === 'list') {
-            controlWrap.appendChild(renderListControl(card, key, currentValue, defaultValue));
+            controlWrap.appendChild(renderListControl(card, key, currentValue, defaultValue, controlMeta));
         } else if (controlKind === 'json') {
-            controlWrap.appendChild(renderJsonControl(card, key, currentValue));
+            controlWrap.appendChild(renderJsonControl(card, key, currentValue, controlMeta));
         } else {
-            controlWrap.appendChild(renderTextControl(card, key, currentValue, controlKind === 'textarea'));
+            controlWrap.appendChild(renderTextControl(card, key, currentValue, controlKind === 'textarea', controlMeta));
         }
 
         card.appendChild(controlWrap);
@@ -864,6 +974,7 @@
 
         const hint = document.createElement('div');
         hint.className = 'settings-item-hint';
+        hint.id = controlMeta.hintId;
         footer.appendChild(hint);
 
         const resetButton = document.createElement('button');
@@ -910,7 +1021,14 @@
         state.activeGroup = 'all';
         state.search = '';
         elements.settingsSearch.value = '';
+        state.lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        state.bodyOverflowBeforeModal = document.body.style.overflow;
         state.modalOpen = true;
+        if (elements.pageShell) {
+            elements.pageShell.setAttribute('aria-hidden', 'true');
+            elements.pageShell.inert = true;
+        }
+        document.body.style.overflow = 'hidden';
         elements.settingsModalShell.hidden = false;
         renderSettingsWorkspace();
         requestAnimationFrame(() => elements.settingsSearch.focus());
@@ -924,7 +1042,17 @@
 
         state.modalOpen = false;
         elements.settingsModalShell.hidden = true;
+        if (elements.pageShell) {
+            elements.pageShell.removeAttribute('aria-hidden');
+            elements.pageShell.inert = false;
+        }
+        document.body.style.overflow = state.bodyOverflowBeforeModal;
         clearModalStatus();
+        const restoreTarget = state.lastFocusedElement && state.lastFocusedElement.isConnected
+            ? state.lastFocusedElement
+            : elements.openSettingsModalButton;
+        state.lastFocusedElement = null;
+        requestAnimationFrame(() => restoreTarget?.focus());
     }
 
     async function saveSettingsDraft() {
@@ -934,12 +1062,17 @@
         }
 
         try {
+            const nextStoredSettings = applySettingsVersion(deepClone(state.draftSettings));
             await chrome.storage.local.set({
-                [STORAGE_KEYS.settings]: deepClone(state.draftSettings)
+                [STORAGE_KEYS.settings]: nextStoredSettings
             });
 
-            state.storedSettings = deepClone(state.draftSettings);
-            state.resolvedSettings = deepClone(state.draftSettings);
+            state.storedSettings = deepClone(nextStoredSettings);
+            state.resolvedSettings = {
+                ...deepClone(state.defaultSettings),
+                ...deepClone(nextStoredSettings)
+            };
+            state.draftSettings = deepClone(state.resolvedSettings);
             state.dirtyKeys.clear();
             state.invalidKeys.clear();
 
@@ -966,7 +1099,7 @@
             return;
         }
 
-        state.draftSettings = deepClone(state.defaultSettings);
+        state.draftSettings = applySettingsVersion(deepClone(state.defaultSettings));
         state.invalidKeys.clear();
         state.dirtyKeys.clear();
         getSettingKeys().forEach((key) => updateDirtyStateForKey(key));
@@ -996,9 +1129,22 @@
     elements.settingsRestoreDefaultsButton.addEventListener('click', restoreDefaultsDraft);
 
     document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && state.modalOpen) {
+        if (!state.modalOpen) return;
+        if (event.key === 'Escape') {
             requestCloseSettingsModal();
+            return;
         }
+        if (event.key === 'Tab') {
+            const dialog = elements.settingsModalShell.querySelector('.settings-modal');
+            trapFocusWithin(dialog, event);
+        }
+    });
+
+    window.addEventListener('beforeunload', (event) => {
+        if (!state.modalOpen) return;
+        if (state.dirtyKeys.size === 0 && state.invalidKeys.size === 0) return;
+        event.preventDefault();
+        event.returnValue = '';
     });
 
     chrome.storage.onChanged.addListener(async (changes, areaName) => {

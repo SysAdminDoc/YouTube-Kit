@@ -277,6 +277,7 @@
             cursor: pointer;
             transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease;
             outline: none;
+            touch-action: manipulation;
             -webkit-tap-highlight-color: transparent;
         }
 
@@ -755,6 +756,7 @@
             gap: 10px;
             cursor: pointer;
             user-select: none;
+            touch-action: manipulation;
         }
 
         .settings-item-toggle input {
@@ -905,6 +907,16 @@
                 padding-right: 10px;
             }
         }
+
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation: none !important;
+                transition: none !important;
+                scroll-behavior: auto !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1047,7 +1059,7 @@
 
             <div class="settings-modal-toolbar">
                 <label class="settings-search-shell" for="settings-search">
-                    <input class="settings-search-input" id="settings-search" type="search" placeholder="Search settings, keys, or groups…">
+                    <input class="settings-search-input" id="settings-search" type="search" placeholder="Search settings, keys, or groups…" aria-label="Search settings" autocomplete="off">
                 </label>
                 <div class="button-row settings-toolbar-actions">
                     <button id="settings-restore-defaults-btn" type="button">Restore Defaults</button>
