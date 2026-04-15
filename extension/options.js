@@ -183,8 +183,15 @@
         return JSON.parse(JSON.stringify(value));
     }
 
-    function safeSerialize(value) {
+    function safeSerialize(value, sortKeys = false) {
         try {
+            if (sortKeys) {
+                return JSON.stringify(value, (_, v) =>
+                    v && typeof v === 'object' && !Array.isArray(v)
+                        ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)))
+                        : v
+                );
+            }
             return JSON.stringify(value);
         } catch {
             return String(value);
@@ -192,7 +199,8 @@
     }
 
     function areValuesEqual(left, right) {
-        return safeSerialize(left) === safeSerialize(right);
+        // Sort object keys for order-independent comparison
+        return safeSerialize(left, true) === safeSerialize(right, true);
     }
 
     function isPlainObject(value) {
@@ -581,7 +589,7 @@
             });
 
             downloadLink.click();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
             showStatus('Settings exported successfully.', 'success');
         } catch (error) {
             showStatus('Export failed: ' + error.message, 'error');
@@ -602,7 +610,7 @@
             }
 
             const writes = {};
-            if (data.exportVersion >= 3) {
+            if (data.exportVersion >= 3 && data.exportVersion < 100) {
                 if (isPlainObject(data.settings)) writes[STORAGE_KEYS.settings] = applySettingsVersion(data.settings);
                 if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(data.hiddenVideos);
                 if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = sanitizeImportedBlockedChannels(data.blockedChannels);
@@ -1065,9 +1073,15 @@
         textarea.value = JSON.stringify(value ?? {}, null, 2);
         textarea.addEventListener('input', () => {
             try {
-                state.draftSettings[key] = JSON.parse(textarea.value);
-                state.invalidKeys.delete(key);
-                updateDirtyStateForKey(key);
+                const parsed = JSON.parse(textarea.value);
+                // Guard against replacing an object/array with a primitive
+                if (value != null && typeof value === 'object' && (typeof parsed !== 'object' || parsed === null)) {
+                    state.invalidKeys.add(key);
+                } else {
+                    state.draftSettings[key] = parsed;
+                    state.invalidKeys.delete(key);
+                    updateDirtyStateForKey(key);
+                }
             } catch {
                 state.invalidKeys.add(key);
             }

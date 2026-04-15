@@ -48,6 +48,7 @@
         !appendStyleSheet ||
         !cleanupRetiredCommentUi ||
         !configureNavigationRuntime ||
+        !flushPendingStorageWrites ||
         !getCurrentPage ||
         !getMainVideoElement ||
         !getMoviePlayerElement ||
@@ -59,14 +60,19 @@
         !injectStyle ||
         !installStorageChangeListener ||
         !installStorageFlushGuards ||
+        !isLiveChatFrame ||
         !isLiveChatPath ||
+        !isTopLevelFrame ||
         !isWatchPagePath ||
         !preloadExtensionState ||
         !PageTypes ||
         !removeMutationRule ||
         !removeNavigateRule ||
+        !shouldBuildPrimaryUI ||
         !storageRead ||
+        !storageReadJSON ||
         !storageWrite ||
+        !storageWriteJSON ||
         !waitForElement ||
         !waitForPageContent
     ) {
@@ -1110,10 +1116,7 @@ return response;
         _cachedApiKey: null,
         _getInnertubeApiKey() {
             if (this._cachedApiKey) return this._cachedApiKey;
-            if (typeof window.ytcfg !== 'undefined' && window.ytcfg.get) {
-                const key = window.ytcfg.get('INNERTUBE_API_KEY');
-                if (key) { this._cachedApiKey = key; return key; }
-            }
+            // ISOLATED world: window.ytcfg is not accessible; parse from <script> tags.
             const scripts = document.querySelectorAll('script');
             for (const s of scripts) {
                 const m = s.textContent.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
@@ -1152,11 +1155,11 @@ return response;
 
         _sanitizeFilename(name) {
             return name
-                .replace(/[<>:"/\\|?*]/g, '')
-                .replace(/[^\x00-\x7F]/g, '')
+                .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
                 .replace(/\s+/g, '_')
-                .toLowerCase()
-                .substring(0, 50);
+                .replace(/^\.+/, '')
+                .substring(0, 120)
+                || 'untitled';
         },
 
         _downloadFile(content, filename) {
@@ -3089,14 +3092,19 @@ return response;
                         const value = message.value;
                         const prev = appState.settings[key];
                         appState.settings[key] = value;
-                        // If this key maps to a feature ID, re-init/destroy that feature.
+                        settingsManager.save(appState.settings);
+                        // If this key maps to a feature ID, re-init/destroy respecting page constraints.
                         const feat = (typeof features !== 'undefined' && Array.isArray(features))
                             ? features.find(f => f.id === key) : null;
                         if (feat && prev !== value) {
                             try {
                                 if (value && typeof feat.init === 'function') {
-                                    feat.init();
-                                    feat._initialized = true;
+                                    if (typeof shouldFeatureBeActive === 'function'
+                                        ? shouldFeatureBeActive(feat, appState.settings)
+                                        : true) {
+                                        feat.init();
+                                        feat._initialized = true;
+                                    }
                                 } else if (!value && typeof feat.destroy === 'function') {
                                     feat.destroy();
                                     feat._initialized = false;
@@ -5507,9 +5515,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             // Wait for chat frame via MutationObserver (replaces 10s polling loop)
             _waitForChat(rightPct, topOffset, heightStr) {
                 const self = this;
+                // Clean up any prior pending observer
+                if (this._pendingChatObs) { this._pendingChatObs.disconnect(); this._pendingChatObs = null; }
                 let _chatObs = null;
                 const _onFound = (chatEl) => {
                     if (_chatObs) { _chatObs.disconnect(); _chatObs = null; }
+                    self._pendingChatObs = null;
                     if (!self._isSplit || !self._isActive) return;
                     self._positionOverRight(chatEl, rightPct, topOffset, heightStr);
                     chatEl.removeAttribute('collapsed');
@@ -5537,8 +5548,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     if (chatEl) _onFound(chatEl);
                 });
                 _chatObs.observe(document.body, { childList: true, subtree: true });
+                this._pendingChatObs = _chatObs;
                 // Safety timeout: disconnect after 10s
-                setTimeout(() => { if (_chatObs) { _chatObs.disconnect(); _chatObs = null; } }, 10000);
+                setTimeout(() => { if (_chatObs) { _chatObs.disconnect(); _chatObs = null; self._pendingChatObs = null; } }, 10000);
             },
 
             // ── Build the fixed overlay (video full-width, right panel hidden) ──
@@ -7502,6 +7514,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             destroy() {
                 this._unmount();
+                if (this._pendingChatObs) { this._pendingChatObs.disconnect(); this._pendingChatObs = null; }
                 this._lastVideoId = null;
                 this._styleEl?.remove();
                 this._splitMetaStyleEl?.remove();
@@ -9702,7 +9715,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         a.target = '_blank';
                         a.rel = 'noopener noreferrer';
                     }
-                    TrustedHTML.setHTML(a, `<svg viewBox="0 0 24 24" class="ytkit-ql-icon"><path d="${item.icon}"></path></svg><span>${item.text}</span>`);
+                    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    svg.setAttribute('viewBox', '0 0 24 24');
+                    svg.classList.add('ytkit-ql-icon');
+                    const svgPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    svgPath.setAttribute('d', item.icon);
+                    svg.appendChild(svgPath);
+                    const span = document.createElement('span');
+                    span.textContent = item.text;
+                    a.appendChild(svg);
+                    a.appendChild(span);
                     row.appendChild(a);
                     // Delete button (hidden unless editing)
                     const del = document.createElement('button');
@@ -12049,7 +12071,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 addNavigateRule('sortComments', () => this._scheduleSort(4000));
-                addMutationRule('sortCommentsMutation', () => this._sort());
+                addMutationRule('sortCommentsMutation', () => this._scheduleSort(2000));
                 this._scheduleSort(4000);
             },
             destroy() {
@@ -12069,8 +12091,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             settingKey: 'autoSkipChapterPatterns',
             _interval: null,
             _skippedAt: null,
+            _cachedChapters: null,
+            _cachedVideoId: null,
+            _lastCheckTime: 0,
 
             _getChapters() {
+                // Cache chapters per video to avoid DOM queries on every timeupdate
+                const vid = getVideoId();
+                if (vid && vid === this._cachedVideoId && this._cachedChapters) return this._cachedChapters;
+                this._cachedVideoId = vid;
                 const chapters = [];
                 document.querySelectorAll('ytd-macro-markers-list-item-renderer, .ytp-chapter-hover-container').forEach(el => {
                     const title = el.querySelector('.macro-markers-list-item-text, .ytp-chapter-title-content')?.textContent?.trim();
@@ -12083,10 +12112,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         chapters.push({ title: title.toLowerCase(), time: secs });
                     }
                 });
-                return chapters.sort((a, b) => a.time - b.time);
+                const sorted = chapters.sort((a, b) => a.time - b.time);
+                if (sorted.length > 0) this._cachedChapters = sorted;
+                return sorted;
             },
 
             _check() {
+                // Throttle to ~2 checks/sec instead of 4
+                const now = performance.now();
+                if (now - this._lastCheckTime < 500) return;
+                this._lastCheckTime = now;
+
                 const video = document.querySelector('video.html5-main-video');
                 if (!video || video.paused || !video.duration) return;
                 const patterns = (appState.settings.autoSkipChapterPatterns || 'intro,outro,recap,sponsor')
@@ -12120,7 +12156,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             init() {
                 this._timeupdateHandler = () => this._check();
                 document.addEventListener('timeupdate', this._timeupdateHandler, true);
-                addNavigateRule('autoSkipCh', () => { this._skippedAt = null; });
+                addNavigateRule('autoSkipCh', () => { this._skippedAt = null; this._cachedChapters = null; this._cachedVideoId = null; });
             },
             destroy() {
                 if (this._timeupdateHandler) {
@@ -12470,6 +12506,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             init() {
+                if (this._timeout) clearTimeout(this._timeout);
+                this._liked = false;
                 addNavigateRule('autoLike', () => {
                     this._liked = false;
                     if (this._timeout) clearTimeout(this._timeout);
@@ -12848,12 +12886,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (sp) return; // User already applied a filter, don't override
 
                 const sort = appState.settings.searchFilterSort || 'upload_date';
-                const spMap = { upload_date: 'CAI%253D', view_count: 'CAM%253D', rating: 'CAE%253D' };
+                const spMap = { upload_date: 'CAI=', view_count: 'CAM=', rating: 'CAE=' };
                 const newSp = spMap[sort];
                 if (!newSp) return;
                 if (this._appliedUrl === location.href) return;
                 this._appliedUrl = location.href;
-                url.searchParams.set('sp', decodeURIComponent(newSp));
+                url.searchParams.set('sp', newSp);
                 window.location.replace(url.toString());
             },
 
@@ -13108,8 +13146,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const waitForReady = () => new Promise(resolve => {
                     if (video.readyState >= 2) return resolve();
-                    video.addEventListener('loadeddata', resolve, { once: true });
-                    setTimeout(resolve, 5000); // Fallback
+                    let timer = null;
+                    const done = () => {
+                        if (timer) { clearTimeout(timer); timer = null; }
+                        video.removeEventListener('loadeddata', done);
+                        resolve();
+                    };
+                    video.addEventListener('loadeddata', done, { once: true });
+                    timer = setTimeout(done, 5000);
                 });
 
                 await waitForReady();
@@ -13929,7 +13973,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 addNavigateRule('thumbnailQualityUpgrade', () => this._scheduleUpgrade(1500));
-                addMutationRule('thumbnailQualityUpgrade', () => this._upgradeAll());
+                addMutationRule('thumbnailQualityUpgrade', () => this._scheduleUpgrade(800));
                 this._scheduleUpgrade(1500);
             },
             destroy() {
@@ -14008,7 +14052,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 addNavigateRule('watchLaterQuickAdd', () => this._scheduleAddButtons(1500));
-                addMutationRule('watchLaterQuickAdd', () => this._addButtons());
+                addMutationRule('watchLaterQuickAdd', () => this._scheduleAddButtons(800));
                 this._scheduleAddButtons(1500);
             },
             destroy() {
@@ -14515,7 +14559,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 addNavigateRule('videoResolutionBadge', () => this._scheduleAddBadges(1500));
-                addMutationRule('videoResolutionBadge', () => this._addBadges());
+                addMutationRule('videoResolutionBadge', () => this._scheduleAddBadges(800));
                 this._scheduleAddBadges(1500);
             },
             destroy() {
@@ -15085,6 +15129,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             group: 'Advanced',
             icon: 'bell-ring',
             _observer: null,
+            _parseRelativeAge(text) {
+                // Parse relative time strings like "3 hours ago", "2 days ago" into seconds
+                const match = text.match(/(\d+)\s*(second|minute|hour|day|week|month|year)/i);
+                if (!match) return Infinity; // unparseable sorts last
+                const n = parseInt(match[1], 10);
+                const unit = match[2].toLowerCase();
+                const multipliers = { second: 1, minute: 60, hour: 3600, day: 86400, week: 604800, month: 2592000, year: 31536000 };
+                return n * (multipliers[unit] || 1);
+            },
             init() {
                 const sortNotifications = () => {
                     const container = document.querySelector('ytd-notification-renderer');
@@ -15096,7 +15149,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     items.sort((a, b) => {
                         const timeA = a.querySelector('#message')?.textContent || '';
                         const timeB = b.querySelector('#message')?.textContent || '';
-                        return timeB.localeCompare(timeA);
+                        return this._parseRelativeAge(timeA) - this._parseRelativeAge(timeB);
                     });
                     items.forEach(item => parent.appendChild(item));
                     parent.dataset.sorted = 'true';
@@ -15744,20 +15797,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             description: 'Show speed overlay on the video player (like VLC) instead of corner toast',
             group: 'Playback',
             icon: 'gauge',
-            _pollInterval: null,
-            _lastSpeed: null,
+            _rateHandler: null,
             _osdTimeout: null,
             init() {
-                const self = this;
-                const checkSpeed = () => {
-                    const video = document.querySelector('video.html5-main-video');
-                    if (!video) return;
-                    if (self._lastSpeed !== null && video.playbackRate !== self._lastSpeed) {
-                        self._showOSD(video.playbackRate);
-                    }
-                    self._lastSpeed = video.playbackRate;
+                this._rateHandler = (e) => {
+                    const video = e.target;
+                    if (video?.tagName === 'VIDEO') this._showOSD(video.playbackRate);
                 };
-                this._pollInterval = setInterval(checkSpeed, 200);
+                document.addEventListener('ratechange', this._rateHandler, true);
             },
             _showOSD(speed) {
                 const player = document.querySelector('#movie_player');
@@ -15775,8 +15822,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._osdTimeout = setTimeout(() => { if (osd) osd.style.opacity = '0'; }, 1200);
             },
             destroy() {
-                if (this._pollInterval) clearInterval(this._pollInterval);
-                this._pollInterval = null;
+                if (this._rateHandler) document.removeEventListener('ratechange', this._rateHandler, true);
+                this._rateHandler = null;
                 clearTimeout(this._osdTimeout);
                 document.querySelector('#ytkit-speed-osd')?.remove();
             }
@@ -16853,8 +16900,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _todayKey() { return new Date().toISOString().slice(0, 10); },
 
+            _todayCache: null,
             _loadToday() {
-                const raw = appState.settings.dwWatchTimeToday || { date: '', seconds: 0 };
+                // Prefer in-memory cache (updated every tick) over storage (flushed every 30s)
+                const raw = this._todayCache || appState.settings.dwWatchTimeToday || { date: '', seconds: 0 };
                 if (raw.date !== this._todayKey()) {
                     return { date: this._todayKey(), seconds: 0 };
                 }
@@ -16944,7 +16993,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (!video || video.paused || document.hidden) return;
                 const today = this._loadToday();
                 today.seconds = (today.seconds || 0) + 1;
-                this._saveToday(today);
+                // Batch saves every 30s to avoid thrashing chrome.storage.local
+                if (today.seconds % 30 === 0) this._saveToday(today);
+                else this._todayCache = today;
                 this._sessionStart = this._sessionStart || today.seconds;
                 const sessionElapsed = today.seconds - this._sessionStart;
                 const breakEvery = (parseInt(appState.settings.dwBreakIntervalMin) || 0) * 60;
@@ -16998,6 +17049,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             destroy() {
                 if (this._timer) clearInterval(this._timer);
                 this._timer = null;
+                // Flush any cached but unsaved watch time
+                if (this._todayCache) {
+                    this._saveToday(this._todayCache);
+                    this._todayCache = null;
+                }
                 if (this._overlayKeyHandler) {
                     document.removeEventListener('keydown', this._overlayKeyHandler, true);
                     this._overlayKeyHandler = null;
@@ -20038,7 +20094,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             textarea.id = `ytkit-input-${f.id}`;
             textarea.setAttribute('aria-label', f.name);
             textarea.placeholder = f.placeholder || 'word1, word2, phrase';
-            textarea.value = appState.settings[f.settingKey || f.id] || appState.settings[f.id] || '';
+            textarea.value = appState.settings[f.settingKey || f.id] ?? '';
             // Auto-save on blur for textarea features
             textarea.addEventListener('blur', () => {
                 const key = f.settingKey || f.id;
@@ -20639,19 +20695,25 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             }
         });
 
-        // Textarea input
+        // Textarea input — debounce reinit to avoid destroy/init churn per keystroke
+        let _textareaReinitTimer = null;
         doc.addEventListener('input', (e) => {
             if (!isSettingsPanelOpen()) return;
             if (e.target.matches('.ytkit-input')) {
                 const card = e.target.closest('[data-feature-id]');
                 if (!card) return;
                 const featureId = card.dataset.featureId;
-                appState.settings[featureId] = e.target.value;
-                settingsManager.save(appState.settings);
                 const feature = getFeatureById(featureId);
+                const key = feature?.settingKey || featureId;
+                appState.settings[key] = e.target.value;
+                settingsManager.save(appState.settings);
                 if (feature) {
-                    feature.destroy?.();
-                    feature.init?.();
+                    if (_textareaReinitTimer) clearTimeout(_textareaReinitTimer);
+                    _textareaReinitTimer = setTimeout(() => {
+                        _textareaReinitTimer = null;
+                        try { feature.destroy?.(); } catch (_) {}
+                        try { feature.init?.(); } catch (_) {}
+                    }, 600);
                 }
             }
             // Select dropdown
@@ -25614,13 +25676,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
         }
     `);
 
-    function buildPageDock() {
-        // Dock replaced by page modal — no-op kept for call-site compatibility
-    }
-
     if (shouldBuildPrimaryUI()) {
         injectSettingsButton();
-        buildPageDock();
         injectPageModalButton();
         attachUIEventListeners();
     }
@@ -25784,13 +25841,6 @@ body.ytkit-panel-open #ytkit-settings-panel {
                 container.style.display = '';
             }
         });
-
-        // Button injection is handled by startButtonChecker() called from each button feature's init()
-
-        const hasRun = settingsManager.getFirstRunStatus();
-        if (!hasRun) {
-            settingsManager.setFirstRunStatus(true);
-        }
 
         // Track page changes for lazy loading (skip in safe mode)
         if (!isSafeMode) {

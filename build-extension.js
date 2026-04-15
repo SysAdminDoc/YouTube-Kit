@@ -130,8 +130,9 @@ function copyDir(src, dest) {
 
 function createZip(sourceDir, zipPath) {
     if (process.platform === 'win32') {
+        // Use Get-ChildItem -Force to include dotfiles, unlike the \* glob
         execSync(
-            'powershell -NoProfile -Command "Compress-Archive -Path \'' + sourceDir + '\\*\' -DestinationPath \'' + zipPath + '\' -Force"',
+            `powershell -NoProfile -Command "Get-ChildItem -Path '${sourceDir}' -Force | Compress-Archive -DestinationPath '${zipPath}' -Force"`,
             { stdio: 'inherit' }
         );
     } else {

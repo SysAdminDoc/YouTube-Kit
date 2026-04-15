@@ -163,7 +163,7 @@ function hasHeader(headers, name) {
 function normalizeRequestBody(data, headers = {}) {
     if (data == null) return null;
     if (typeof data === 'string') return data;
-    if (data instanceof FormData || data instanceof URLSearchParams || data instanceof Blob) return data;
+    // ArrayBuffer and TypedArrays survive structured cloning through chrome.runtime messaging
     if (data instanceof ArrayBuffer) return data;
     if (ArrayBuffer.isView(data)) return data;
 
@@ -213,9 +213,9 @@ async function togglePanelForTab(tabId) {
     }
 }
 
-chrome.action.onClicked.addListener(async (tab) => {
-    await togglePanelForTab(tab?.id);
-});
+// chrome.action.onClicked does not fire when default_popup is set in the
+// manifest, so the toolbar click is handled entirely by popup.html/popup.js.
+// The keyboard shortcut (Ctrl+Shift+Y) still needs the commands listener.
 
 chrome.commands.onCommand.addListener(async (command) => {
     if (command !== 'toggle-control-center') return;
