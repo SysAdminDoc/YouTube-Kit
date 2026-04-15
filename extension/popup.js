@@ -22,6 +22,7 @@ const QUICK_TOGGLES = [
 const SETTINGS_STORAGE_KEY = 'ytSuiteSettings';
 const PANEL_OPEN_MESSAGE = 'YTKIT_OPEN_PANEL';
 const QUICK_TOGGLE_KEYS = QUICK_TOGGLES.map((toggle) => toggle.key);
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const YOUTUBE_TAB_URLS = [
     '*://youtube.com/*',
     '*://*.youtube.com/*',
@@ -30,12 +31,21 @@ const YOUTUBE_TAB_URLS = [
     '*://youtu.be/*'
 ];
 const popupState = {
-    settings: {}
+    settings: {},
+    activeTab: null,
+    statusTimer: null
 };
 
 const $ = (s) => document.querySelector(s);
 const list = $('#toggles');
 const q = $('#q');
+const enabledCount = $('#enabledCount');
+const contextState = $('#contextState');
+const supportNote = $('#supportNote');
+const statusBanner = $('#status');
+const clearSearchButton = $('#clearSearch');
+const openPanelButton = $('#openPanel');
+const openOptionsButton = $('#openOptions');
 
 function getVersion() {
     try { return (chrome.runtime.getManifest().version || '—'); } catch { return '—'; }
@@ -83,10 +93,15 @@ function storageRemove(keys) {
 
 function normalizeStoredSettings(items) {
     const rawSettings = items?.[SETTINGS_STORAGE_KEY];
-    const settings = rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings)
-        ? { ...rawSettings }
-        : {};
+    const settings = {};
     const legacyKeys = [];
+
+    if (rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings)) {
+        for (const [key, value] of Object.entries(rawSettings)) {
+            if (UNSAFE_OBJECT_KEYS.has(key)) continue;
+            settings[key] = value;
+        }
+    }
 
     for (const key of QUICK_TOGGLE_KEYS) {
         if (typeof items?.[key] !== 'boolean') continue;
@@ -166,6 +181,124 @@ function isSupportedInlinePanelUrl(urlString) {
     }
 }
 
+function showStatus(message = '', type = 'info', durationMs = 2400) {
+    if (popupState.statusTimer) {
+        clearTimeout(popupState.statusTimer);
+        popupState.statusTimer = null;
+    }
+
+    if (!message) {
+        statusBanner.textContent = '';
+        statusBanner.className = 'status-banner';
+        return;
+    }
+
+    statusBanner.textContent = message;
+    statusBanner.className = `status-banner is-visible status-${type}`;
+    if (durationMs > 0) {
+        popupState.statusTimer = setTimeout(() => {
+            statusBanner.textContent = '';
+            statusBanner.className = 'status-banner';
+            popupState.statusTimer = null;
+        }, durationMs);
+    }
+}
+
+function updateSummary(settings) {
+    const enabled = QUICK_TOGGLE_KEYS.reduce((count, key) => count + (settings[key] ? 1 : 0), 0);
+    enabledCount.textContent = String(enabled);
+}
+
+function updateSearchState() {
+    clearSearchButton.hidden = !q.value.trim();
+}
+
+function getTabContext(tab) {
+    const url = tab?.url || '';
+    if (isSupportedInlinePanelUrl(url)) {
+        return {
+            label: 'This Tab',
+            note: 'Open the full Astra Deck workspace directly inside this YouTube page.',
+            openLabel: 'Open Settings On This Tab'
+        };
+    }
+    if (isAnyYouTubeUrl(url)) {
+        return {
+            label: 'YouTube Tab',
+            note: 'This page cannot host the inline workspace, but the options page is ready whenever you need the full editor.',
+            openLabel: 'Open Full Settings'
+        };
+    }
+    return {
+        label: 'Any Tab',
+        note: 'Quick toggles still sync to open YouTube tabs. Open YouTube first if you want the full in-page workspace.',
+        openLabel: 'Open YouTube First'
+    };
+}
+
+function updateContext(tab) {
+    popupState.activeTab = tab || null;
+    const nextContext = getTabContext(tab);
+    contextState.textContent = nextContext.label;
+    supportNote.textContent = nextContext.note;
+    openPanelButton.textContent = nextContext.openLabel;
+}
+
+function renderLoading() {
+    list.textContent = '';
+    for (let index = 0; index < 5; index += 1) {
+        const skeleton = document.createElement('div');
+        skeleton.className = 'toggle-skeleton';
+
+        const copy = document.createElement('div');
+        copy.className = 'skeleton-copy';
+
+        const linePrimary = document.createElement('div');
+        linePrimary.className = 'skeleton-line';
+        const lineSecondary = document.createElement('div');
+        lineSecondary.className = 'skeleton-line short';
+
+        copy.appendChild(linePrimary);
+        copy.appendChild(lineSecondary);
+        skeleton.appendChild(copy);
+        list.appendChild(skeleton);
+    }
+}
+
+function renderEmpty(filter) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+
+    const title = document.createElement('span');
+    title.className = 'empty-title';
+    title.textContent = filter ? 'No quick toggles match' : 'No quick toggles available';
+
+    const copy = document.createElement('span');
+    copy.className = 'empty-copy';
+    copy.textContent = filter
+        ? 'Clear the filter to see every quick control again.'
+        : 'The popup could not load any quick controls right now.';
+
+    empty.appendChild(title);
+    empty.appendChild(copy);
+
+    if (filter) {
+        const action = document.createElement('button');
+        action.type = 'button';
+        action.className = 'empty-action';
+        action.textContent = 'Clear Filter';
+        action.addEventListener('click', () => {
+            q.value = '';
+            updateSearchState();
+            render(popupState.settings, '');
+            q.focus();
+        });
+        empty.appendChild(action);
+    }
+
+    list.appendChild(empty);
+}
+
 function sendTabMessage(tabId, message) {
     return new Promise((resolve) => {
         if (!tabId) {
@@ -201,12 +334,11 @@ function render(settings, filter) {
     const items = QUICK_TOGGLES.filter((t) =>
         !term || t.name.toLowerCase().includes(term) || t.desc.toLowerCase().includes(term) || t.key.toLowerCase().includes(term)
     );
-    list.innerHTML = '';
+    list.textContent = '';
+    updateSummary(settings);
+    updateSearchState();
     if (!items.length) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = 'No toggles match.';
-        list.appendChild(empty);
+        renderEmpty(term);
         return;
     }
     for (const t of items) {
@@ -217,14 +349,23 @@ function render(settings, filter) {
         row.dataset.key = t.key;
         row.setAttribute('role', 'switch');
         row.setAttribute('aria-checked', String(on));
-        row.innerHTML = `
-            <div class="label">
-                <div class="name"></div>
-                <div class="desc"></div>
-            </div>
-            <div class="switch"></div>`;
-        row.querySelector('.name').textContent = t.name;
-        row.querySelector('.desc').textContent = t.desc;
+
+        const label = document.createElement('div');
+        label.className = 'label';
+        const name = document.createElement('div');
+        name.className = 'name';
+        name.textContent = t.name;
+        const desc = document.createElement('div');
+        desc.className = 'desc';
+        desc.textContent = t.desc;
+        label.appendChild(name);
+        label.appendChild(desc);
+
+        const toggleSwitch = document.createElement('div');
+        toggleSwitch.className = 'switch';
+
+        row.appendChild(label);
+        row.appendChild(toggleSwitch);
         row.addEventListener('click', async () => {
             row.disabled = true;
             try {
@@ -232,8 +373,10 @@ function render(settings, filter) {
                 await writeSetting(t.key, next);
                 render(popupState.settings, q.value);
                 void broadcast(t.key, next);
+                showStatus(`${t.name} ${next ? 'enabled' : 'disabled'}.`, 'success');
             } catch (error) {
                 console.warn('[Astra Deck popup] Failed to toggle setting:', error);
+                showStatus(`Couldn't update ${t.name}. Try again.`, 'error', 4200);
             } finally {
                 row.disabled = false;
             }
@@ -243,16 +386,30 @@ function render(settings, filter) {
 }
 
 (async () => {
+    renderLoading();
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        updateContext(tab || null);
+    } catch {
+        updateContext(null);
+    }
+
     try {
         const settings = await loadSettings();
         render(settings, '');
     } catch (error) {
         console.warn('[Astra Deck popup] Failed to load settings:', error);
         render({}, '');
+        showStatus('Quick controls could not be loaded. Try reopening the popup.', 'error', 5000);
     }
 
     q.addEventListener('input', () => {
         render(popupState.settings, q.value);
+    });
+    clearSearchButton.addEventListener('click', () => {
+        q.value = '';
+        render(popupState.settings, '');
+        q.focus();
     });
 
     if (chrome.storage?.onChanged) {
@@ -267,7 +424,7 @@ function render(settings, filter) {
         });
     }
 
-    $('#openPanel').addEventListener('click', async () => {
+    openPanelButton.addEventListener('click', async () => {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (tab?.id && isSupportedInlinePanelUrl(tab.url || '')) {
             const opened = await sendTabMessage(tab.id, { type: PANEL_OPEN_MESSAGE });
@@ -286,7 +443,7 @@ function render(settings, filter) {
         await chrome.tabs.create({ url: 'https://www.youtube.com/' });
         window.close();
     });
-    $('#openOptions').addEventListener('click', () => {
+    openOptionsButton.addEventListener('click', () => {
         chrome.runtime.openOptionsPage();
         window.close();
     });

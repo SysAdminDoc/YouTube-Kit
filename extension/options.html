@@ -16,6 +16,8 @@
             --text-muted: #8894a8;
             --accent: #ff6b4a;
             --accent-soft: rgba(255, 107, 74, 0.14);
+            --info: #6aa9ff;
+            --warning: #ffbe7a;
             --success: #35c77f;
             --error: #ff7480;
             --radius-md: 16px;
@@ -296,6 +298,11 @@
             pointer-events: none;
         }
 
+        button[aria-busy="true"] {
+            opacity: 0.9;
+            cursor: progress;
+        }
+
         button.primary {
             background: rgba(255, 107, 74, 0.18);
             border-color: rgba(255, 107, 74, 0.28);
@@ -494,6 +501,12 @@
             font-variant-numeric: tabular-nums;
         }
 
+        .settings-chip-problem {
+            color: #ffd4d9;
+            background: rgba(255, 116, 128, 0.12);
+            border-color: rgba(255, 116, 128, 0.24);
+        }
+
         .icon-button {
             display: inline-flex;
             align-items: center;
@@ -519,12 +532,13 @@
         .settings-search-shell {
             flex: 1;
             min-width: 0;
+            position: relative;
         }
 
         .settings-search-input {
             width: 100%;
             min-height: 36px;
-            padding: 0 12px;
+            padding: 0 38px 0 38px;
             border-radius: 12px;
             border: 1px solid rgba(255, 255, 255, 0.08);
             background: rgba(255, 255, 255, 0.04);
@@ -535,6 +549,39 @@
 
         .settings-search-input::placeholder {
             color: var(--text-muted);
+        }
+
+        .settings-search-icon,
+        .settings-search-clear {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        .settings-search-icon {
+            left: 12px;
+            color: var(--text-muted);
+            font-size: 14px;
+            pointer-events: none;
+        }
+
+        .settings-search-clear {
+            right: 8px;
+            width: 22px;
+            height: 22px;
+            min-height: 22px;
+            padding: 0;
+            border-radius: 999px;
+            border: 0;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 16px;
+            box-shadow: none;
+        }
+
+        .settings-search-clear:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-primary);
         }
 
         .settings-toolbar-actions {
@@ -635,6 +682,73 @@
             border: 1px solid rgba(89, 146, 255, 0.24);
         }
 
+        .settings-workspace-banner {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+            margin: 12px 12px 0;
+            padding: 12px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
+                rgba(14, 18, 25, 0.92);
+        }
+
+        .settings-workspace-copy {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+        }
+
+        .settings-workspace-title {
+            color: var(--text-primary);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+        }
+
+        .settings-workspace-note {
+            color: var(--text-muted);
+            font-size: 11px;
+            line-height: 1.5;
+            text-wrap: pretty;
+        }
+
+        .settings-workspace-banner.is-warning {
+            border-color: rgba(255, 107, 74, 0.2);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)),
+                rgba(24, 18, 18, 0.94);
+        }
+
+        .settings-workspace-banner.is-warning .settings-workspace-title {
+            color: #ffd1c5;
+        }
+
+        .settings-workspace-banner.is-error {
+            border-color: rgba(255, 116, 128, 0.26);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)),
+                rgba(31, 15, 19, 0.94);
+        }
+
+        .settings-workspace-banner.is-error .settings-workspace-title {
+            color: #ffe0e4;
+        }
+
+        .settings-workspace-banner.is-filtered {
+            border-color: rgba(106, 169, 255, 0.22);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)),
+                rgba(14, 17, 26, 0.94);
+        }
+
+        .settings-workspace-banner.is-filtered .settings-workspace-title {
+            color: #ddecff;
+        }
+
         .settings-list {
             padding: 10px 12px 14px;
             overflow: auto;
@@ -654,6 +768,40 @@
             text-align: center;
         }
 
+        .settings-empty-inner {
+            max-width: 340px;
+        }
+
+        .settings-empty-eyebrow {
+            display: inline-flex;
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: rgba(106, 169, 255, 0.12);
+            border: 1px solid rgba(106, 169, 255, 0.2);
+            color: #ddecff;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .settings-empty-title {
+            margin: 12px 0 6px;
+            color: var(--text-primary);
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+            text-wrap: balance;
+        }
+
+        .settings-empty-copy {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.6;
+            text-wrap: pretty;
+        }
+
         .settings-item {
             display: grid;
             gap: 10px;
@@ -671,10 +819,16 @@
             background:
                 linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
                 rgba(19, 18, 20, 0.9);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.03),
+                0 0 0 1px rgba(255, 107, 74, 0.08);
         }
 
         .settings-item.is-invalid {
             border-color: rgba(255, 116, 128, 0.26);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.03),
+                0 0 0 1px rgba(255, 116, 128, 0.09);
         }
 
         .settings-item-header {
@@ -715,8 +869,31 @@
             text-transform: uppercase;
         }
 
+        .settings-item-badge-key {
+            color: #dde6f2;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .settings-item-badge-group {
+            color: #ffd3c8;
+            background: rgba(255, 107, 74, 0.12);
+            border-color: rgba(255, 107, 74, 0.2);
+        }
+
+        .settings-item-badge-type {
+            color: #ddecff;
+            background: rgba(106, 169, 255, 0.1);
+            border-color: rgba(106, 169, 255, 0.16);
+        }
+
         .settings-item-state {
             color: #ffb59f;
+        }
+
+        .settings-item-state.is-problem {
+            color: #ffe0e4;
+            background: rgba(255, 116, 128, 0.12);
+            border-color: rgba(255, 116, 128, 0.22);
         }
 
         .settings-item-description {
@@ -748,6 +925,11 @@
             min-height: 112px;
             resize: vertical;
             line-height: 1.55;
+        }
+
+        .settings-item.is-invalid .settings-item-control input,
+        .settings-item.is-invalid .settings-item-control textarea {
+            border-color: rgba(255, 116, 128, 0.28);
         }
 
         .settings-item-toggle {
@@ -816,6 +998,7 @@
             color: var(--text-muted);
             font-size: 10px;
             line-height: 1.5;
+            text-wrap: pretty;
         }
 
         .settings-reset-inline {
@@ -825,6 +1008,16 @@
             font-size: 10px;
             letter-spacing: 0.08em;
             text-transform: uppercase;
+        }
+
+        .settings-tertiary-button {
+            min-height: 32px;
+            padding: 0 12px;
+            border-radius: 10px;
+            font-size: 10px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            white-space: nowrap;
         }
 
         button:focus-visible,
@@ -864,6 +1057,11 @@
             .settings-chip-row,
             .settings-toolbar-actions {
                 justify-content: flex-start;
+            }
+
+            .settings-workspace-banner {
+                flex-direction: column;
+                align-items: stretch;
             }
 
             .settings-groups {
@@ -1052,15 +1250,18 @@
                     <div class="settings-chip-row">
                         <div class="settings-chip"><strong id="settings-total-count">0</strong> settings</div>
                         <div class="settings-chip"><strong id="settings-dirty-count">0</strong> unsaved</div>
+                        <div class="settings-chip settings-chip-problem" id="settings-problem-chip" hidden><strong id="settings-problem-count">0</strong> need attention</div>
                     </div>
                     <button id="close-settings-modal-btn" class="icon-button" type="button" aria-label="Close settings modal">×</button>
                 </div>
             </header>
 
             <div class="settings-modal-toolbar">
-                <label class="settings-search-shell" for="settings-search">
+                <div class="settings-search-shell">
+                    <span class="settings-search-icon" aria-hidden="true">⌕</span>
                     <input class="settings-search-input" id="settings-search" name="settings-search" type="search" placeholder="Search settings, keys, or groups…" aria-label="Search settings" autocomplete="off" spellcheck="false">
-                </label>
+                    <button id="settings-clear-search-btn" class="settings-search-clear" type="button" aria-label="Clear settings search" hidden>×</button>
+                </div>
                 <div class="button-row settings-toolbar-actions">
                     <button id="settings-restore-defaults-btn" type="button">Restore Defaults</button>
                     <button id="settings-discard-btn" type="button">Discard Draft</button>
@@ -1071,9 +1272,21 @@
             <div class="settings-modal-body">
                 <aside class="settings-groups" id="settings-groups" aria-label="Setting groups"></aside>
                 <div class="settings-editor">
+                    <div class="settings-workspace-banner" id="settings-workspace-banner">
+                        <div class="settings-workspace-copy">
+                            <strong class="settings-workspace-title" id="settings-workspace-title">Everything is in sync</strong>
+                            <span class="settings-workspace-note" id="settings-workspace-note">Changes stay local until you save them.</span>
+                        </div>
+                        <button id="settings-clear-filters-btn" class="settings-tertiary-button" type="button" hidden>Clear Filters</button>
+                    </div>
                     <div class="settings-modal-status" id="settings-modal-status" aria-live="polite"></div>
                     <div class="settings-empty" id="settings-empty" hidden>
-                        No settings match your current search.
+                        <div class="settings-empty-inner">
+                            <span class="settings-empty-eyebrow">Filtered View</span>
+                            <h3 class="settings-empty-title">No settings match this view</h3>
+                            <p class="settings-empty-copy">Try a broader search or switch back to All Settings.</p>
+                            <button id="settings-empty-reset-btn" class="settings-tertiary-button" type="button">Clear Search & Filters</button>
+                        </div>
                     </div>
                     <div class="settings-list" id="settings-list"></div>
                 </div>

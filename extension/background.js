@@ -70,9 +70,12 @@ function shouldSendCredentials(url) {
     }
 }
 
-// Headers that must not be forwarded from content script requests
-const BLOCKED_REQUEST_HEADERS = new Set([
-    'host', 'origin', 'referer', 'cookie', 'authorization',
+// Headers that must never be forwarded from content-script requests.
+// `Authorization` is handled separately so BYO-key API calls can work for
+// explicit non-YouTube allowlisted origins without letting arbitrary auth
+// headers leak onto first-party YouTube/session-bound requests.
+const ALWAYS_BLOCKED_REQUEST_HEADERS = new Set([
+    'host', 'origin', 'referer', 'cookie',
     'proxy-authorization', 'sec-fetch-dest', 'sec-fetch-mode',
     'sec-fetch-site', 'sec-fetch-user'
 ]);
@@ -108,6 +111,55 @@ function filterHeaders(headers, blocklist) {
     return filtered;
 }
 
+const AUTH_HEADER_ALLOWED_ORIGINS = new Set([
+    'https://api.openai.com',
+    'https://api.anthropic.com',
+    'http://127.0.0.1:9751',
+    'http://localhost:9751',
+    'http://127.0.0.1:11434',
+    'http://localhost:11434',
+]);
+
+function getRequestOrigin(url) {
+    try {
+        const parsed = new URL(url);
+        return `${parsed.protocol}//${parsed.hostname}${parsed.port ? ':' + parsed.port : ''}`;
+    } catch {
+        return '';
+    }
+}
+
+function canForwardAuthorizationHeader(url) {
+    return AUTH_HEADER_ALLOWED_ORIGINS.has(getRequestOrigin(url));
+}
+
+function filterRequestHeaders(headers, url) {
+    const filtered = filterHeaders(headers, ALWAYS_BLOCKED_REQUEST_HEADERS);
+    if (!canForwardAuthorizationHeader(url)) {
+        for (const key of Object.keys(filtered)) {
+            if (key.toLowerCase() === 'authorization') {
+                delete filtered[key];
+            }
+        }
+    }
+    return filtered;
+}
+
+function isJsonLikePayload(data) {
+    return Array.isArray(data) || (data && typeof data === 'object'
+        && !(data instanceof FormData)
+        && !(data instanceof URLSearchParams)
+        && !(data instanceof Blob)
+        && !(data instanceof ArrayBuffer)
+        && !ArrayBuffer.isView(data));
+}
+
+function hasHeader(headers, name) {
+    if (!headers || typeof headers !== 'object') return false;
+    const target = String(name).toLowerCase();
+    return Object.keys(headers).some((key) => key.toLowerCase() === target);
+}
+
 function normalizeRequestBody(data, headers = {}) {
     if (data == null) return null;
     if (typeof data === 'string') return data;
@@ -118,6 +170,10 @@ function normalizeRequestBody(data, headers = {}) {
     const contentTypeHeader = Object.entries(headers).find(([key]) => key.toLowerCase() === 'content-type');
     const contentType = typeof contentTypeHeader?.[1] === 'string' ? contentTypeHeader[1].toLowerCase() : '';
     if (contentType.includes('application/json')) {
+        return JSON.stringify(data);
+    }
+
+    if (isJsonLikePayload(data)) {
         return JSON.stringify(data);
     }
 
@@ -252,7 +308,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             credentials: shouldSendCredentials(url) ? 'include' : 'omit'
         };
 
-        const filteredHeaders = filterHeaders(headers, BLOCKED_REQUEST_HEADERS);
+        const filteredHeaders = filterRequestHeaders(headers, url);
+        if (isJsonLikePayload(data) && !hasHeader(filteredHeaders, 'content-type')) {
+            filteredHeaders['Content-Type'] = 'application/json';
+        }
         if (Object.keys(filteredHeaders).length > 0) {
             fetchOpts.headers = filteredHeaders;
         }

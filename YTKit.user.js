@@ -83,7 +83,8 @@
         if (path.startsWith('/shorts')) return PageTypes.SHORTS;
         if (path.startsWith('/feed/subscriptions')) return PageTypes.SUBSCRIPTIONS;
         if (path.startsWith('/feed/history')) return PageTypes.HISTORY;
-        if (path.startsWith('/feed/library') || path.startsWith('/playlist')) return PageTypes.LIBRARY;
+        if (path.startsWith('/feed/library') || path.startsWith('/feed/you')) return PageTypes.LIBRARY;
+        if (path.startsWith('/playlist')) return PageTypes.PLAYLIST;
         if (path.startsWith('/@') || path.startsWith('/channel') || path.startsWith('/c/') || path.startsWith('/user/')) return PageTypes.CHANNEL;
         return PageTypes.OTHER;
     }
@@ -113,6 +114,104 @@
         SAVE_DEBOUNCE: 500,       // Settings save debounce (ms)
         ELEMENT_TIMEOUT: 3000,    // waitForElement timeout (ms)
     };
+    const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+    const IMPORT_LIMITS = Object.freeze({
+        hiddenVideos: 5000,
+        blockedChannels: 2000,
+        bookmarkVideos: 400,
+        bookmarksPerVideo: 100,
+        bookmarkNoteChars: 500,
+        totalBytes: 4.5 * 1024 * 1024
+    });
+
+    function isPlainObject(value) {
+        return !!value && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    function isSafeObjectKey(key) {
+        return typeof key === 'string' && !UNSAFE_OBJECT_KEYS.has(key);
+    }
+
+    function sanitizeSettingsObject(settings, knownKeys = null) {
+        if (!isPlainObject(settings)) return {};
+        const sanitized = {};
+        for (const [key, value] of Object.entries(settings)) {
+            if (!isSafeObjectKey(key)) continue;
+            if (knownKeys && key !== '_settingsVersion' && !knownKeys.has(key)) continue;
+            sanitized[key] = value;
+        }
+        return sanitized;
+    }
+
+    function sanitizeImportedHiddenVideos(value) {
+        if (!Array.isArray(value)) return [];
+        const seen = new Set();
+        const sanitized = [];
+        for (const entry of value) {
+            if (typeof entry !== 'string') continue;
+            const videoId = entry.trim();
+            if (!VIDEO_ID_PATTERN.test(videoId) || seen.has(videoId)) continue;
+            seen.add(videoId);
+            sanitized.push(videoId);
+            if (sanitized.length >= IMPORT_LIMITS.hiddenVideos) break;
+        }
+        return sanitized;
+    }
+
+    function sanitizeImportedBlockedChannels(value) {
+        if (!Array.isArray(value)) return [];
+        const seen = new Set();
+        const sanitized = [];
+        for (const entry of value) {
+            if (!isPlainObject(entry)) continue;
+            const id = typeof entry.id === 'string' ? entry.id.trim().slice(0, 128) : '';
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            const name = typeof entry.name === 'string' ? entry.name.trim().slice(0, 200) : id;
+            sanitized.push({ id, name: name || id });
+            if (sanitized.length >= IMPORT_LIMITS.blockedChannels) break;
+        }
+        return sanitized;
+    }
+
+    function sanitizeImportedBookmarks(value) {
+        if (!isPlainObject(value)) return {};
+        const sanitized = {};
+        let videoCount = 0;
+        for (const [videoId, entries] of Object.entries(value)) {
+            if (!isSafeObjectKey(videoId) || !VIDEO_ID_PATTERN.test(videoId) || !Array.isArray(entries)) continue;
+            const seenTimes = new Set();
+            const sanitizedEntries = [];
+            for (const entry of entries) {
+                if (!isPlainObject(entry)) continue;
+                const rawTime = Number(entry.t);
+                if (!Number.isFinite(rawTime) || rawTime < 0) continue;
+                const time = Math.floor(rawTime);
+                if (seenTimes.has(time)) continue;
+                seenTimes.add(time);
+                const note = typeof entry.n === 'string' ? entry.n.slice(0, IMPORT_LIMITS.bookmarkNoteChars) : '';
+                const createdAt = Number.isFinite(Number(entry.d)) && Number(entry.d) > 0
+                    ? Number(entry.d)
+                    : Date.now();
+                sanitizedEntries.push({ t: time, n: note, d: createdAt });
+                if (sanitizedEntries.length >= IMPORT_LIMITS.bookmarksPerVideo) break;
+            }
+            if (sanitizedEntries.length === 0) continue;
+            sanitizedEntries.sort((left, right) => left.t - right.t);
+            sanitized[videoId] = sanitizedEntries;
+            videoCount += 1;
+            if (videoCount >= IMPORT_LIMITS.bookmarkVideos) break;
+        }
+        return sanitized;
+    }
+
+    function estimateSerializedBytes(value) {
+        try {
+            return new Blob([JSON.stringify(value)]).size;
+        } catch {
+            return Infinity;
+        }
+    }
 
     //  Trusted Types Safe HTML Helper
     // YouTube enforces Trusted Types which blocks direct innerHTML assignments.
@@ -155,12 +254,12 @@
 
     // Unified Storage Manager
     const StorageManager = {
-        _cache: {},
+        _cache: Object.create(null),
         _dirty: new Set(),
         _saveTimeout: null,
 
         get(key, defaultVal = null) {
-            if (this._cache.hasOwnProperty(key)) {
+            if (Object.prototype.hasOwnProperty.call(this._cache, key)) {
                 return this._cache[key];
             }
             try {
@@ -235,7 +334,7 @@
 
         // Main entry point - downloads transcript with automatic failover
         async downloadTranscript(options = {}) {
-            const videoId = new URLSearchParams(window.location.search).get('v');
+            const videoId = getVideoId();
             if (!videoId) {
                 showToast('No video ID found', '#ef4444');
                 return { success: false, error: 'No video ID' };
@@ -738,24 +837,36 @@
     let isNavigateListenerAttached = false;
 
     function waitForElement(selector, callback, timeout = TIMING.ELEMENT_TIMEOUT) {
+        if (!selector || typeof callback !== 'function') return () => {};
         const el = document.querySelector(selector);
-        if (el) { callback(el); return; }
+        if (el) { callback(el); return () => {}; }
         let _fired = false;
-        const obs = new MutationObserver((mutations) => {
+        let obs = new MutationObserver((mutations) => {
             if (_fired) return;
             // Fast-path: check added nodes directly before full querySelectorAll
             for (const m of mutations) {
                 for (const node of m.addedNodes) {
                     if (node.nodeType !== 1) continue;
-                    if (node.matches?.(selector)) { _fired = true; obs.disconnect(); callback(node); return; }
+                    if (node.matches?.(selector)) { _fired = true; cleanup(); callback(node); return; }
                 }
             }
             // Fallback: full query (handles deeply nested insertions)
             const el = document.querySelector(selector);
-            if (el) { _fired = true; obs.disconnect(); callback(el); }
+            if (el) { _fired = true; cleanup(); callback(el); }
         });
+        const cleanup = () => {
+            if (obs) {
+                obs.disconnect();
+                obs = null;
+            }
+            if (_timeoutId) {
+                clearTimeout(_timeoutId);
+                _timeoutId = null;
+            }
+        };
         obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => { if (!_fired) obs.disconnect(); }, timeout);
+        let _timeoutId = setTimeout(() => { if (!_fired) cleanup(); }, timeout);
+        return cleanup;
     }
 
     // waitForPageContent — fires callback when YouTube's page content is actually rendered,
@@ -764,16 +875,32 @@
     // watching for the first rendered video/item. Much faster than fixed 1-2s timeouts.
     function waitForPageContent(callback, fallbackSelector = 'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer') {
         let fired = false;
-        const fire = () => { if (fired) return; fired = true; callback(); };
+        let fallbackTimer = null;
+        let cancelElementWait = null;
+        const onPageUpdated = () => fire();
+        const fire = () => {
+            if (fired) return;
+            fired = true;
+            if (fallbackTimer) {
+                clearTimeout(fallbackTimer);
+                fallbackTimer = null;
+            }
+            if (cancelElementWait) {
+                cancelElementWait();
+                cancelElementWait = null;
+            }
+            document.removeEventListener('yt-page-data-updated', onPageUpdated);
+            callback();
+        };
 
         // yt-page-data-updated fires when YT renders page data — usually within ~200ms of nav
-        document.addEventListener('yt-page-data-updated', fire, { once: true });
+        document.addEventListener('yt-page-data-updated', onPageUpdated, { once: true });
 
         // Fallback: watch for first content element to appear in DOM
-        waitForElement(fallbackSelector, fire);
+        cancelElementWait = waitForElement(fallbackSelector, fire);
 
         // Hard fallback at 3s in case neither fires (e.g. cached page, rare edge cases)
-        setTimeout(fire, 3000);
+        fallbackTimer = setTimeout(fire, 3000);
     }
 
     //  PageControl System — dismissible injected buttons with ghost-pill restore
@@ -1291,7 +1418,7 @@
         // Method 2: Innertube API via GM_xmlhttpRequest (works on SPA navigations)
         // Uses GM_xmlhttpRequest because ISOLATED world fetch may not include page cookies
         if (!pr) {
-            const videoId = new URLSearchParams(window.location.search).get('v');
+            const videoId = getVideoId();
             if (!videoId) {
                 DebugManager.log('MediaDL', 'No video ID in URL for Innertube fallback');
                 return null;
@@ -1825,7 +1952,7 @@
         if (!window.location.pathname.startsWith('/watch')) return;
 
         // Check if video changed
-        const currentVideoId = (window.location.search.match(/[?&]v=([^&#]+)/) || [])[1] || null;
+        const currentVideoId = getVideoId();
         if (currentVideoId && currentVideoId !== lastVideoId) {
             lastVideoId = currentVideoId;
             DebugManager.log('Buttons', `New video: ${currentVideoId}, ${persistentButtons.size} buttons registered`);
@@ -2287,9 +2414,10 @@
         },
 
         load() {
-            let savedSettings = StorageManager.get('ytSuiteSettings', {});
+            const knownSettingKeys = new Set(Object.keys(this.defaults));
+            let savedSettings = sanitizeSettingsObject(StorageManager.get('ytSuiteSettings', {}), knownSettingKeys);
             const storedVersion = savedSettings._settingsVersion;
-            savedSettings = this._migrate(savedSettings);
+            savedSettings = sanitizeSettingsObject(this._migrate(savedSettings), knownSettingKeys);
             const merged = { ...this.defaults, ...savedSettings, _settingsVersion: this.SETTINGS_VERSION };
             // Persist migrated settings if version changed
             if (storedVersion !== this.SETTINGS_VERSION) {
@@ -2299,7 +2427,10 @@
         },
 
         save(settings) {
-            StorageManager.set('ytSuiteSettings', settings);
+            const knownSettingKeys = new Set(Object.keys(this.defaults));
+            const sanitized = sanitizeSettingsObject(settings, knownSettingKeys);
+            sanitized._settingsVersion = this.SETTINGS_VERSION;
+            StorageManager.set('ytSuiteSettings', sanitized);
         },
         getFirstRunStatus() {
             return StorageManager.get('ytSuiteHasRun', false);
@@ -2314,14 +2445,14 @@
             let blockedChannels = [];
             let bookmarks = {};
             try {
-                hiddenVideos = StorageManager.get('ytkit-hidden-videos', []);
-                blockedChannels = StorageManager.get('ytkit-blocked-channels', []);
-                bookmarks = StorageManager.get('ytkit-bookmarks', {});
+                hiddenVideos = sanitizeImportedHiddenVideos(StorageManager.get('ytkit-hidden-videos', []));
+                blockedChannels = sanitizeImportedBlockedChannels(StorageManager.get('ytkit-blocked-channels', []));
+                bookmarks = sanitizeImportedBookmarks(StorageManager.get('ytkit-bookmarks', {}));
             } catch(e) {
                 console.warn('[YTKit] Failed to load data for export:', e);
             }
             const exportData = {
-                settings: settings,
+                settings: sanitizeSettingsObject(settings, new Set(Object.keys(this.defaults))),
                 hiddenVideos: hiddenVideos,
                 blockedChannels: blockedChannels,
                 bookmarks: bookmarks,
@@ -2333,8 +2464,9 @@
         },
         importAllSettings(jsonString) {
             try {
+                if (typeof jsonString !== 'string' || estimateSerializedBytes(jsonString) > 10 * 1024 * 1024) return false;
                 const importedData = JSON.parse(jsonString);
-                if (typeof importedData !== 'object' || importedData === null) return false;
+                if (!isPlainObject(importedData)) return false;
 
                 // Handle different export versions
                 let settings, hiddenVideos, blockedChannels, bookmarks;
@@ -2355,25 +2487,43 @@
                     bookmarks = null;
                 }
 
-                // Validate: settings must be a plain object with at least one known key
-                if (typeof settings !== 'object' || Array.isArray(settings)) return false;
-                const knownKeys = Object.keys(this.defaults);
-                const hasValidKey = Object.keys(settings).some(k => knownKeys.includes(k));
-                if (Object.keys(settings).length > 0 && !hasValidKey) return false;
-                // Validate array types for video/channel data
+                const knownSettingKeys = new Set(Object.keys(this.defaults));
+                if (settings !== null && !isPlainObject(settings)) return false;
                 if (hiddenVideos !== null && !Array.isArray(hiddenVideos)) return false;
                 if (blockedChannels !== null && !Array.isArray(blockedChannels)) return false;
+                if (bookmarks !== null && !isPlainObject(bookmarks)) return false;
+
+                settings = sanitizeSettingsObject(settings, knownSettingKeys);
+                hiddenVideos = hiddenVideos === null ? null : sanitizeImportedHiddenVideos(hiddenVideos);
+                blockedChannels = blockedChannels === null ? null : sanitizeImportedBlockedChannels(blockedChannels);
+                bookmarks = bookmarks === null ? null : sanitizeImportedBookmarks(bookmarks);
+
+                const sawVersionedSection = importedData.exportVersion >= 3
+                    ? ('settings' in importedData || 'hiddenVideos' in importedData || 'blockedChannels' in importedData || 'bookmarks' in importedData)
+                    : importedData.exportVersion >= 2
+                        ? ('settings' in importedData || 'hiddenVideos' in importedData || 'blockedChannels' in importedData)
+                        : true;
+                if (!sawVersionedSection) return false;
+                if (importedData.exportVersion < 2 && Object.keys(settings).length === 0) return false;
+
+                const importPayload = {
+                    settings,
+                    hiddenVideos,
+                    blockedChannels,
+                    bookmarks
+                };
+                if (estimateSerializedBytes(importPayload) > IMPORT_LIMITS.totalBytes) return false;
 
                 // Backup current state before applying
                 const backup = {
                     settings: { ...appState.settings },
-                    hiddenVideos: StorageManager.get('ytkit-hidden-videos', []),
-                    blockedChannels: StorageManager.get('ytkit-blocked-channels', []),
-                    bookmarks: StorageManager.get('ytkit-bookmarks', {}),
+                    hiddenVideos: sanitizeImportedHiddenVideos(StorageManager.get('ytkit-hidden-videos', [])),
+                    blockedChannels: sanitizeImportedBlockedChannels(StorageManager.get('ytkit-blocked-channels', [])),
+                    bookmarks: sanitizeImportedBookmarks(StorageManager.get('ytkit-bookmarks', {})),
                 };
 
                 try {
-                    const newSettings = { ...this.defaults, ...settings };
+                    const newSettings = { ...this.defaults, ...settings, _settingsVersion: this.SETTINGS_VERSION };
                     this.save(newSettings);
                     if (hiddenVideos !== null) StorageManager.set('ytkit-hidden-videos', hiddenVideos);
                     if (blockedChannels !== null) StorageManager.set('ytkit-blocked-channels', blockedChannels);
@@ -2429,13 +2579,37 @@
     let appState = {};
 
     // ── Fast Video ID getter (avoids URLSearchParams on every call) ──
+    const VIDEO_ID_PATTERN = /^[a-zA-Z0-9_-]{11}$/;
+    const VIDEO_ID_PATH_PREFIXES = ['/shorts/', '/embed/', '/live/'];
     let _cachedVid = null, _cachedHref = '';
-    function getVideoId() {
-        const h = window.location.href;
-        if (h === _cachedHref) return _cachedVid;
-        _cachedHref = h;
-        const m = window.location.search.match(/[?&]v=([^&#]+)/);
-        _cachedVid = m ? m[1] : null;
+    function _extractVideoIdFromUrl(urlValue = window.location.href) {
+        let parsed;
+        try {
+            parsed = urlValue instanceof URL ? urlValue : new URL(urlValue, window.location.origin);
+        } catch {
+            return null;
+        }
+
+        const queryVideoId = parsed.searchParams.get('v');
+        if (typeof queryVideoId === 'string' && VIDEO_ID_PATTERN.test(queryVideoId)) {
+            return queryVideoId;
+        }
+
+        const pathname = parsed.pathname || '';
+        for (const prefix of VIDEO_ID_PATH_PREFIXES) {
+            if (!pathname.startsWith(prefix)) continue;
+            const candidate = pathname.slice(prefix.length).split(/[/?#]/, 1)[0];
+            return VIDEO_ID_PATTERN.test(candidate) ? candidate : null;
+        }
+
+        return null;
+    }
+
+    function getVideoId(urlValue = window.location.href) {
+        const href = urlValue instanceof URL ? urlValue.href : (typeof urlValue === 'string' && urlValue ? urlValue : window.location.href);
+        if (href === _cachedHref) return _cachedVid;
+        _cachedHref = href;
+        _cachedVid = _extractVideoIdFromUrl(href);
         return _cachedVid;
     }
     // Centralized detection: 'live' | 'vod' | 'standard' | 'premiere'
@@ -11007,8 +11181,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const self = this;
                 addNavigateRule(this.id, () => {
                     if (!window.location.pathname.startsWith('/watch')) return;
-                    const params = new URLSearchParams(window.location.search);
-                    const videoId = params.get('v');
+                    const videoId = getVideoId();
                     if (!videoId || videoId === self._lastDownloaded) return;
                     self._lastDownloaded = videoId;
                     setTimeout(() => {
@@ -11383,7 +11556,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 };
                 addNavigateRule(this.id, () => {
                     if (!window.location.pathname.startsWith('/watch')) return;
-                    const vid = new URLSearchParams(window.location.search).get('v');
+                    const vid = getVideoId();
                     if (vid && vid !== self._lastVideoId) {
                         self._lastVideoId = vid;
                         increment('videosWatched');

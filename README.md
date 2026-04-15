@@ -232,7 +232,7 @@ document_idle
 ## Security
 
 - **EXT_FETCH proxy** uses domain allowlist — blocks SSRF to private networks
-- Request/response headers filtered (strips `Cookie`, `Authorization`, `Set-Cookie`, etc.)
+- Request/response headers filtered (`Cookie`, `Set-Cookie`, etc. stripped globally; `Authorization` only forwarded to explicit BYO-key/local service origins such as OpenAI/Anthropic/Ollama/MediaDL)
 - Response body capped at 10 MB, fetch timeout capped at 60s
 - HTTP methods validated, download URLs protocol-checked (HTTP/S only)
 - Explicit CSP: `script-src 'self'; object-src 'self'`
@@ -255,16 +255,24 @@ document_idle
 ## Building
 
 ```bash
-npm install
-node build-extension.js                    # Build at current version
-node build-extension.js --bump patch       # Bump and build
-node build-extension.js --bump minor --with-userscript  # Include userscript artifact
+nvm use                                   # Optional, uses .nvmrc (Node 22)
+npm ci
+npm test
+npm run check
+npm run build                             # Build at current version
+npm run build:userscript                  # Include userscript artifact
+node build-extension.js --bump patch      # Bump and build
+node build-extension.js --bump minor --with-userscript
 ```
 
 Outputs in `build/`:
 - `astra-deck-chrome-v*.zip` + `.crx` (CRX3 signed with `ytkit.pem`)
 - `astra-deck-firefox-v*.zip` + `.xpi`
 - `ytkit-v*.user.js` (with `--with-userscript`)
+
+Notes:
+- Node 22+ is required because the `crx3` packager dependency requires it.
+- CI builds and releases now use the same `build-extension.js` path as local builds, so generated catalogs and packaged artifacts stay in sync.
 
 ---
 

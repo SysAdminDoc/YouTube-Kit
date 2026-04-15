@@ -2,26 +2,45 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Astra Deck</title>
 <link rel="stylesheet" href="popup.css">
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <img src="icons/48.png" alt="" width="28" height="28">
-    <div>
-      <h1>Astra Deck</h1>
-      <div class="sub" id="version">v—</div>
+  <header class="hero">
+    <div class="hero-lockup">
+      <div class="hero-mark-shell" aria-hidden="true">
+        <img class="hero-mark" src="icons/brand-glyph.svg" alt="" width="28" height="28">
+      </div>
+      <div class="hero-copy">
+        <div class="eyebrow-row">
+          <span class="eyebrow">Astra Deck</span>
+          <span class="sub" id="version">v—</span>
+        </div>
+        <h1>Quick Controls</h1>
+        <p class="hero-note">Flip your most-used YouTube enhancements without opening the full workspace.</p>
+      </div>
+    </div>
+    <div class="hero-pills" aria-label="Popup summary">
+      <span class="pill"><strong id="enabledCount">0</strong> enabled</span>
+      <span class="pill" id="contextState">Checking tab…</span>
     </div>
   </header>
-  <div class="search-row">
-    <label class="sr-only" for="q">Filter quick toggles</label>
-    <input id="q" name="quick-toggle-filter" type="search" placeholder="Filter toggles…" aria-label="Filter quick toggles" autocomplete="off" spellcheck="false" autofocus>
+  <div class="toolbar">
+    <div class="search-row">
+      <label class="sr-only" for="q">Filter quick toggles</label>
+      <span class="search-icon" aria-hidden="true">⌕</span>
+      <input id="q" name="quick-toggle-filter" type="search" placeholder="Filter toggles…" aria-label="Filter quick toggles" autocomplete="off" spellcheck="false" autofocus>
+      <button id="clearSearch" class="clear-search" type="button" aria-label="Clear quick toggle filter" hidden>×</button>
+    </div>
+    <p class="support-note" id="supportNote">Quick toggles sync to open YouTube tabs automatically.</p>
+    <div class="status-banner" id="status" aria-live="polite"></div>
   </div>
   <section id="toggles" class="toggles" aria-label="Quick toggles"></section>
   <footer>
-    <button id="openPanel" class="primary" type="button">Open full settings panel</button>
-    <button id="openOptions" class="ghost" type="button">Options page</button>
+    <button id="openPanel" class="primary" type="button">Open Settings On This Tab</button>
+    <button id="openOptions" class="ghost" type="button">Open Options Page</button>
   </footer>
 </div>
 <script src="popup.js"></script>

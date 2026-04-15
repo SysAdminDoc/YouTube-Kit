@@ -1,4 +1,14 @@
 {
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node build-extension.js",
+    "build:userscript": "node build-extension.js --with-userscript",
+    "check": "node --check build-extension.js && node --check extension/background.js && node --check extension/options.js && node --check extension/popup.js && node --check extension/ytkit.js && node --check extension/core/env.js && node --check extension/core/navigation.js && node --check extension/core/page.js && node --check extension/core/player.js && node --check extension/core/storage.js && node --check extension/core/styles.js && node --check extension/core/url.js && node --check scripts/catalog-utils.js && node --check ytkit.user.js",
+    "test": "node --test tests/*.test.js"
+  },
   "dependencies": {
     "crx3": "^2.0.0"
   }

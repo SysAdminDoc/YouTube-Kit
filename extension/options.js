@@ -19,6 +19,16 @@
     const RETIRED_SETTING_KEYS = new Set();
 
     const INTERNAL_SETTING_KEY_PREFIX = '_';
+    const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+    const VIDEO_ID_PATTERN = /^[a-zA-Z0-9_-]{11}$/;
+    const IMPORT_LIMITS = Object.freeze({
+        hiddenVideos: 5000,
+        blockedChannels: 2000,
+        bookmarkVideos: 400,
+        bookmarksPerVideo: 100,
+        bookmarkNoteChars: 500,
+        totalBytes: 4.5 * 1024 * 1024
+    });
 
     const GROUPS = [
         { id: 'all', label: 'All Settings' },
@@ -57,11 +67,22 @@
         settingsEmpty: document.getElementById('settings-empty'),
         settingsTotalCount: document.getElementById('settings-total-count'),
         settingsDirtyCount: document.getElementById('settings-dirty-count'),
+        settingsProblemChip: document.getElementById('settings-problem-chip'),
+        settingsProblemCount: document.getElementById('settings-problem-count'),
         settingsModalSummary: document.getElementById('settings-modal-summary'),
         settingsModalStatus: document.getElementById('settings-modal-status'),
         settingsSaveButton: document.getElementById('settings-save-btn'),
         settingsDiscardButton: document.getElementById('settings-discard-btn'),
-        settingsRestoreDefaultsButton: document.getElementById('settings-restore-defaults-btn')
+        settingsRestoreDefaultsButton: document.getElementById('settings-restore-defaults-btn'),
+        settingsClearSearchButton: document.getElementById('settings-clear-search-btn'),
+        settingsWorkspaceBanner: document.getElementById('settings-workspace-banner'),
+        settingsWorkspaceTitle: document.getElementById('settings-workspace-title'),
+        settingsWorkspaceNote: document.getElementById('settings-workspace-note'),
+        settingsClearFiltersButton: document.getElementById('settings-clear-filters-btn'),
+        settingsEmptyEyebrow: document.querySelector('#settings-empty .settings-empty-eyebrow'),
+        settingsEmptyTitle: document.querySelector('#settings-empty .settings-empty-title'),
+        settingsEmptyCopy: document.querySelector('#settings-empty .settings-empty-copy'),
+        settingsEmptyResetButton: document.getElementById('settings-empty-reset-btn')
     };
 
     const state = {
@@ -97,6 +118,52 @@
         elements.settingsModalStatus.className = 'settings-modal-status';
     }
 
+    function pluralize(count, singular, plural = singular + 's') {
+        return count === 1 ? singular : plural;
+    }
+
+    function setButtonBusy(button, busy, busyLabel = '') {
+        if (!(button instanceof HTMLButtonElement)) return;
+        if (!button.dataset.idleLabel) {
+            button.dataset.idleLabel = button.textContent;
+        }
+
+        if (busy) {
+            button.setAttribute('aria-busy', 'true');
+            if (busyLabel) {
+                button.textContent = busyLabel;
+            }
+            return;
+        }
+
+        button.removeAttribute('aria-busy');
+        if (button.dataset.idleLabel) {
+            button.textContent = button.dataset.idleLabel;
+        }
+    }
+
+    async function runWithBusyButton(button, busyLabel, task, onSettled = null) {
+        const previouslyDisabled = button instanceof HTMLButtonElement ? button.disabled : false;
+
+        if (button instanceof HTMLButtonElement) {
+            setButtonBusy(button, true, busyLabel);
+            button.disabled = true;
+        }
+
+        try {
+            return await task();
+        } finally {
+            if (button instanceof HTMLButtonElement) {
+                setButtonBusy(button, false);
+                if (typeof onSettled === 'function') {
+                    onSettled(previouslyDisabled);
+                } else {
+                    button.disabled = previouslyDisabled;
+                }
+            }
+        }
+    }
+
     function formatBytes(bytes) {
         if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
         if (bytes < 1024) return bytes + ' B';
@@ -128,15 +195,89 @@
         return safeSerialize(left) === safeSerialize(right);
     }
 
+    function isPlainObject(value) {
+        return !!value && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    function isSafeObjectKey(key) {
+        return typeof key === 'string' && !UNSAFE_OBJECT_KEYS.has(key);
+    }
+
     function sanitizeSettingsObject(settings) {
-        if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return {};
+        if (!isPlainObject(settings)) return {};
         const sanitized = {};
         for (const [key, value] of Object.entries(settings)) {
-            if (!RETIRED_SETTING_KEYS.has(key)) {
+            if (isSafeObjectKey(key) && !RETIRED_SETTING_KEYS.has(key)) {
                 sanitized[key] = value;
             }
         }
         return sanitized;
+    }
+
+    function sanitizeImportedHiddenVideos(value) {
+        if (!Array.isArray(value)) return [];
+        const seen = new Set();
+        const sanitized = [];
+        for (const entry of value) {
+            if (typeof entry !== 'string') continue;
+            const videoId = entry.trim();
+            if (!VIDEO_ID_PATTERN.test(videoId) || seen.has(videoId)) continue;
+            seen.add(videoId);
+            sanitized.push(videoId);
+            if (sanitized.length >= IMPORT_LIMITS.hiddenVideos) break;
+        }
+        return sanitized;
+    }
+
+    function sanitizeImportedBlockedChannels(value) {
+        if (!Array.isArray(value)) return [];
+        const seen = new Set();
+        const sanitized = [];
+        for (const entry of value) {
+            if (!isPlainObject(entry)) continue;
+            const id = typeof entry.id === 'string' ? entry.id.trim().slice(0, 128) : '';
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            const name = typeof entry.name === 'string' ? entry.name.trim().slice(0, 200) : id;
+            sanitized.push({ id, name: name || id });
+            if (sanitized.length >= IMPORT_LIMITS.blockedChannels) break;
+        }
+        return sanitized;
+    }
+
+    function sanitizeImportedBookmarks(value) {
+        if (!isPlainObject(value)) return {};
+        const sanitized = {};
+        let videoCount = 0;
+        for (const [videoId, entries] of Object.entries(value)) {
+            if (!isSafeObjectKey(videoId) || !VIDEO_ID_PATTERN.test(videoId) || !Array.isArray(entries)) continue;
+            const seenTimes = new Set();
+            const sanitizedEntries = [];
+            for (const entry of entries) {
+                if (!isPlainObject(entry)) continue;
+                const rawTime = Number(entry.t);
+                if (!Number.isFinite(rawTime) || rawTime < 0) continue;
+                const time = Math.floor(rawTime);
+                if (seenTimes.has(time)) continue;
+                seenTimes.add(time);
+                const note = typeof entry.n === 'string' ? entry.n.slice(0, IMPORT_LIMITS.bookmarkNoteChars) : '';
+                const createdAt = Number.isFinite(Number(entry.d)) && Number(entry.d) > 0
+                    ? Number(entry.d)
+                    : Date.now();
+                sanitizedEntries.push({ t: time, n: note, d: createdAt });
+                if (sanitizedEntries.length >= IMPORT_LIMITS.bookmarksPerVideo) break;
+            }
+            if (sanitizedEntries.length === 0) continue;
+            sanitizedEntries.sort((left, right) => left.t - right.t);
+            sanitized[videoId] = sanitizedEntries;
+            videoCount += 1;
+            if (videoCount >= IMPORT_LIMITS.bookmarkVideos) break;
+        }
+        return sanitized;
+    }
+
+    function estimateSerializedBytes(value) {
+        return new Blob([safeSerialize(value)]).size;
     }
 
     function getLegacySidebarOrder(allStorage = {}) {
@@ -177,9 +318,9 @@
 
         return {
             settings: applySettingsVersion(mergedSettings),
-            hiddenVideos: allStorage[STORAGE_KEYS.hiddenVideos] || [],
-            blockedChannels: allStorage[STORAGE_KEYS.blockedChannels] || [],
-            bookmarks: allStorage[STORAGE_KEYS.bookmarks] || {},
+            hiddenVideos: sanitizeImportedHiddenVideos(allStorage[STORAGE_KEYS.hiddenVideos]),
+            blockedChannels: sanitizeImportedBlockedChannels(allStorage[STORAGE_KEYS.blockedChannels]),
+            bookmarks: sanitizeImportedBookmarks(allStorage[STORAGE_KEYS.bookmarks]),
             exportVersion: 3,
             exportDate: new Date().toISOString(),
             astraDeckVersion: manifest.version,
@@ -310,6 +451,31 @@
         return haystack.includes(state.search);
     }
 
+    function getActiveGroupLabel() {
+        return GROUPS.find((group) => group.id === state.activeGroup)?.label || 'All Settings';
+    }
+
+    function updateSettingsSearchState() {
+        elements.settingsClearSearchButton.hidden = !elements.settingsSearch.value.trim();
+    }
+
+    function clearSettingsFilters({ focusSearch = false, announce = false } = {}) {
+        const hadFilters = state.activeGroup !== 'all' || !!elements.settingsSearch.value.trim();
+
+        state.activeGroup = 'all';
+        state.search = '';
+        elements.settingsSearch.value = '';
+        updateSettingsSearchState();
+        renderSettingsWorkspace();
+
+        if (announce && hadFilters) {
+            showModalStatus('Filters cleared. Showing every setting again.', 'info');
+        }
+        if (focusSearch) {
+            requestAnimationFrame(() => elements.settingsSearch.focus());
+        }
+    }
+
     function getVisibleKeys() {
         return getSettingKeys().filter((key) => {
             const value = state.draftSettings[key];
@@ -317,98 +483,6 @@
             if (state.activeGroup === 'all') return true;
             return inferGroup(key) === state.activeGroup;
         });
-    }
-
-    function findBalancedObjectLiteral(source, startToken) {
-        const start = source.indexOf(startToken);
-        if (start === -1) return null;
-
-        const openIndex = source.indexOf('{', start);
-        if (openIndex === -1) return null;
-
-        let depth = 0;
-        let inSingle = false;
-        let inDouble = false;
-        let inTemplate = false;
-        let inLineComment = false;
-        let inBlockComment = false;
-        let escaping = false;
-
-        for (let index = openIndex; index < source.length; index += 1) {
-            const char = source[index];
-            const next = source[index + 1];
-
-            if (inLineComment) {
-                if (char === '\n') inLineComment = false;
-                continue;
-            }
-
-            if (inBlockComment) {
-                if (char === '*' && next === '/') {
-                    inBlockComment = false;
-                    index += 1;
-                }
-                continue;
-            }
-
-            if (inSingle) {
-                if (!escaping && char === '\'') inSingle = false;
-                escaping = char === '\\' && !escaping;
-                continue;
-            }
-
-            if (inDouble) {
-                if (!escaping && char === '"') inDouble = false;
-                escaping = char === '\\' && !escaping;
-                continue;
-            }
-
-            if (inTemplate) {
-                if (!escaping && char === '`') inTemplate = false;
-                escaping = char === '\\' && !escaping;
-                continue;
-            }
-
-            escaping = false;
-
-            if (char === '/' && next === '/') {
-                inLineComment = true;
-                index += 1;
-                continue;
-            }
-
-            if (char === '/' && next === '*') {
-                inBlockComment = true;
-                index += 1;
-                continue;
-            }
-
-            if (char === '\'') {
-                inSingle = true;
-                continue;
-            }
-
-            if (char === '"') {
-                inDouble = true;
-                continue;
-            }
-
-            if (char === '`') {
-                inTemplate = true;
-                continue;
-            }
-
-            if (char === '{') {
-                depth += 1;
-            } else if (char === '}') {
-                depth -= 1;
-                if (depth === 0) {
-                    return source.slice(openIndex, index + 1);
-                }
-            }
-        }
-
-        return null;
     }
 
     async function loadDefaultSettingsFromSource() {
@@ -427,7 +501,7 @@
                     }
                 }
             } catch {
-                // Fall back to source parsing for unpacked/debug builds if the generated catalog is missing.
+                // Fall back to a degraded mode if the generated catalog is unavailable.
             }
 
             try {
@@ -439,26 +513,17 @@
                     }
                 }
             } catch {
-                // Fall back to source parsing for unpacked/debug builds if the generated catalog is missing.
+                // Fall back to the source regex for settings version if metadata is unavailable.
             }
 
-            if (!defaults || !settingsVersion) {
+            if (!settingsVersion) {
                 const response = await fetch(SETTINGS_SOURCE_URL, { cache: 'no-store' });
                 const source = await response.text();
-                if (!defaults) {
-                    const objectLiteral = findBalancedObjectLiteral(source, 'defaults:');
-                    if (!objectLiteral) {
-                        throw new Error('Settings defaults were not found in ytkit.js');
-                    }
-                    defaults = Function('"use strict"; return (' + objectLiteral + ');')();
+                const versionMatch = source.match(/SETTINGS_VERSION:\s*(\d+)/);
+                if (!versionMatch) {
+                    throw new Error('Settings version was not found in ytkit.js');
                 }
-                if (!settingsVersion) {
-                    const versionMatch = source.match(/SETTINGS_VERSION:\s*(\d+)/);
-                    if (!versionMatch) {
-                        throw new Error('Settings version was not found in ytkit.js');
-                    }
-                    settingsVersion = Number(versionMatch[1]);
-                }
+                settingsVersion = Number(versionMatch[1]);
             }
 
             if (!defaults || typeof defaults !== 'object' || Array.isArray(defaults)) {
@@ -538,23 +603,32 @@
 
             const writes = {};
             if (data.exportVersion >= 3) {
-                if (data.settings && typeof data.settings === 'object') writes[STORAGE_KEYS.settings] = applySettingsVersion(data.settings);
-                if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = data.hiddenVideos;
-                if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = data.blockedChannels;
-                if (data.bookmarks && typeof data.bookmarks === 'object') writes[STORAGE_KEYS.bookmarks] = data.bookmarks;
+                if (isPlainObject(data.settings)) writes[STORAGE_KEYS.settings] = applySettingsVersion(data.settings);
+                if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(data.hiddenVideos);
+                if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = sanitizeImportedBlockedChannels(data.blockedChannels);
+                if (isPlainObject(data.bookmarks)) writes[STORAGE_KEYS.bookmarks] = sanitizeImportedBookmarks(data.bookmarks);
             } else if (data.exportVersion >= 2) {
-                if (data.settings && typeof data.settings === 'object') writes[STORAGE_KEYS.settings] = applySettingsVersion(data.settings);
-                if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = data.hiddenVideos;
-                if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = data.blockedChannels;
+                if (isPlainObject(data.settings)) writes[STORAGE_KEYS.settings] = applySettingsVersion(data.settings);
+                if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(data.hiddenVideos);
+                if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = sanitizeImportedBlockedChannels(data.blockedChannels);
             } else {
-                writes[STORAGE_KEYS.settings] = applySettingsVersion(data);
+                if (isPlainObject(data)) {
+                    writes[STORAGE_KEYS.settings] = applySettingsVersion(data);
+                }
             }
 
             if (Object.keys(writes).length === 0) {
                 throw new Error('No valid settings found in file');
             }
 
+            if (estimateSerializedBytes(writes) > IMPORT_LIMITS.totalBytes) {
+                throw new Error('Import data is too large for extension storage');
+            }
+
             await chrome.storage.local.set(writes);
+            if (writes[STORAGE_KEYS.settings]) {
+                await chrome.storage.local.remove(STORAGE_KEYS.legacySidebarOrder);
+            }
             await renderStorageInfo();
             await refreshSettingsState({ resetDraft: true });
             if (state.modalOpen) renderSettingsWorkspace();
@@ -589,6 +663,11 @@
             STORAGE_KEYS.settings,
             STORAGE_KEYS.legacySidebarOrder
         ]);
+        const hasModernSidebarOrder = Array.isArray(result[STORAGE_KEYS.settings]?.sidebarOrder)
+            && result[STORAGE_KEYS.settings].sidebarOrder.length > 0;
+        if (hasModernSidebarOrder && Array.isArray(result[STORAGE_KEYS.legacySidebarOrder])) {
+            await chrome.storage.local.remove(STORAGE_KEYS.legacySidebarOrder);
+        }
         const rawStoredSettings = mergeLegacySettings(
             deepClone(result[STORAGE_KEYS.settings] || {}),
             getLegacySidebarOrder(result)
@@ -620,46 +699,149 @@
     }
 
     function updateModalHeaderState() {
+        const totalCount = getSettingKeys().length;
         const visibleCount = getVisibleKeys().length;
-        elements.settingsTotalCount.textContent = String(getSettingKeys().length);
-        elements.settingsDirtyCount.textContent = String(state.dirtyKeys.size);
-        elements.settingsSaveButton.disabled = state.dirtyKeys.size === 0 || state.invalidKeys.size > 0;
-        elements.settingsDiscardButton.disabled = state.dirtyKeys.size === 0 && state.invalidKeys.size === 0;
-        elements.settingsRestoreDefaultsButton.disabled = Object.keys(state.defaultSettings).length === 0;
+        const dirtyCount = state.dirtyKeys.size;
+        const invalidCount = state.invalidKeys.size;
+        const searchValue = elements.settingsSearch.value.trim();
+        const hasFilters = state.activeGroup !== 'all' || !!searchValue;
+        const activeGroupLabel = getActiveGroupLabel();
 
-        let summary = `${visibleCount} ${visibleCount === 1 ? 'setting' : 'settings'} visible`;
-        if (state.search) {
-            summary += ` for "${elements.settingsSearch.value.trim()}"`;
+        elements.settingsTotalCount.textContent = String(totalCount);
+        elements.settingsDirtyCount.textContent = String(dirtyCount);
+        elements.settingsProblemCount.textContent = String(invalidCount);
+        elements.settingsProblemChip.hidden = invalidCount === 0;
+        elements.settingsSaveButton.disabled = dirtyCount === 0 || invalidCount > 0;
+        elements.settingsDiscardButton.disabled = dirtyCount === 0 && invalidCount === 0;
+        elements.settingsRestoreDefaultsButton.disabled = Object.keys(state.defaultSettings).length === 0;
+        elements.settingsClearFiltersButton.hidden = !hasFilters;
+        updateSettingsSearchState();
+
+        const workspaceBanner = elements.settingsWorkspaceBanner;
+        workspaceBanner.classList.remove('is-warning', 'is-error', 'is-filtered');
+
+        let workspaceTitle = 'Everything is in sync';
+        let workspaceNote = 'Changes stay local until you save them.';
+
+        if (totalCount === 0) {
+            workspaceBanner.classList.add('is-warning');
+            workspaceTitle = 'No editable settings available';
+            workspaceNote = 'This build did not expose a settings catalog, so the editor has nothing to show right now.';
+        } else if (invalidCount > 0) {
+            workspaceBanner.classList.add('is-error');
+            workspaceTitle = `${invalidCount} ${pluralize(invalidCount, 'field')} need${invalidCount === 1 ? 's' : ''} attention`;
+            workspaceNote = 'Fix the highlighted cards before saving. Invalid values stay local to this editor until the draft is valid.';
+        } else if (dirtyCount > 0) {
+            workspaceBanner.classList.add('is-warning');
+            workspaceTitle = `${dirtyCount} unsaved ${pluralize(dirtyCount, 'change')} ready`;
+            workspaceNote = 'Review the highlighted cards, then save when this draft looks right. Open YouTube tabs update automatically after save.';
+        } else if (hasFilters) {
+            workspaceBanner.classList.add('is-filtered');
+            workspaceTitle = visibleCount === 0
+                ? 'Filtered view is empty'
+                : `Showing ${visibleCount} ${pluralize(visibleCount, 'setting')}`;
+
+            if (state.activeGroup !== 'all' && searchValue) {
+                workspaceNote = `Viewing ${activeGroupLabel.toLowerCase()} settings matching "${searchValue}".`;
+            } else if (state.activeGroup !== 'all') {
+                workspaceNote = `Viewing only the ${activeGroupLabel.toLowerCase()} group.`;
+            } else {
+                workspaceNote = `Showing settings matching "${searchValue}".`;
+            }
         }
-        summary += '. Changes save straight to extension storage and update open YouTube tabs automatically.';
-        if (state.invalidKeys.size > 0) {
-            summary += ` ${state.invalidKeys.size} field${state.invalidKeys.size === 1 ? ' needs' : 's need'} attention before saving.`;
+
+        elements.settingsWorkspaceTitle.textContent = workspaceTitle;
+        elements.settingsWorkspaceNote.textContent = workspaceNote;
+
+        let summary = '';
+        if (totalCount === 0) {
+            summary = 'No editable settings are available in this build.';
+        } else {
+            summary = hasFilters
+                ? `${visibleCount} of ${totalCount} ${pluralize(totalCount, 'setting')} visible`
+                : `${totalCount} ${pluralize(totalCount, 'setting')} ready to review`;
+
+            if (state.activeGroup !== 'all' && searchValue) {
+                summary += ` in ${activeGroupLabel} for "${searchValue}"`;
+            } else if (state.activeGroup !== 'all') {
+                summary += ` in ${activeGroupLabel}`;
+            } else if (searchValue) {
+                summary += ` matching "${searchValue}"`;
+            }
+
+            summary += '.';
+
+            if (dirtyCount > 0) {
+                summary += ` ${dirtyCount} unsaved ${pluralize(dirtyCount, 'change')} ${dirtyCount === 1 ? 'is' : 'are'} ready to apply.`;
+            } else {
+                summary += ' Changes stay local until you save them.';
+            }
+
+            if (invalidCount > 0) {
+                summary += ` ${invalidCount} ${pluralize(invalidCount, 'field')} ${invalidCount === 1 ? 'needs' : 'need'} attention before saving.`;
+            }
         }
+
         elements.settingsModalSummary.textContent = summary;
     }
 
     function updateCardState(card, key) {
         const dirty = state.dirtyKeys.has(key);
         const invalid = state.invalidKeys.has(key);
+        const currentValue = state.draftSettings[key];
+        const storedValue = state.resolvedSettings[key];
+        const defaultValue = state.defaultSettings[key];
         card.classList.toggle('is-dirty', dirty);
         card.classList.toggle('is-invalid', invalid);
+        card.querySelectorAll('input, textarea, select').forEach((control) => {
+            control.setAttribute('aria-invalid', invalid ? 'true' : 'false');
+        });
 
         const dirtyBadge = card.querySelector('.settings-item-state');
         if (dirtyBadge) {
-            dirtyBadge.hidden = !dirty;
-            dirtyBadge.textContent = dirty ? 'Modified' : '';
+            dirtyBadge.classList.toggle('is-problem', invalid);
+            dirtyBadge.hidden = !dirty && !invalid;
+            dirtyBadge.textContent = invalid ? 'Needs Fix' : dirty ? 'Pending Save' : '';
         }
 
         const hint = card.querySelector('.settings-item-hint');
         if (hint) {
             if (invalid) {
-                hint.textContent = 'Invalid input. Fix this field before saving.';
+                hint.textContent = 'Fix this field before saving. Invalid draft values stay local to this editor.';
+            } else if (dirty) {
+                if (defaultValue !== undefined && areValuesEqual(currentValue, defaultValue)) {
+                    hint.textContent = `Back at the catalog default (${formatValuePreview(defaultValue)}). Save to replace the stored value.`;
+                } else if (defaultValue === undefined) {
+                    hint.textContent = `Stored: ${formatValuePreview(storedValue)}. Save to keep this custom value.`;
+                } else {
+                    hint.textContent = `Stored: ${formatValuePreview(storedValue)} • Default: ${formatValuePreview(defaultValue)}. Save to apply this draft.`;
+                }
             } else {
-                const defaultValue = state.defaultSettings[key];
                 hint.textContent = defaultValue === undefined
                     ? 'Stored setting with no catalog default.'
-                    : `Default: ${formatValuePreview(defaultValue)}`;
+                    : areValuesEqual(storedValue, defaultValue)
+                        ? `At the catalog default: ${formatValuePreview(defaultValue)}.`
+                        : `Stored: ${formatValuePreview(storedValue)} • Default: ${formatValuePreview(defaultValue)}.`;
             }
+        }
+    }
+
+    function focusFirstInvalidControl() {
+        const firstInvalidCard = elements.settingsList.querySelector('.settings-item.is-invalid');
+        if (!firstInvalidCard) return;
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        firstInvalidCard.scrollIntoView({
+            block: 'nearest',
+            behavior: prefersReducedMotion ? 'auto' : 'smooth'
+        });
+        const control = firstInvalidCard.querySelector('input, textarea, select');
+        if (control instanceof HTMLElement) {
+            control.focus();
+            if (typeof control.select === 'function' && (control.tagName === 'INPUT' || control.tagName === 'TEXTAREA')) {
+                control.select();
+            }
+        } else {
+            firstInvalidCard.focus?.();
         }
     }
 
@@ -719,6 +901,23 @@
         return 'text';
     }
 
+    function formatControlKindLabel(controlKind) {
+        switch (controlKind) {
+            case 'toggle':
+                return 'Toggle';
+            case 'number':
+                return 'Number';
+            case 'list':
+                return 'List';
+            case 'json':
+                return 'JSON';
+            case 'textarea':
+                return 'Long Text';
+            default:
+                return 'Text';
+        }
+    }
+
     function renderSettingsGroups() {
         const keys = getSettingKeys().filter((key) => matchesSearch(key, state.draftSettings[key]));
         const counts = new Map();
@@ -734,7 +933,7 @@
             state.activeGroup = 'all';
         }
 
-        elements.settingsGroups.textContent = '';
+        const fragment = document.createDocumentFragment();
         GROUPS.forEach((group) => {
             if (group.id !== 'all' && (counts.get(group.id) || 0) === 0) return;
 
@@ -758,8 +957,9 @@
                 renderSettingsWorkspace();
             });
 
-            elements.settingsGroups.appendChild(button);
+            fragment.appendChild(button);
         });
+        elements.settingsGroups.replaceChildren(fragment);
     }
 
     function renderTextControl(card, key, value, isMultiline, meta) {
@@ -883,6 +1083,7 @@
         const groupId = inferGroup(key);
         const groupLabel = GROUPS.find((group) => group.id === groupId)?.label || 'Advanced';
         const controlKind = inferControlKind(currentValue, defaultValue);
+        const controlKindLabel = formatControlKindLabel(controlKind);
         const idBase = toDomIdFragment(key);
         const controlMeta = {
             controlId: `settings-control-${idBase}`,
@@ -894,6 +1095,7 @@
         const card = document.createElement('article');
         card.className = 'settings-item';
         card.dataset.key = key;
+        card.tabIndex = -1;
         card.setAttribute('aria-labelledby', controlMeta.titleId);
 
         const header = document.createElement('div');
@@ -911,16 +1113,16 @@
         meta.className = 'settings-item-meta';
 
         const keyBadge = document.createElement('span');
-        keyBadge.className = 'settings-item-badge';
+        keyBadge.className = 'settings-item-badge settings-item-badge-key';
         keyBadge.textContent = key;
 
         const groupBadge = document.createElement('span');
-        groupBadge.className = 'settings-item-badge';
+        groupBadge.className = 'settings-item-badge settings-item-badge-group';
         groupBadge.textContent = groupLabel;
 
         const typeBadge = document.createElement('span');
-        typeBadge.className = 'settings-item-badge';
-        typeBadge.textContent = controlKind;
+        typeBadge.className = 'settings-item-badge settings-item-badge-type';
+        typeBadge.textContent = controlKindLabel;
 
         const stateBadge = document.createElement('span');
         stateBadge.className = 'settings-item-badge settings-item-state';
@@ -934,7 +1136,7 @@
         const description = document.createElement('p');
         description.className = 'settings-item-description';
         description.id = controlMeta.descriptionId;
-        description.textContent = `Stored as ${controlKind}. Current value: ${formatValuePreview(currentValue)}.`;
+        description.textContent = `Editing a ${controlKindLabel.toLowerCase()} setting. Draft value: ${formatValuePreview(currentValue)}.`;
 
         copy.appendChild(title);
         copy.appendChild(meta);
@@ -977,7 +1179,7 @@
             state.draftSettings[key] = deepClone(defaultValue);
             state.invalidKeys.delete(key);
             updateDirtyStateForKey(key);
-            renderSettingsWorkspace();
+            renderSettingsWorkspace({ preserveScroll: true });
             showModalStatus(`${humanizeKey(key)} restored to its catalog default. Save to apply.`, 'info');
         });
 
@@ -988,29 +1190,84 @@
         return card;
     }
 
+    function updateSettingsEmptyState(totalCount) {
+        const searchValue = elements.settingsSearch.value.trim();
+        const activeGroupLabel = getActiveGroupLabel();
+        const hasFilters = state.activeGroup !== 'all' || !!searchValue;
+
+        let eyebrow = 'Filtered View';
+        let title = 'No settings match this view';
+        let copy = 'Try a broader search or switch back to All Settings.';
+        let showReset = hasFilters;
+
+        if (totalCount === 0) {
+            eyebrow = 'Catalog';
+            title = 'No settings are available';
+            copy = 'This build did not expose editable settings, so the workspace has nothing to load right now.';
+            showReset = false;
+        } else if (state.activeGroup !== 'all' && searchValue) {
+            title = 'No settings match this search here';
+            copy = `Try a broader search or clear the ${activeGroupLabel.toLowerCase()} filter to browse the full catalog again.`;
+        } else if (state.activeGroup !== 'all') {
+            title = `No settings found in ${activeGroupLabel}`;
+            copy = 'Switch groups or jump back to All Settings to keep exploring the catalog.';
+        } else if (searchValue) {
+            title = 'No settings match this search';
+            copy = 'Try a shorter keyword, search by setting key, or clear the filter to browse everything again.';
+        } else {
+            eyebrow = 'Empty';
+            title = 'No settings to display';
+            copy = 'The editor is ready, but no stored or default settings were found for this build.';
+            showReset = false;
+        }
+
+        elements.settingsEmptyEyebrow.textContent = eyebrow;
+        elements.settingsEmptyTitle.textContent = title;
+        elements.settingsEmptyCopy.textContent = copy;
+        elements.settingsEmptyResetButton.hidden = !showReset;
+    }
+
     function renderSettingsList() {
         const visibleKeys = getVisibleKeys();
-        elements.settingsList.textContent = '';
+        const totalCount = getSettingKeys().length;
         elements.settingsEmpty.hidden = visibleKeys.length > 0;
         elements.settingsList.hidden = visibleKeys.length === 0;
 
+        if (visibleKeys.length === 0) {
+            elements.settingsList.replaceChildren();
+            updateSettingsEmptyState(totalCount);
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
         visibleKeys.forEach((key) => {
-            elements.settingsList.appendChild(createSettingsCard(key));
+            fragment.appendChild(createSettingsCard(key));
         });
+        elements.settingsList.replaceChildren(fragment);
     }
 
-    function renderSettingsWorkspace() {
+    function renderSettingsWorkspace({ preserveScroll = false } = {}) {
+        const previousScrollTop = preserveScroll ? elements.settingsList.scrollTop : 0;
         renderSettingsGroups();
         renderSettingsList();
         updateModalHeaderState();
+        if (preserveScroll) {
+            elements.settingsList.scrollTop = previousScrollTop;
+        }
     }
 
     async function openSettingsModal() {
-        await refreshSettingsState({ resetDraft: true });
+        try {
+            await refreshSettingsState({ resetDraft: true });
+        } catch (error) {
+            showStatus('Unable to open settings right now: ' + error.message, 'error');
+            return;
+        }
         clearModalStatus();
         state.activeGroup = 'all';
         state.search = '';
         elements.settingsSearch.value = '';
+        updateSettingsSearchState();
         state.lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         state.bodyOverflowBeforeModal = document.body.style.overflow;
         state.modalOpen = true;
@@ -1026,7 +1283,14 @@
 
     function requestCloseSettingsModal() {
         if (state.dirtyKeys.size > 0 || state.invalidKeys.size > 0) {
-            const confirmed = window.confirm('Discard the current settings draft and close the modal?');
+            const draftPieces = [];
+            if (state.dirtyKeys.size > 0) {
+                draftPieces.push(`${state.dirtyKeys.size} unsaved ${pluralize(state.dirtyKeys.size, 'change')}`);
+            }
+            if (state.invalidKeys.size > 0) {
+                draftPieces.push(`${state.invalidKeys.size} ${pluralize(state.invalidKeys.size, 'invalid field')}`);
+            }
+            const confirmed = window.confirm(`Discard ${draftPieces.join(' and ')} and close the settings editor?`);
             if (!confirmed) return;
         }
 
@@ -1048,6 +1312,7 @@
     async function saveSettingsDraft() {
         if (state.invalidKeys.size > 0) {
             showModalStatus('Fix invalid fields before saving.', 'error');
+            focusFirstInvalidControl();
             return;
         }
 
@@ -1056,6 +1321,7 @@
             await chrome.storage.local.set({
                 [STORAGE_KEYS.settings]: nextStoredSettings
             });
+            await chrome.storage.local.remove(STORAGE_KEYS.legacySidebarOrder);
 
             state.storedSettings = deepClone(nextStoredSettings);
             state.resolvedSettings = {
@@ -1066,7 +1332,7 @@
             state.dirtyKeys.clear();
             state.invalidKeys.clear();
 
-            renderSettingsWorkspace();
+            renderSettingsWorkspace({ preserveScroll: true });
             await renderStorageInfo();
             showStatus('Settings saved. Open YouTube tabs update automatically.', 'success');
             showModalStatus('Settings saved. Open YouTube tabs update automatically.', 'success');
@@ -1079,7 +1345,7 @@
         state.draftSettings = deepClone(state.resolvedSettings);
         state.dirtyKeys.clear();
         state.invalidKeys.clear();
-        renderSettingsWorkspace();
+        renderSettingsWorkspace({ preserveScroll: true });
         showModalStatus('Draft discarded. You are back in sync with stored settings.', 'info');
     }
 
@@ -1093,15 +1359,24 @@
         state.invalidKeys.clear();
         state.dirtyKeys.clear();
         getSettingKeys().forEach((key) => updateDirtyStateForKey(key));
-        renderSettingsWorkspace();
+        renderSettingsWorkspace({ preserveScroll: true });
         showModalStatus('Catalog defaults loaded into the draft. Save to apply them.', 'info');
     }
 
-    elements.exportButton.addEventListener('click', exportSettings);
+    elements.exportButton.addEventListener('click', () => {
+        void runWithBusyButton(elements.exportButton, 'Exporting…', exportSettings);
+    });
     elements.importButton.addEventListener('click', () => elements.importFile.click());
-    elements.importFile.addEventListener('change', (event) => importSettings(event.target.files[0]));
-    elements.resetButton.addEventListener('click', resetSettings);
-    elements.openSettingsModalButton.addEventListener('click', openSettingsModal);
+    elements.importFile.addEventListener('change', (event) => {
+        const [file] = event.target.files || [];
+        void runWithBusyButton(elements.importButton, 'Importing…', () => importSettings(file));
+    });
+    elements.resetButton.addEventListener('click', () => {
+        void runWithBusyButton(elements.resetButton, 'Clearing…', resetSettings);
+    });
+    elements.openSettingsModalButton.addEventListener('click', () => {
+        void runWithBusyButton(elements.openSettingsModalButton, 'Loading…', openSettingsModal);
+    });
     elements.closeSettingsModalButton.addEventListener('click', requestCloseSettingsModal);
     elements.settingsModalShell.addEventListener('click', (event) => {
         if (event.target.hasAttribute('data-close-settings-modal')) {
@@ -1111,10 +1386,34 @@
     let _searchDebounce = null;
     elements.settingsSearch.addEventListener('input', () => {
         state.search = elements.settingsSearch.value.trim().toLowerCase();
+        updateSettingsSearchState();
         clearTimeout(_searchDebounce);
         _searchDebounce = setTimeout(() => renderSettingsWorkspace(), 200);
     });
-    elements.settingsSaveButton.addEventListener('click', saveSettingsDraft);
+    elements.settingsClearSearchButton.addEventListener('click', () => {
+        clearTimeout(_searchDebounce);
+        elements.settingsSearch.value = '';
+        state.search = '';
+        updateSettingsSearchState();
+        renderSettingsWorkspace();
+        elements.settingsSearch.focus();
+    });
+    elements.settingsClearFiltersButton.addEventListener('click', () => {
+        clearTimeout(_searchDebounce);
+        clearSettingsFilters({ focusSearch: true, announce: true });
+    });
+    elements.settingsEmptyResetButton.addEventListener('click', () => {
+        clearTimeout(_searchDebounce);
+        clearSettingsFilters({ focusSearch: true, announce: true });
+    });
+    elements.settingsSaveButton.addEventListener('click', () => {
+        void runWithBusyButton(
+            elements.settingsSaveButton,
+            'Saving…',
+            saveSettingsDraft,
+            () => updateModalHeaderState()
+        );
+    });
     elements.settingsDiscardButton.addEventListener('click', discardDraft);
     elements.settingsRestoreDefaultsButton.addEventListener('click', restoreDefaultsDraft);
 

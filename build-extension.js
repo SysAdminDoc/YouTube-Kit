@@ -6,6 +6,10 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const crx3 = require('crx3');
+const {
+    extractDefaultsFromSource,
+    extractSettingsVersionFromSource
+} = require('./scripts/catalog-utils');
 
 const EXT_DIR = path.join(__dirname, 'extension');
 const BUILD_DIR = path.join(__dirname, 'build');
@@ -157,108 +161,8 @@ function listFiles(dir, base) {
     return files;
 }
 
-function findBalancedObjectLiteral(source, startToken) {
-    const start = source.indexOf(startToken);
-    if (start === -1) return null;
-
-    const openIndex = source.indexOf('{', start);
-    if (openIndex === -1) return null;
-
-    let depth = 0;
-    let inSingle = false;
-    let inDouble = false;
-    let inTemplate = false;
-    let inLineComment = false;
-    let inBlockComment = false;
-    let escaping = false;
-
-    for (let index = openIndex; index < source.length; index += 1) {
-        const char = source[index];
-        const next = source[index + 1];
-
-        if (inLineComment) {
-            if (char === '\n') inLineComment = false;
-            continue;
-        }
-
-        if (inBlockComment) {
-            if (char === '*' && next === '/') {
-                inBlockComment = false;
-                index += 1;
-            }
-            continue;
-        }
-
-        if (inSingle) {
-            if (!escaping && char === '\'') inSingle = false;
-            escaping = char === '\\' && !escaping;
-            continue;
-        }
-
-        if (inDouble) {
-            if (!escaping && char === '"') inDouble = false;
-            escaping = char === '\\' && !escaping;
-            continue;
-        }
-
-        if (inTemplate) {
-            if (!escaping && char === '`') inTemplate = false;
-            escaping = char === '\\' && !escaping;
-            continue;
-        }
-
-        escaping = false;
-
-        if (char === '/' && next === '/') {
-            inLineComment = true;
-            index += 1;
-            continue;
-        }
-
-        if (char === '/' && next === '*') {
-            inBlockComment = true;
-            index += 1;
-            continue;
-        }
-
-        if (char === '\'') {
-            inSingle = true;
-            continue;
-        }
-
-        if (char === '"') {
-            inDouble = true;
-            continue;
-        }
-
-        if (char === '`') {
-            inTemplate = true;
-            continue;
-        }
-
-        if (char === '{') {
-            depth += 1;
-        } else if (char === '}') {
-            depth -= 1;
-            if (depth === 0) {
-                return source.slice(openIndex, index + 1);
-            }
-        }
-    }
-
-    return null;
-}
-
 function writeDefaultSettingsCatalog(ytkitSource) {
-    const objectLiteral = findBalancedObjectLiteral(ytkitSource, 'defaults:');
-    if (!objectLiteral) {
-        throw new Error('Could not find settings defaults in ytkit.js');
-    }
-
-    const defaults = Function('"use strict"; return (' + objectLiteral + ');')();
-    if (!defaults || typeof defaults !== 'object' || Array.isArray(defaults)) {
-        throw new Error('Parsed defaults are not a plain object');
-    }
+    const defaults = extractDefaultsFromSource(ytkitSource);
 
     // Keep this empty unless a setting is fully removed from defaults, UI, and runtime.
     const retiredSettingKeys = [];
@@ -271,90 +175,18 @@ function writeDefaultSettingsCatalog(ytkitSource) {
 }
 
 function writeSettingsMetaCatalog(ytkitSource) {
-    const settingsVersionMatch = ytkitSource.match(/SETTINGS_VERSION:\s*(\d+)/);
-    if (!settingsVersionMatch) {
-        throw new Error('Could not find settings version in ytkit.js');
-    }
-
     const meta = {
-        settingsVersion: Number(settingsVersionMatch[1])
+        settingsVersion: extractSettingsVersionFromSource(ytkitSource)
     };
 
     fs.writeFileSync(SETTINGS_META_JSON, JSON.stringify(meta, null, 2) + '\n', 'utf8');
 }
 
-function buildUserscriptSource(extensionSource, targetVersion) {
-    const header = `// ==UserScript==
-// @name         YTKit v${targetVersion}
-// @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      ${targetVersion}
-// @description  Ultimate YouTube customization with ad blocking, SponsorBlock, video/channel hiding, playback enhancements, and 115+ features
-// @author       Matthew Parker
-// @match        https://www.youtube.com/*
-// @match        https://youtube.com/*
-// @exclude      https://m.youtube.com/*
-// @exclude      https://studio.youtube.com/*
-// @run-at       document-start
-// @inject-into  content
-// @grant        GM_getValue
-// @grant        GM_setValue
-// @grant        GM_addStyle
-// @grant        GM_xmlhttpRequest
-// @grant        GM.xmlHttpRequest
-// @connect      sponsor.ajay.app
-// @connect      raw.githubusercontent.com
-// @connect      localhost
-// @connect      127.0.0.1
-// ==/UserScript==
-`;
-
-    const preamble = `(function() {
-    'use strict';
-
-    // In userscript context, GM_* APIs are native — no shim needed
-    // window.ytInitialPlayerResponse and window.__ytab are directly accessible (same page context)
-    const GM = { xmlHttpRequest: GM_xmlhttpRequest };
-    // GM_cookie not available in userscripts — provide no-op
-    const GM_cookie = { list(filter, cb) { cb(null, 'GM_cookie not available in userscript mode'); } };
-    // triggerDownload — open URL directly in userscript mode (no chrome.downloads API)
-    function triggerDownload(url, filename) {
-        return new Promise((resolve) => {
-            const a = document.createElement('a');
-            a.href = url;
-            if (filename) a.download = filename;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => { try { document.body.removeChild(a); } catch (_) {} resolve({ ok: true }); }, 200);
-        });
+function readUserscriptSource() {
+    if (!fs.existsSync(USERSCRIPT)) {
+        throw new Error('ytkit.user.js is missing — cannot package userscript artifact');
     }
-
-`;
-
-    let activeMarker = 'const triggerDownload = gm.triggerDownload.bind(gm);';
-    let bodyStartIndex = extensionSource.indexOf(activeMarker);
-    if (bodyStartIndex === -1) {
-        activeMarker = 'const GM = gm.GM;';
-        bodyStartIndex = extensionSource.indexOf(activeMarker);
-        if (bodyStartIndex === -1) {
-            throw new Error('Could not find userscript body start marker in extension source');
-        }
-    }
-
-    let body = extensionSource.slice(bodyStartIndex + activeMarker.length);
-    while (body.startsWith('\r') || body.startsWith('\n')) {
-        body = body.slice(1);
-    }
-
-    body = body.replace(
-        /\s*\/\/ Bridge to page context[^\n]*[\s\S]*?_prCacheHref: ''\r?\n\s*\};/,
-        '\n    // In userscript context, window.ytInitialPlayerResponse and window.__ytab\n    // are directly accessible (same page context, no ISOLATED/MAIN world split)'
-    );
-    body = body.replace(/_rw\.ytInitialPlayerResponse/g, 'window.ytInitialPlayerResponse');
-    body = body.replace(/_rw\.__ytab/g, 'window.__ytab');
-    body = body.replace(/\r?\n\}\)\(\);\s*$/, '');
-
-    return header + '\n' + preamble + body + '\n})();\n';
+    return fs.readFileSync(USERSCRIPT, 'utf8');
 }
 
 async function build() {
@@ -374,8 +206,7 @@ const chromeZipName = 'astra-deck-chrome-v' + version + '.zip';
         const size = createZip(chromeStageDir, chromeZipPath);
         console.log('Chrome ZIP: build/' + chromeZipName + ' (' + size + ' KB)');
     } catch (e) {
-        console.error('Chrome ZIP failed:', e.message);
-        process.exit(1);
+        throw new Error('Chrome ZIP failed: ' + e.message);
     }
 
     // ── Chrome CRX Build ──
@@ -436,8 +267,7 @@ const firefoxZipName = 'astra-deck-firefox-v' + version + '.zip';
         const size = createZip(firefoxStageDir, firefoxZipPath);
         console.log('Firefox ZIP: build/' + firefoxZipName + ' (' + size + ' KB)');
     } catch (e) {
-        console.error('Firefox ZIP failed:', e.message);
-        process.exit(1);
+        throw new Error('Firefox ZIP failed: ' + e.message);
     }
 
     // ── Firefox XPI Build ──
@@ -451,9 +281,7 @@ const firefoxXpiName = 'astra-deck-firefox-v' + version + '.xpi';
     if (INCLUDE_USERSCRIPT) {
         const userscriptDestName = 'ytkit-v' + version + '.user.js';
         const userscriptDestPath = path.join(BUILD_DIR, userscriptDestName);
-        const extensionSource = fs.readFileSync(YTKIT_JS, 'utf8');
-        const userscriptOutput = buildUserscriptSource(extensionSource, version);
-        fs.writeFileSync(userscriptDestPath, userscriptOutput, 'utf8');
+        fs.writeFileSync(userscriptDestPath, readUserscriptSource(), 'utf8');
         console.log('Userscript:  build/' + userscriptDestName + ' (' + formatSize(userscriptDestPath) + ' KB)');
     } else {
         console.log('Userscript:  skipped (extension-native build)');

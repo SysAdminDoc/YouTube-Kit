@@ -29,22 +29,32 @@
     }
 
     function waitForElement(selector, callback, timeout = runtime.elementTimeout) {
-        if (!selector || typeof callback !== 'function') return;
+        if (!selector || typeof callback !== 'function') return () => {};
         const existing = document.querySelector(selector);
         if (existing) {
             callback(existing);
-            return;
+            return () => {};
         }
 
         let fired = false;
-        const observer = new MutationObserver((mutations) => {
+        let timeoutId = null;
+        let observer = null;
+        const cleanup = () => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
+            observer?.disconnect();
+            observer = null;
+        };
+        observer = new MutationObserver((mutations) => {
             if (fired) return;
             for (const mutation of mutations) {
                 for (const node of mutation.addedNodes) {
                     if (node.nodeType !== 1) continue;
                     if (node.matches?.(selector)) {
                         fired = true;
-                        observer.disconnect();
+                        cleanup();
                         callback(node);
                         return;
                     }
@@ -54,29 +64,42 @@
             const matched = document.querySelector(selector);
             if (matched) {
                 fired = true;
-                observer.disconnect();
+                cleanup();
                 callback(matched);
             }
         });
 
         observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => {
-            if (!fired) observer.disconnect();
+        timeoutId = setTimeout(() => {
+            if (!fired) cleanup();
         }, timeout);
+        return cleanup;
     }
 
     function waitForPageContent(callback, fallbackSelector = 'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer') {
         if (typeof callback !== 'function') return;
         let fired = false;
+        let fallbackTimer = null;
+        let cancelElementWait = null;
+        const onPageUpdated = () => fire();
         const fire = () => {
             if (fired) return;
             fired = true;
+            if (fallbackTimer) {
+                clearTimeout(fallbackTimer);
+                fallbackTimer = null;
+            }
+            if (cancelElementWait) {
+                cancelElementWait();
+                cancelElementWait = null;
+            }
+            document.removeEventListener('yt-page-data-updated', onPageUpdated);
             callback();
         };
 
-        document.addEventListener('yt-page-data-updated', fire, { once: true });
-        waitForElement(fallbackSelector, fire);
-        setTimeout(fire, 3000);
+        document.addEventListener('yt-page-data-updated', onPageUpdated, { once: true });
+        cancelElementWait = waitForElement(fallbackSelector, fire);
+        fallbackTimer = setTimeout(fire, 3000);
     }
 
     function getIsWatchPage() {
@@ -138,6 +161,20 @@
         isNavigateListenerAttached = true;
     }
 
+    function stopNavigateListener() {
+        if (!isNavigateListenerAttached) return;
+
+        document.removeEventListener('yt-navigate-finish', debouncedRunNavigateRules);
+        document.removeEventListener('yt-page-data-updated', debouncedRunNavigateRules);
+        window.removeEventListener('popstate', debouncedRunNavigateRules);
+        if (navigateDebounceTimer) {
+            clearTimeout(navigateDebounceTimer);
+            navigateDebounceTimer = null;
+        }
+        disconnectWatchFlexyObserver();
+        isNavigateListenerAttached = false;
+    }
+
     function addNavigateRule(id, ruleFn) {
         if (!id || typeof ruleFn !== 'function') return;
         ensureNavigateListener();
@@ -151,9 +188,8 @@
 
     function removeNavigateRule(id) {
         navigateRules.delete(id);
-        if (navigateRules.size === 0 && navigateDebounceTimer) {
-            clearTimeout(navigateDebounceTimer);
-            navigateDebounceTimer = null;
+        if (navigateRules.size === 0) {
+            stopNavigateListener();
         }
     }
 

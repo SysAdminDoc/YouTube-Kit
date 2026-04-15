@@ -4,10 +4,11 @@
     const core = globalThis.YTKitCore || (globalThis.YTKitCore = {});
     if (core.storageRead) return;
 
-    const extensionStateCache = {};
+    const extensionStateCache = Object.create(null);
     let pendingStorageWrites = Object.create(null);
     let pendingStorageFlush = null;
     let extensionStateReady = false;
+    let extensionStateReadyPromise = null;
     let storageChangeListenerInstalled = false;
     let storageFlushGuardsInstalled = false;
     const STORAGE_WRITE_DEBOUNCE_MS = 140;
@@ -24,14 +25,22 @@
 
     async function preloadExtensionState() {
         if (extensionStateReady) return;
-        if (core.hasExtensionContext()) {
-            try {
-                Object.assign(extensionStateCache, await chrome.storage.local.get(null));
-            } catch (error) {
-                console.warn('[YTKit] Storage preload failed:', error);
+        if (extensionStateReadyPromise) return extensionStateReadyPromise;
+        extensionStateReadyPromise = (async () => {
+            if (core.hasExtensionContext()) {
+                try {
+                    Object.assign(extensionStateCache, await chrome.storage.local.get(null));
+                } catch (error) {
+                    console.warn('[YTKit] Storage preload failed:', error);
+                }
             }
+            extensionStateReady = true;
+        })();
+        try {
+            await extensionStateReadyPromise;
+        } finally {
+            extensionStateReadyPromise = null;
         }
-        extensionStateReady = true;
     }
 
     function storageRead(key, defaultValue) {
