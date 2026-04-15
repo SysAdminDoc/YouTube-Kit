@@ -122,18 +122,20 @@
         if (!core.hasExtensionContext() || !chrome.storage?.onChanged) return;
         chrome.storage.onChanged.addListener((changes, areaName) => {
             if (areaName !== 'local') return;
-
-            const normalizedChanges = {};
-            for (const [key, change] of Object.entries(changes)) {
-                if ('newValue' in change) extensionStateCache[key] = change.newValue;
-                else delete extensionStateCache[key];
-                normalizedChanges[key] = {
-                    oldValue: change.oldValue,
-                    newValue: change.newValue
-                };
+            try {
+                const normalizedChanges = {};
+                for (const [key, change] of Object.entries(changes)) {
+                    if ('newValue' in change) extensionStateCache[key] = change.newValue;
+                    else delete extensionStateCache[key];
+                    normalizedChanges[key] = {
+                        oldValue: change.oldValue,
+                        newValue: change.newValue
+                    };
+                }
+                emitStorageUpdate(normalizedChanges);
+            } catch (error) {
+                console.error('[YTKit] Storage listener error:', error);
             }
-
-            emitStorageUpdate(normalizedChanges);
         });
         storageChangeListenerInstalled = true;
     }

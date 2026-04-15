@@ -162,10 +162,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Default to 30 s when the caller does not pass a timeout so unauthenticated
         // or hung upstream fetches cannot stall the service worker indefinitely.
         const DEFAULT_FETCH_TIMEOUT_MS = 30000;
+        const MIN_FETCH_TIMEOUT_MS = 1000;
         const requestedTimeout = Number.isFinite(timeout) && timeout > 0
             ? timeout
             : DEFAULT_FETCH_TIMEOUT_MS;
-        const clampedTimeout = Math.min(requestedTimeout, MAX_FETCH_TIMEOUT_MS);
+        const clampedTimeout = Math.max(MIN_FETCH_TIMEOUT_MS, Math.min(requestedTimeout, MAX_FETCH_TIMEOUT_MS));
         let timer = null;
         let responded = false;
 

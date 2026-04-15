@@ -4,6 +4,52 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.6.7] - Theater Split Overhaul + SponsorBlock Cleanup
+
+### Fixed
+
+- **Seek stutter on quality lock.** `autoMaxResolution` triggered quality DOM-click cascade on every `canplay`/`playing` media event, including seeks. Added `_qualityLocked` flag that short-circuits the handler once quality is set for the current video. Eliminates 3x stutter on every forward/backward seek.
+- **Settings panel listener leak.** `_panelUIListenersAttached` was never reset when the panel closed, causing duplicate document-level listeners on every open/close cycle. Now reset in the panel-close MutationObserver callback.
+- **SponsorBlock skip toasts removed.** Skip notifications (`showToast`) overlaid the video during playback. Removed entirely — segments still auto-skip silently. Deleted the dead `sbShowSkipNotice` setting and sub-feature definition.
+- **Theater Split close button invisible.** CSS set `display:none` but expand code only set `opacity:0.3` without switching to `display:flex`. Close button now properly shows/hides on expand/collapse.
+- **Theater Split dismiss not honored.** The `dismissed` parameter in `_collapseSplit()` was accepted but never used. Closing via the X button or Escape would not prevent scroll-down from immediately re-expanding. Now sets `_dismissed = true` which blocks `_expandSplit()` until the next video navigation.
+- **Theater Split scroll-up collapse too sensitive.** A single scroll-up tick at `scrollTop=0` instantly collapsed the right panel. Now requires 3 consecutive scroll-up ticks within 600ms to trigger collapse.
+- **Theater Split fullscreen conflict.** Native fullscreen (F key) with the overlay active caused the z-index:9999 overlay to block player controls. Added `fullscreenchange` listener that hides the overlay and restores natural player sizing during fullscreen, then re-mounts on exit.
+- **Theater Split destroy leak.** `_lastVideoId` was not reset in `destroy()`, so disabling and re-enabling the feature on the same video could leave `_dismissed` stuck as `true`.
+
+### Improved
+
+- **SponsorBlock scheduled skipping.** Replaced 500ms `setInterval` polling with scheduled `setTimeout` that computes delay to the next segment boundary. Event-driven reschedule on `playing`/`seeked`/`ratechange`, clears on `pause`.
+- **SponsorBlock hash-prefix privacy.** Full video ID was sent to the SponsorBlock API. Now uses SHA-256 hash-prefix lookup (`/api/skipSegments/{first4chars}`) with client-side filtering.
+- **A/B Loop event-driven.** Replaced 100ms `setInterval` with `timeupdate` event listener on the video element.
+- **Auto-skip chapters event-driven.** Replaced 1s `setInterval` with `timeupdate` event via document capture phase.
+- **MiniPlayerBar IntersectionObserver.** Replaced scroll event polling with `IntersectionObserver` on the player element (threshold 0.1).
+- **Codec filtering: MediaCapabilities.decodingInfo.** YouTube bypassed `canPlayType`/`isTypeSupported` overrides via `MediaCapabilities.decodingInfo`. Added third API override in `ytkit-main.js`.
+- **Theater Split divider touch drag.** Added `touchstart`/`touchmove`/`touchend` handlers using shared drag logic. Works on tablets/touchscreens.
+- **Theater Split double-click divider reset.** Double-clicking the divider resets the split ratio to the default 75/25. Extracted `_applyDividerRatio()` shared helper.
+- **Theater Split escape key.** Pressing Escape collapses the split panel (with input/textarea/contentEditable guard).
+- **Theater Split mount animation.** Overlay fades in over 300ms instead of snapping into place.
+- **Theater Split divider grip pattern.** Replaced plain rectangle pip with three-dot vertical grip (universal drag indicator). Always partially visible (opacity 0.4), full opacity on hover.
+- **Theater Split collapse strip.** Increased height from 24px to 32px, indicator bar always visible with subtle gradient at rest, thicker handle on hover.
+- **Settings panel click delegation.** Consolidated 4 separate `document.addEventListener('click', ...)` into 1 delegated handler.
+- **Custom CSS injection event-driven.** Replaced 2s `setInterval` polling with `ytkit-settings-changed` event listener.
+- **Hex color regex fix.** `themeAccentColor` regex accepted invalid lengths like 5 or 7. Now validates exact lengths (3, 4, 6, or 8 hex chars).
+- **Background fetch timeout floor.** Added 1s minimum to prevent near-zero timeouts from aborting fetches.
+- **Navigate rule cleanup.** Debounce timer cleared when the last navigate rule is removed.
+- **Storage change listener resilience.** Wrapped `chrome.storage.onChanged` in try-catch.
+- **Cinema ambient glow hidden-tab cleanup.** Removed pointless RAF wrapper around setTimeout when tab is hidden, added `_hiddenTimer` cleanup.
+- **Download poll panel disconnect.** Added `if (!panel.isConnected)` guard to clear orphaned download progress intervals.
+- **Auto-dismiss "Still Watching" popup.** Added `yt-popup-opened` event listener for faster detection.
+- **Video screenshot improved.** Filename includes video title, `URL.revokeObjectURL` delayed to 5 seconds.
+
+### Dead code removed
+
+- Unused `_headerH()` method and dead `const hh` variable in `_buildOverlay()`
+- No-op `_initDividerDrag(divider, left, null)` call (null guard returned immediately)
+- `sbShowSkipNotice` default setting and sub-feature definition
+
+---
+
 ## [3.6.5] - Settings Panel Handler Performance
 
 ### Fixed

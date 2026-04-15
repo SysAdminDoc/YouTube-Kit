@@ -151,6 +151,10 @@
 
     function removeNavigateRule(id) {
         navigateRules.delete(id);
+        if (navigateRules.size === 0 && navigateDebounceTimer) {
+            clearTimeout(navigateDebounceTimer);
+            navigateDebounceTimer = null;
+        }
     }
 
     function runMutationRules(targetNode) {

@@ -8,6 +8,8 @@
     var _origCanPlay = HTMLVideoElement.prototype.canPlayType;
     var _origIsTypeSupported = MediaSource && MediaSource.isTypeSupported
         ? MediaSource.isTypeSupported.bind(MediaSource) : null;
+    var _origDecodingInfo = (typeof MediaCapabilities !== 'undefined' && MediaCapabilities.prototype.decodingInfo)
+        ? MediaCapabilities.prototype.decodingInfo : null;
     var _codec = 'auto';
     var _patched = false;
 
@@ -28,6 +30,7 @@
             if (_patched) {
                 HTMLVideoElement.prototype.canPlayType = _origCanPlay;
                 if (_origIsTypeSupported) MediaSource.isTypeSupported = _origIsTypeSupported;
+                if (_origDecodingInfo) MediaCapabilities.prototype.decodingInfo = _origDecodingInfo;
                 _patched = false;
             }
             return;
@@ -40,6 +43,17 @@
             MediaSource.isTypeSupported = function(type) {
                 if (shouldBlock(type)) return false;
                 return _origIsTypeSupported(type);
+            };
+        }
+        // YouTube also queries MediaCapabilities.decodingInfo to select codecs.
+        // Without this override, YouTube can bypass canPlayType/isTypeSupported.
+        if (_origDecodingInfo) {
+            MediaCapabilities.prototype.decodingInfo = function(config) {
+                var contentType = config && config.video && config.video.contentType;
+                if (contentType && shouldBlock(contentType)) {
+                    return Promise.resolve({ supported: false, smooth: false, powerEfficient: false });
+                }
+                return _origDecodingInfo.call(this, config);
             };
         }
         _patched = true;

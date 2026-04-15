@@ -330,7 +330,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.6.5';
+    const YTKIT_VERSION = '3.6.7';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -1451,6 +1451,7 @@ return response;
 
         let pollInterval = null;
         async function poll() {
+            if (!panel.isConnected) { clearInterval(pollInterval); return; }
             try {
                 const { data } = await extensionFetchJson({
                     method: 'GET',
@@ -1491,7 +1492,8 @@ return response;
                     }
                     setTimeout(() => panel.remove(), 5000);
                 }
-            } catch (_) {
+            } catch (err) {
+                DebugManager.log('Download', 'Poll failed: ' + err.message);
                 clearInterval(pollInterval);
             }
         }
@@ -2293,7 +2295,6 @@ return response;
             sbCat_preview: true,
             sbCat_filler: true,
             sbCat_poi_highlight: false,
-            sbShowSkipNotice: true,
             showStatisticsDashboard: false,
             settingsProfiles: false,
             debugMode: false,
@@ -5082,6 +5083,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _isSplit: false,          // right panel is open
             _isActive: false,         // overlay is mounted
             _entering: false,
+            _dismissed: false,        // user explicitly closed split — block re-expand until nav
             _lastVideoId: null,
             _splitWrapper: null,
             _navRuleId: '_theaterSplit',
@@ -5095,16 +5097,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _rightTouchStartY: 0,
             _mastheadDisplay: undefined,
             _windowResizeHandler: null,
+            _keyHandler: null,
+            _fullscreenHandler: null,
+            _fullscreenHidden: false,
             _playerResizeObs: null,
             _videoType: 'standard',        // 'live' | 'vod' | 'standard'
             _positionedEls: [],            // elements we CSS-positioned over right panel
             _scrollTarget: null,           // which element receives scroll/wheel handlers
-
-            _headerH() {
-                const h = document.querySelector('ytd-masthead, #masthead');
-                if (!h || h.style.display === 'none') return 0;
-                return h.getBoundingClientRect().height || 56;
-            },
 
             _getPlayer()  { return document.querySelector('#player-container'); },
             _belowCache: null,
@@ -5226,7 +5225,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             // ── Build the fixed overlay (video full-width, right panel hidden) ──
             _buildOverlay() {
-                const hh = this._headerH();
                 const wrapper = document.createElement('div');
                 wrapper.id = 'ytkit-split-wrapper';
                 wrapper.style.cssText = `display:flex;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:transparent;overflow:hidden;pointer-events:none;`;
@@ -5244,11 +5242,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 divider.style.cssText = `flex:0 0 0;width:0;cursor:col-resize;position:relative;background:rgba(255,255,255,0.04);transition:flex-basis 0.35s cubic-bezier(0.4,0,0.2,1);overflow:hidden;z-index:10;pointer-events:auto;scrollbar-width:none;`;
                 const pip = document.createElement('div');
                 pip.className = 'ytkit-divider-pip';
-                pip.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:4px;height:40px;border-radius:2px;background:rgba(255,255,255,0.18);pointer-events:none;`;
+                pip.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:4px;height:40px;border-radius:2px;background:rgba(255,255,255,0.18);pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;`;
+                // Three-dot grip pattern — universal drag indicator
+                for (let i = 0; i < 3; i++) {
+                    const dot = document.createElement('div');
+                    dot.style.cssText = 'width:3px;height:3px;border-radius:50%;background:currentColor;flex-shrink:0;';
+                    pip.appendChild(dot);
+                }
                 divider.appendChild(pip);
                 divider.addEventListener('mouseenter', () => { divider.style.background='rgba(59,130,246,0.22)'; pip.style.background='rgba(59,130,246,0.8)'; });
                 divider.addEventListener('mouseleave', () => { divider.style.background='rgba(255,255,255,0.04)'; pip.style.background='rgba(255,255,255,0.18)'; });
-                this._initDividerDrag(divider, left, null);  // right set after creation
 
                 // RIGHT — collapsed initially
                 const right = document.createElement('div');
@@ -5280,65 +5283,107 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 return wrapper;
             },
 
+            _applyDividerRatio(left, right, newLeftPct) {
+                const newRightPct = 100 - newLeftPct;
+                const wrapper = this._splitWrapper;
+                const player = this._getPlayer();
+                const strip = wrapper?.querySelector('#ytkit-split-collapse-strip');
+                const positioned = this._positionedEls || [];
+                right.style.flexBasis = newRightPct + '%';
+                right.style.width     = newRightPct + '%';
+                document.documentElement.style.setProperty('--ytkit-split-right-width', `calc(${newRightPct}vw - 6px)`);
+                if (player) player.style.setProperty('width', newLeftPct + '%', 'important');
+                positioned.forEach(el => {
+                    el.style.setProperty('width', `calc(${newRightPct}% - 2px)`, 'important');
+                });
+                if (strip) strip.style.width = `calc(${newRightPct}% - 2px)`;
+                storageWrite('ytkit_split_ratio', newLeftPct);
+            },
+
             _initDividerDrag(divider, left, right) {
                 if (!right) return;
-                divider.addEventListener('mousedown', (e) => {
+
+                // Double-click to reset ratio to default 75/25
+                divider.addEventListener('dblclick', (e) => {
                     if (!this._isSplit) return;
                     e.preventDefault();
+                    this._applyDividerRatio(left, right, 75);
+                    divider.style.flexBasis = '6px';
+                    this._triggerPlayerResize();
+                });
+
+                // Shared drag logic for mouse and touch
+                const startDrag = (startX) => {
+                    if (!this._isSplit) return null;
                     const wrapper = this._splitWrapper;
-                    // Cache layout reads once at drag start to avoid per-move reflows
                     const totalW = wrapper.getBoundingClientRect().width;
-                    const startX = e.clientX;
                     const startLeftPct = left.getBoundingClientRect().width / totalW * 100;
-                    const player = this._getPlayer();
-                    const strip = wrapper.querySelector('#ytkit-split-collapse-strip');
-                    const positioned = this._positionedEls || [];
                     document.body.style.cursor = 'col-resize';
                     document.body.style.userSelect = 'none';
 
-                    // Full-viewport overlay prevents cross-origin iframe from eating mouse events
                     const dragShield = document.createElement('div');
                     dragShield.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;cursor:col-resize;';
                     document.body.appendChild(dragShield);
 
                     let _dragRaf = null;
-                    const onMove = (me) => {
+                    const onDrag = (clientX) => {
                         if (_dragRaf) cancelAnimationFrame(_dragRaf);
                         _dragRaf = requestAnimationFrame(() => {
-                            const dx = me.clientX - startX;
+                            const dx = clientX - startX;
                             const newLeftPct = Math.max(25, Math.min(85, startLeftPct + (dx / totalW * 100)));
-                            const newRightPct = 100 - newLeftPct;
-                            right.style.flexBasis = newRightPct + '%';
-                            right.style.width     = newRightPct + '%';
+                            this._applyDividerRatio(left, right, newLeftPct);
                             divider.style.flexBasis = '6px';
-                            document.documentElement.style.setProperty('--ytkit-split-right-width', `calc(${newRightPct}vw - 6px)`);
-                            if (player) player.style.setProperty('width', newLeftPct + '%', 'important');
-                            positioned.forEach(el => {
-                                el.style.setProperty('width', `calc(${newRightPct}% - 2px)`, 'important');
-                            });
-                            if (strip) strip.style.width = `calc(${newRightPct}% - 2px)`;
-                            storageWrite('ytkit_split_ratio', 100 - newRightPct);
                         });
                     };
-                    const onUp = () => {
+                    const cleanup = () => {
                         if (_dragRaf) cancelAnimationFrame(_dragRaf);
                         dragShield.remove();
                         document.body.style.cursor = '';
                         document.body.style.userSelect = '';
+                        this._triggerPlayerResize();
+                    };
+                    return { onDrag, cleanup, totalW, startLeftPct };
+                };
+
+                // Mouse drag
+                divider.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    const ctx = startDrag(e.clientX);
+                    if (!ctx) return;
+                    const onMove = (me) => ctx.onDrag(me.clientX);
+                    const onUp = () => {
+                        ctx.cleanup();
                         window.removeEventListener('mousemove', onMove);
                         window.removeEventListener('mouseup', onUp);
                         window.removeEventListener('blur', onUp);
                         document.removeEventListener('mouseleave', onUp);
-                        this._triggerPlayerResize();
                     };
                     window.addEventListener('mousemove', onMove);
                     window.addEventListener('mouseup', onUp);
-                    // Safety: if the user alt-tabs or the pointer leaves the
-                    // document mid-drag, the browser may never deliver a mouseup
-                    // for the button they released. Treat blur + mouseleave as
-                    // drag-end so the shield and listeners can't orphan.
                     window.addEventListener('blur', onUp);
                     document.addEventListener('mouseleave', onUp);
+                });
+
+                // Touch drag
+                divider.addEventListener('touchstart', (e) => {
+                    const t = e.touches[0];
+                    if (!t) return;
+                    e.preventDefault();
+                    const ctx = startDrag(t.clientX);
+                    if (!ctx) return;
+                    const onTouchMove = (te) => {
+                        const tt = te.touches[0];
+                        if (tt) ctx.onDrag(tt.clientX);
+                    };
+                    const onTouchEnd = () => {
+                        ctx.cleanup();
+                        window.removeEventListener('touchmove', onTouchMove);
+                        window.removeEventListener('touchend', onTouchEnd);
+                        window.removeEventListener('touchcancel', onTouchEnd);
+                    };
+                    window.addEventListener('touchmove', onTouchMove, { passive: true });
+                    window.addEventListener('touchend', onTouchEnd);
+                    window.addEventListener('touchcancel', onTouchEnd);
                 });
             },
 
@@ -5359,7 +5404,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const wrapper = this._buildOverlay();
                 this._splitWrapper = wrapper;
+                wrapper.style.opacity = '0';
                 document.body.appendChild(wrapper);
+                // Smooth fade-in on first mount
+                requestAnimationFrame(() => {
+                    wrapper.style.transition = 'opacity 0.3s ease';
+                    wrapper.style.opacity = '1';
+                });
 
                 const left  = wrapper.querySelector('#ytkit-split-left');
                 const right = wrapper.querySelector('#ytkit-split-right');
@@ -5504,10 +5555,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         const scrollEl = this._scrollTarget;
                         if (scrollEl) {
                             e.stopPropagation();
-                            if (e.deltaY < 0 && scrollEl.scrollTop <= 0) {
-                                this._collapseSplit(false);
-                                return;
-                            }
                             scrollEl.scrollTop += e.deltaY;
                         }
                     }
@@ -5544,12 +5591,63 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._windowResizeHandler = () => { if (this._isActive) this._triggerPlayerResize(); };
                 window.addEventListener('resize', this._windowResizeHandler);
 
+                // Escape key collapses split panel (or unmounts if already collapsed)
+                this._keyHandler = (e) => {
+                    if (e.key !== 'Escape' || !this._isActive) return;
+                    // Don't intercept escape when user is typing in an input/textarea
+                    const tag = document.activeElement?.tagName;
+                    if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+                    if (this._isSplit) {
+                        this._collapseSplit(true);
+                    }
+                };
+                document.addEventListener('keydown', this._keyHandler, true);
+
+                // Hide overlay during native fullscreen — overlay at z-index:9999
+                // would block player controls and conflict with browser fullscreen
+                this._fullscreenHandler = () => {
+                    const isFS = !!document.fullscreenElement;
+                    const wrapper = this._splitWrapper;
+                    if (!wrapper || !this._isActive) return;
+                    if (isFS && !this._fullscreenHidden) {
+                        this._fullscreenHidden = true;
+                        wrapper.style.display = 'none';
+                        // Restore player to natural sizing so fullscreen works
+                        const player = this._getPlayer();
+                        if (player) {
+                            this._removeStyles(player, ['position', 'top', 'left', 'width', 'height',
+                                'z-index', 'min-height', 'margin', 'padding', 'max-width', 'overflow']);
+                        }
+                        DebugManager.log('Theater', 'Overlay hidden for fullscreen');
+                    } else if (!isFS && this._fullscreenHidden) {
+                        this._fullscreenHidden = false;
+                        wrapper.style.display = 'flex';
+                        // Re-fix player in place
+                        const player = this._getPlayer();
+                        if (player) {
+                            const leftW = this._isSplit
+                                ? (wrapper.querySelector('#ytkit-split-left')?.getBoundingClientRect().width || window.innerWidth)
+                                : window.innerWidth;
+                            this._setStyles(player, {
+                                position: 'fixed', top: '0', left: '0',
+                                width: leftW + 'px', height: '100vh',
+                                'z-index': '9998', background: '#000',
+                                'min-height': '0', margin: '0', padding: '0',
+                                'max-width': 'none', overflow: 'hidden'
+                            });
+                        }
+                        this._triggerPlayerResize();
+                        DebugManager.log('Theater', 'Overlay restored after fullscreen');
+                    }
+                };
+                document.addEventListener('fullscreenchange', this._fullscreenHandler);
+
                 DebugManager.log('Theater', 'Overlay mounted');
             },
 
             // ── Expand right panel (show comments/chat) ──
             _expandSplit() {
-                if (this._isSplit || !this._isActive) return;
+                if (this._isSplit || !this._isActive || this._dismissed) return;
                 this._isSplit = true;
                 this._entering = true;
                 this._positionedEls = [];
@@ -5566,7 +5664,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const type    = this._videoType;
 
                 const closeBtn = wrapper.querySelector('#ytkit-split-close');
-                if (closeBtn) closeBtn.style.opacity = '0.3';
+                if (closeBtn) { closeBtn.style.display = 'flex'; closeBtn.style.opacity = '0.3'; }
 
                 let leftPct = parseFloat(storageRead('ytkit_split_ratio', 75));
                 if (!Number.isFinite(leftPct)) leftPct = 75;
@@ -5636,10 +5734,24 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 setTimeout(() => { if (this._entering) onExpanded(); }, 500);
 
                 // Scroll/wheel handlers on the primary scroll target
+                // Require 3 consecutive scroll-up ticks at top before collapsing
+                // to prevent accidental collapse from a single scroll gesture
                 const scrollEl = this._scrollTarget;
+                let _collapseScrollCount = 0;
+                let _collapseScrollTimer = null;
                 if (scrollEl) {
                     this._rightWheelHandler = (e) => {
-                        if (scrollEl.scrollTop === 0 && e.deltaY < 0) this._collapseSplit(false);
+                        if (scrollEl.scrollTop <= 0 && e.deltaY < 0) {
+                            _collapseScrollCount++;
+                            clearTimeout(_collapseScrollTimer);
+                            _collapseScrollTimer = setTimeout(() => { _collapseScrollCount = 0; }, 600);
+                            if (_collapseScrollCount >= 3) {
+                                _collapseScrollCount = 0;
+                                this._collapseSplit(false);
+                            }
+                        } else {
+                            _collapseScrollCount = 0;
+                        }
                     };
                     this._rightTouchStartY = 0;
                     this._rightTouchHandler = (e) => {
@@ -5682,6 +5794,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _collapseSplit(dismissed) {
                 if (!this._isSplit) return;
                 this._isSplit = false;
+                if (dismissed) this._dismissed = true;
                 // Clear `_entering` in case we collapse before the expand
                 // transition completed. Otherwise the 500 ms fallback timer in
                 // `_expandSplit` would still see `_entering === true` and call
@@ -5730,7 +5843,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._restoreChatFill(chatEl);
                 }
 
-                if (closeBtn) closeBtn.style.opacity = '0';
+                if (closeBtn) { closeBtn.style.display = 'none'; closeBtn.style.opacity = '0'; }
 
                 // Remove collapse trigger strip
                 wrapper.querySelector('#ytkit-split-collapse-strip')?.remove();
@@ -5770,6 +5883,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     window.removeEventListener('resize', this._windowResizeHandler);
                     this._windowResizeHandler = null;
                 }
+                if (this._keyHandler) {
+                    document.removeEventListener('keydown', this._keyHandler, true);
+                    this._keyHandler = null;
+                }
+                if (this._fullscreenHandler) {
+                    document.removeEventListener('fullscreenchange', this._fullscreenHandler);
+                    this._fullscreenHandler = null;
+                }
+                this._fullscreenHidden = false;
                 if (!keepClass) {
                     const masth = document.querySelector('ytd-masthead, #masthead');
                     if (masth && this._mastheadDisplay !== undefined) {
@@ -5813,6 +5935,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._splitWrapper = null;
                 this._isSplit = false;
                 this._isActive = false;
+                this._dismissed = false;
                 this._videoType = 'standard';
                 document.documentElement.classList.remove('ytkit-split-open');
                 document.documentElement.style.removeProperty('--ytkit-split-right-width');
@@ -5829,6 +5952,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const vid = getVideoId();
                 if (vid !== this._lastVideoId) {
                     this._lastVideoId = vid;
+                    this._dismissed = false;  // reset dismiss on video change
                     if (this._isActive) {
                         // Same overlay, new video — collapse + refresh type (no unmount/remount)
                         if (this._isSplit) this._collapseSplit(false);
@@ -5868,7 +5992,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             init() {
-                const css = `html.ytkit-split-active ytd-watch-flexy{display:block!important;overflow:visible!important;} html.ytkit-split-active ytd-watch-flexy #columns{max-width:100%!important;} html.ytkit-split-active ytd-masthead,html.ytkit-split-active #masthead-container{display:none!important;} html.ytkit-split-active #page-manager{margin-top:0!important;} html.ytkit-split-active ytd-app{--ytd-masthead-height:0px;} html.ytkit-split-active,html.ytkit-split-active body{overflow:hidden!important;} html.ytkit-split-active body{padding-top:0!important;} html.ytkit-split-active #player-container,html.ytkit-split-active #player-container-inner,html.ytkit-split-active #player-theater-container,html.ytkit-split-active ytd-player{width:100%!important;max-width:none!important;height:100%!important;min-height:0!important;padding:0!important;margin:0!important;} html.ytkit-split-active #movie_player{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;position:relative!important;left:auto!important;top:auto!important;} html.ytkit-split-active .html5-video-container{width:100%!important;height:100%!important;} html.ytkit-split-active video.html5-main-video{width:100%!important;height:100%!important;object-fit:contain!important;left:0!important;top:0!important;} html.ytkit-split-active ytd-player > #container,html.ytkit-split-active #player-container-inner #player{width:100%!important;height:100%!important;padding-bottom:0!important;} html.ytkit-split-active ytd-watch-flexy[flexy-header-flipper_] #player-container,html.ytkit-split-active ytd-watch-flexy[theater] #player-container,html.ytkit-split-active ytd-watch-flexy #player-container{width:100%!important;max-width:none!important;} #ytkit-split-right::-webkit-scrollbar{width:5px;} #ytkit-split-right::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.14);border-radius:3px;} #ytkit-split-right::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.28);} .ytkit-divider-pip{opacity:0;transition:opacity 0.2s ease;} #ytkit-split-divider:hover .ytkit-divider-pip{opacity:1;} html.ytkit-split-active #below[style*="position:fixed"],html.ytkit-split-active #below[style*="position:fixed"]{scrollbar-width:thin!important;scrollbar-color:rgba(255,255,255,0.12) transparent!important;font-size:13px!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata{margin:-12px 0 0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata .item{padding:0!important;margin:0!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata #title{font-size:15px!important;line-height:1.3!important;margin-bottom:2px!important;} html.ytkit-split-active #below[style*="position"] #owner{margin:2px 0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] #actions{flex-wrap:wrap!important;max-width:100%!important;margin:0!important;padding:2px 0!important;gap:4px!important;overflow:visible!important;} html.ytkit-split-active #below[style*="position"] #actions ytd-menu-renderer,html.ytkit-split-active #below[style*="position"] #top-level-buttons-computed{flex-wrap:wrap!important;gap:2px!important;overflow:visible!important;} html.ytkit-split-active #below[style*="position"] #actions button,html.ytkit-split-active #below[style*="position"] #actions ytd-button-renderer,html.ytkit-split-active #below[style*="position"] #actions ytd-toggle-button-renderer{transform:scale(0.88)!important;transform-origin:center!important;} html.ytkit-split-active #below[style*="position"] ytd-text-inline-expander,html.ytkit-split-active #below[style*="position"] ytd-text-inline-expander > div{padding:0!important;margin:0!important;max-width:100%!important;word-break:break-word!important;font-size:12px!important;line-height:1.4!important;} html.ytkit-split-active #below[style*="position"] #description-inline-expander{margin:4px 0!important;padding:6px 8px!important;background:rgba(255,255,255,0.04)!important;border-radius:6px!important;} html.ytkit-split-active #below[style*="position"] ytd-comments{margin:0!important;padding:0 0 40px!important;} html.ytkit-split-active #below[style*="position"] ytd-comments-header-renderer,html.ytkit-split-active #below[style*="position"] ytd-comments-header-renderer > div{padding:0!important;margin:0!important;} html.ytkit-split-active #below[style*="position"] #count.ytd-comments-header-renderer{font-size:13px!important;margin:6px 0 2px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-simplebox-renderer{padding:0!important;margin:0 0 4px!important;transform:scale(0.92)!important;transform-origin:top left!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-thread-renderer{margin:0!important;padding:6px 4px!important;border-bottom:1px solid rgba(255,255,255,0.06)!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-thread-renderer:last-child{border-bottom:none!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer{margin:0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail{width:24px!important;height:24px!important;margin-right:8px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail img,html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail yt-img-shadow{width:24px!important;height:24px!important;border-radius:50%!important;} html.ytkit-split-active #below[style*="position"] #header-author{margin-bottom:1px!important;} html.ytkit-split-active #below[style*="position"] #author-text{font-size:12px!important;} html.ytkit-split-active #below[style*="position"] #published-time-text{font-size:11px!important;} html.ytkit-split-active #below[style*="position"] #content-text{font-size:13px!important;line-height:1.35!important;margin:0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] #action-buttons{margin-top:2px!important;} html.ytkit-split-active #below[style*="position"] #action-buttons ytd-toggle-button-renderer,html.ytkit-split-active #below[style*="position"] #action-buttons #reply-button-end{transform:scale(0.85)!important;transform-origin:left center!important;} html.ytkit-split-active #below[style*="position"] #action-buttons #vote-count-middle{font-size:11px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-replies-renderer{margin-left:28px!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-replies-renderer #expander-contents{padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-item-section-renderer,html.ytkit-split-active #below[style*="position"] ytd-item-section-renderer > #contents{padding:0!important;margin:0!important;max-width:100%!important;box-sizing:border-box!important;} html.ytkit-split-active #below[style*="position"] yt-formatted-string{max-width:100%!important;word-break:break-word!important;} html.ytkit-split-active #ytkit-split-right{border:none!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position:fixed"],html.ytkit-split-active ytd-live-chat-frame[style*="position:fixed"],html.ytkit-split-active #chat[style*="position:fixed"],html.ytkit-split-active #chat[style*="position:fixed"]{scrollbar-width:thin!important;scrollbar-color:rgba(255,255,255,0.15) transparent!important;margin:0!important;max-width:none!important;border-radius:0!important;padding:0 6px 0 0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] iframe,html.ytkit-split-active #chat[style*="position"] iframe{width:100%!important;height:100%!important;min-height:0!important;border:none!important;border-radius:0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] #container,html.ytkit-split-active #chat[style*="position"] #container{width:100%!important;height:100%!important;max-height:none!important;min-height:0!important;border-radius:0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] #show-hide-button,html.ytkit-split-active #chat[style*="position"] #show-hide-button{display:none!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"],html.ytkit-split-active #chat[style*="position"]{min-height:0!important;max-height:none!important;} #ytkit-split-close{position:absolute;bottom:16px;right:16px;z-index:25;width:30px;height:30px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);color:rgba(255,255,255,0.55);display:none;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.15s;pointer-events:auto;} #ytkit-split-close:hover{background:rgba(220,38,38,0.75);color:#fff;opacity:1!important;} #ytkit-split-collapse-strip{position:fixed;top:0;right:0;height:24px;z-index:10002;cursor:n-resize;background:transparent;transition:background 0.2s;pointer-events:auto;} #ytkit-split-collapse-strip:hover{background:linear-gradient(180deg,rgba(255,255,255,0.06) 0%,transparent 100%);} #ytkit-split-collapse-strip::after{content:'';display:block;width:24px;height:2px;background:rgba(255,255,255,0.12);border-radius:1px;margin:8px auto 0;opacity:0;transition:opacity 0.2s;} #ytkit-split-collapse-strip:hover::after{opacity:1;} html.ytkit-split-active #secondary,html.ytkit-split-active #below,html.ytkit-split-active #player-full-bleed-container,html.ytkit-split-active #columns,html.ytkit-split-active ytd-watch-flexy{view-transition-name:none!important;} html.ytkit-split-active ytd-live-chat-frame#chat,html.ytkit-split-active ytd-live-chat-frame{display:flex!important;flex-direction:column!important;max-height:none!important;min-height:0!important;visibility:visible!important;} html.ytkit-split-active #chat-container{display:block!important;height:auto!important;max-height:none!important;overflow:visible!important;visibility:visible!important;} html.ytkit-split-active ytd-live-chat-frame#chat>iframe,html.ytkit-split-active ytd-live-chat-frame>iframe{flex:1!important;height:100%!important;min-height:0!important;max-height:none!important;} html.ytkit-split-active ytd-watch-flexy.loading ytd-live-chat-frame#chat,html.ytkit-split-active ytd-watch-flexy:not([ghost-cards-enabled]).loading #chat{visibility:visible!important;}  `;
+                const css = `html.ytkit-split-active ytd-watch-flexy{display:block!important;overflow:visible!important;} html.ytkit-split-active ytd-watch-flexy #columns{max-width:100%!important;} html.ytkit-split-active ytd-masthead,html.ytkit-split-active #masthead-container{display:none!important;} html.ytkit-split-active #page-manager{margin-top:0!important;} html.ytkit-split-active ytd-app{--ytd-masthead-height:0px;} html.ytkit-split-active,html.ytkit-split-active body{overflow:hidden!important;} html.ytkit-split-active body{padding-top:0!important;} html.ytkit-split-active #player-container,html.ytkit-split-active #player-container-inner,html.ytkit-split-active #player-theater-container,html.ytkit-split-active ytd-player{width:100%!important;max-width:none!important;height:100%!important;min-height:0!important;padding:0!important;margin:0!important;} html.ytkit-split-active #movie_player{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;position:relative!important;left:auto!important;top:auto!important;} html.ytkit-split-active .html5-video-container{width:100%!important;height:100%!important;} html.ytkit-split-active video.html5-main-video{width:100%!important;height:100%!important;object-fit:contain!important;left:0!important;top:0!important;} html.ytkit-split-active ytd-player > #container,html.ytkit-split-active #player-container-inner #player{width:100%!important;height:100%!important;padding-bottom:0!important;} html.ytkit-split-active ytd-watch-flexy[flexy-header-flipper_] #player-container,html.ytkit-split-active ytd-watch-flexy[theater] #player-container,html.ytkit-split-active ytd-watch-flexy #player-container{width:100%!important;max-width:none!important;} #ytkit-split-right::-webkit-scrollbar{width:5px;} #ytkit-split-right::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.14);border-radius:3px;} #ytkit-split-right::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.28);} .ytkit-divider-pip{opacity:0.4;transition:opacity 0.2s ease;} #ytkit-split-divider:hover .ytkit-divider-pip{opacity:1;} html.ytkit-split-active #below[style*="position:fixed"],html.ytkit-split-active #below[style*="position:fixed"]{scrollbar-width:thin!important;scrollbar-color:rgba(255,255,255,0.12) transparent!important;font-size:13px!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata{margin:-12px 0 0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata .item{padding:0!important;margin:0!important;} html.ytkit-split-active #below[style*="position"] ytd-watch-metadata #title{font-size:15px!important;line-height:1.3!important;margin-bottom:2px!important;} html.ytkit-split-active #below[style*="position"] #owner{margin:2px 0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] #actions{flex-wrap:wrap!important;max-width:100%!important;margin:0!important;padding:2px 0!important;gap:4px!important;overflow:visible!important;} html.ytkit-split-active #below[style*="position"] #actions ytd-menu-renderer,html.ytkit-split-active #below[style*="position"] #top-level-buttons-computed{flex-wrap:wrap!important;gap:2px!important;overflow:visible!important;} html.ytkit-split-active #below[style*="position"] #actions button,html.ytkit-split-active #below[style*="position"] #actions ytd-button-renderer,html.ytkit-split-active #below[style*="position"] #actions ytd-toggle-button-renderer{transform:scale(0.88)!important;transform-origin:center!important;} html.ytkit-split-active #below[style*="position"] ytd-text-inline-expander,html.ytkit-split-active #below[style*="position"] ytd-text-inline-expander > div{padding:0!important;margin:0!important;max-width:100%!important;word-break:break-word!important;font-size:12px!important;line-height:1.4!important;} html.ytkit-split-active #below[style*="position"] #description-inline-expander{margin:4px 0!important;padding:6px 8px!important;background:rgba(255,255,255,0.04)!important;border-radius:6px!important;} html.ytkit-split-active #below[style*="position"] ytd-comments{margin:0!important;padding:0 0 40px!important;} html.ytkit-split-active #below[style*="position"] ytd-comments-header-renderer,html.ytkit-split-active #below[style*="position"] ytd-comments-header-renderer > div{padding:0!important;margin:0!important;} html.ytkit-split-active #below[style*="position"] #count.ytd-comments-header-renderer{font-size:13px!important;margin:6px 0 2px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-simplebox-renderer{padding:0!important;margin:0 0 4px!important;transform:scale(0.92)!important;transform-origin:top left!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-thread-renderer{margin:0!important;padding:6px 4px!important;border-bottom:1px solid rgba(255,255,255,0.06)!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-thread-renderer:last-child{border-bottom:none!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer{margin:0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail{width:24px!important;height:24px!important;margin-right:8px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail img,html.ytkit-split-active #below[style*="position"] ytd-comment-renderer #author-thumbnail yt-img-shadow{width:24px!important;height:24px!important;border-radius:50%!important;} html.ytkit-split-active #below[style*="position"] #header-author{margin-bottom:1px!important;} html.ytkit-split-active #below[style*="position"] #author-text{font-size:12px!important;} html.ytkit-split-active #below[style*="position"] #published-time-text{font-size:11px!important;} html.ytkit-split-active #below[style*="position"] #content-text{font-size:13px!important;line-height:1.35!important;margin:0!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] #action-buttons{margin-top:2px!important;} html.ytkit-split-active #below[style*="position"] #action-buttons ytd-toggle-button-renderer,html.ytkit-split-active #below[style*="position"] #action-buttons #reply-button-end{transform:scale(0.85)!important;transform-origin:left center!important;} html.ytkit-split-active #below[style*="position"] #action-buttons #vote-count-middle{font-size:11px!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-replies-renderer{margin-left:28px!important;padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-comment-replies-renderer #expander-contents{padding:0!important;} html.ytkit-split-active #below[style*="position"] ytd-item-section-renderer,html.ytkit-split-active #below[style*="position"] ytd-item-section-renderer > #contents{padding:0!important;margin:0!important;max-width:100%!important;box-sizing:border-box!important;} html.ytkit-split-active #below[style*="position"] yt-formatted-string{max-width:100%!important;word-break:break-word!important;} html.ytkit-split-active #ytkit-split-right{border:none!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position:fixed"],html.ytkit-split-active ytd-live-chat-frame[style*="position:fixed"],html.ytkit-split-active #chat[style*="position:fixed"],html.ytkit-split-active #chat[style*="position:fixed"]{scrollbar-width:thin!important;scrollbar-color:rgba(255,255,255,0.15) transparent!important;margin:0!important;max-width:none!important;border-radius:0!important;padding:0 6px 0 0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] iframe,html.ytkit-split-active #chat[style*="position"] iframe{width:100%!important;height:100%!important;min-height:0!important;border:none!important;border-radius:0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] #container,html.ytkit-split-active #chat[style*="position"] #container{width:100%!important;height:100%!important;max-height:none!important;min-height:0!important;border-radius:0!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"] #show-hide-button,html.ytkit-split-active #chat[style*="position"] #show-hide-button{display:none!important;} html.ytkit-split-active ytd-live-chat-frame[style*="position"],html.ytkit-split-active #chat[style*="position"]{min-height:0!important;max-height:none!important;} #ytkit-split-close{position:absolute;bottom:16px;right:16px;z-index:25;width:30px;height:30px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);color:rgba(255,255,255,0.55);display:none;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.15s;pointer-events:auto;} #ytkit-split-close:hover{background:rgba(220,38,38,0.75);color:#fff;opacity:1!important;} #ytkit-split-collapse-strip{position:fixed;top:0;right:0;height:32px;z-index:10002;cursor:n-resize;background:linear-gradient(180deg,rgba(255,255,255,0.03) 0%,transparent 100%);transition:background 0.2s;pointer-events:auto;} #ytkit-split-collapse-strip:hover{background:linear-gradient(180deg,rgba(255,255,255,0.1) 0%,transparent 100%);} #ytkit-split-collapse-strip::after{content:'';display:block;width:32px;height:3px;background:rgba(255,255,255,0.2);border-radius:2px;margin:12px auto 0;transition:opacity 0.2s,background 0.2s;} #ytkit-split-collapse-strip:hover::after{background:rgba(255,255,255,0.5);} html.ytkit-split-active #secondary,html.ytkit-split-active #below,html.ytkit-split-active #player-full-bleed-container,html.ytkit-split-active #columns,html.ytkit-split-active ytd-watch-flexy{view-transition-name:none!important;} html.ytkit-split-active ytd-live-chat-frame#chat,html.ytkit-split-active ytd-live-chat-frame{display:flex!important;flex-direction:column!important;max-height:none!important;min-height:0!important;visibility:visible!important;} html.ytkit-split-active #chat-container{display:block!important;height:auto!important;max-height:none!important;overflow:visible!important;visibility:visible!important;} html.ytkit-split-active ytd-live-chat-frame#chat>iframe,html.ytkit-split-active ytd-live-chat-frame>iframe{flex:1!important;height:100%!important;min-height:0!important;max-height:none!important;} html.ytkit-split-active ytd-watch-flexy.loading ytd-live-chat-frame#chat,html.ytkit-split-active ytd-watch-flexy:not([ghost-cards-enabled]).loading #chat{visibility:visible!important;}  `;
                 this._styleEl = injectStyle(stripCommentRestyleCss(css), this.id, true);
                 this._splitMetaStyleEl?.remove();
                 const splitMetaCss = `
@@ -6977,6 +7101,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             destroy() {
                 this._unmount();
+                this._lastVideoId = null;
                 this._styleEl?.remove();
                 this._splitMetaStyleEl?.remove();
                 this._splitMetaStyleEl = null;
@@ -7007,6 +7132,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _lastProcessedVideoId: null,
             _lastAppliedTarget: null,
             _mediaEventHandler: null,
+            _qualityLocked: false,
             _settingsHandler: null,
             _styleElement: null,
             _retryTimers: [],
@@ -7021,6 +7147,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 addNavigateRule(this._navRuleId, () => {
                     this._lastProcessedVideoId = null;
                     this._lastAppliedTarget = null;
+                    this._qualityLocked = false;
                     this._scheduleQualityAttempts();
                     this._startQualityWatchdog();
                 });
@@ -7028,10 +7155,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const target = event?.target;
                     if (!(target instanceof HTMLMediaElement)) return;
                     if (!target.closest('#movie_player, .html5-video-player, ytd-player')) return;
-                    if (event.type === 'loadedstart' || event.type === 'loadedmetadata' || event.type === 'canplay') {
+                    // Once quality is locked for this video, ignore seek-triggered events
+                    if (this._qualityLocked && getVideoId() === this._lastProcessedVideoId) return;
+                    if (event.type === 'loadedstart' || event.type === 'loadedmetadata') {
+                        // New video source — reset lock and apply quality
+                        this._qualityLocked = false;
                         this._scheduleQualityAttempts();
                         this._startQualityWatchdog();
                         return;
+                    }
+                    if (event.type === 'canplay' || event.type === 'loadeddata' || event.type === 'playing') {
+                        if (this._lastAppliedTarget) return; // Already applied, skip
                     }
                     this.setQuality(this._getPlayer(), { force: true });
                     this._startQualityWatchdog();
@@ -7044,6 +7178,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     if (key === 'preferredQuality') {
                         this._lastProcessedVideoId = null;
                         this._lastAppliedTarget = null;
+                        this._qualityLocked = false;
                         this._scheduleQualityAttempts();
                         this._startQualityWatchdog();
                     } else if (key === 'hideQualityPopup') {
@@ -7072,6 +7207,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._styleElement?.remove();
                 this._lastProcessedVideoId = null;
                 this._lastAppliedTarget = null;
+                this._qualityLocked = false;
                 this._mediaEventHandler = null;
                 this._settingsHandler = null;
             },
@@ -7157,6 +7293,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const success = await this._setQualityViaDOM(player);
                     if (success) {
                         this._lastAppliedTarget = appState.settings.preferredQuality || 'max';
+                        this._qualityLocked = true;
                         this._clearRetryTimers();
                         this._clearWatchdog();
                     }
@@ -9613,11 +9750,24 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 });
                 const target = document.querySelector('ytd-popup-container') || document.body;
                 this._observer.observe(target, { childList: true, subtree: true });
+                // Catch YouTube's custom popup event directly — more reliable
+                // than MutationObserver alone for the "Are you still watching?" dialog
+                this._popupHandler = (e) => {
+                    const nodeName = e?.detail?.nodeName || '';
+                    if (nodeName === 'YT-CONFIRM-DIALOG-RENDERER' || nodeName === 'YTMUSIC-YOU-THERE-RENDERER') {
+                        this._dismiss();
+                    }
+                };
+                document.addEventListener('yt-popup-opened', this._popupHandler);
                 addNavigateRule('stillWatching', () => this._dismiss());
             },
             destroy() {
                 clearTimeout(this._debounceTimer);
                 this._observer?.disconnect(); this._observer = null;
+                if (this._popupHandler) {
+                    document.removeEventListener('yt-popup-opened', this._popupHandler);
+                    this._popupHandler = null;
+                }
                 removeNavigateRule('stillWatching');
             }
         },
@@ -9935,15 +10085,18 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         try {
                             navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).catch(() => {});
                         } catch (_) { /* ClipboardItem unsupported — ignore */ }
-                        // Download
+                        // Download — include video title for easier identification
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         const videoId = getVideoId() || 'video';
                         const time = Math.floor(video.currentTime);
+                        const rawTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || '';
+                        const safeTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').substring(0, 80).trim();
+                        const nameParts = [videoId, safeTitle, `${time}s`].filter(Boolean);
                         a.href = url;
-                        a.download = `${videoId}_${time}s.png`;
+                        a.download = `${nameParts.join('_')}.png`;
                         a.click();
-                        URL.revokeObjectURL(url);
+                        setTimeout(() => URL.revokeObjectURL(url), 5000);
                         showToast('Screenshot captured', '#22c55e');
                     }, 'image/png');
                 } catch (e) {
@@ -10019,11 +10172,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             init() {
-                setTimeout(() => this._applySpeed(), 3000);
+                this._applyTimer = setTimeout(() => this._applySpeed(), 3000);
                 addNavigateRule('channelSpeed', () => {
                     this._saveCurrentSpeed();
                     this._applied = false;
-                    setTimeout(() => this._applySpeed(), 3000);
+                    clearTimeout(this._applyTimer);
+                    this._applyTimer = setTimeout(() => this._applySpeed(), 3000);
                 });
                 // Observe speed changes via ratechange event
                 this._rateHandler = () => this._saveCurrentSpeed();
@@ -10031,6 +10185,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
             destroy() {
                 this._saveCurrentSpeed();
+                clearTimeout(this._applyTimer);
+                this._applyTimer = null;
                 removeNavigateRule('channelSpeed');
                 document.removeEventListener('ratechange', this._rateHandler, true);
             }
@@ -10203,17 +10359,23 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._active = true;
                 const video = getMainVideoElement();
                 if (!video) return;
-                this._interval = setInterval(() => {
-                    if (!this._active || video.paused) return;
+                this._loopVideo = video;
+                this._loopHandler = () => {
+                    if (!this._active) return;
                     if (video.currentTime >= this._pointB) video.currentTime = this._pointA;
-                }, 100);
+                };
+                video.addEventListener('timeupdate', this._loopHandler);
                 this._updateBtn();
                 showToast(`Looping ${this._formatTime(this._pointA)} - ${this._formatTime(this._pointB)}`, '#22c55e');
             },
 
             _stopLoop() {
                 this._active = false;
-                if (this._interval) { clearInterval(this._interval); this._interval = null; }
+                if (this._loopHandler && this._loopVideo) {
+                    this._loopVideo.removeEventListener('timeupdate', this._loopHandler);
+                }
+                this._loopHandler = null;
+                this._loopVideo = null;
                 this._updateBtn();
             },
 
@@ -10900,6 +11062,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             init() {
+                if (this._interval) clearInterval(this._interval);
                 this._interval = setInterval(() => this._tick(), 10000);
             },
             destroy() {
@@ -11021,11 +11184,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             init() {
-                this._interval = setInterval(() => this._check(), 1000);
+                this._timeupdateHandler = () => this._check();
+                document.addEventListener('timeupdate', this._timeupdateHandler, true);
                 addNavigateRule('autoSkipCh', () => { this._skippedAt = null; });
             },
             destroy() {
-                if (this._interval) { clearInterval(this._interval); this._interval = null; }
+                if (this._timeupdateHandler) {
+                    document.removeEventListener('timeupdate', this._timeupdateHandler, true);
+                    this._timeupdateHandler = null;
+                }
                 removeNavigateRule('autoSkipCh');
             }
         },
@@ -11392,7 +11559,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 // the glow isn't visible and it was costing CPU/GPU on background tabs.
                 // Back off the polling interval to 2s while hidden so we don't spin.
                 if (document.hidden) {
-                    this._raf = requestAnimationFrame(() => setTimeout(() => this._sample(video), 2000));
+                    this._hiddenTimer = setTimeout(() => this._sample(video), 2000);
                     return;
                 }
                 try {
@@ -11407,7 +11574,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         this._glowEl.style.background = `radial-gradient(ellipse at center, rgba(${r},${g},${b},0.6) 0%, transparent 70%)`;
                     }
                 } catch(e) { /* cross-origin video, silently skip */ }
-                this._raf = requestAnimationFrame(() => setTimeout(() => this._sample(video), 500));
+                this._raf = requestAnimationFrame(() => {
+                    this._hiddenTimer = setTimeout(() => this._sample(video), 500);
+                });
             },
 
             init() {
@@ -11421,6 +11590,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _cleanup() {
                 this._active = false;
                 if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
+                if (this._hiddenTimer) { clearTimeout(this._hiddenTimer); this._hiddenTimer = null; }
                 this._glowEl?.remove(); this._glowEl = null;
                 this._canvas = null; this._ctx = null;
             },
@@ -11907,6 +12077,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._dismissed = false;
 
                 // Update progress periodically
+                if (this._progressInterval) clearInterval(this._progressInterval);
                 this._progressInterval = setInterval(() => {
                     const v = document.querySelector('video');
                     if (v && v.duration) {
@@ -11915,15 +12086,18 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     }
                 }, 500);
 
-                // Show/hide based on scroll
-                this._scrollHandler = () => {
-                    if (this._dismissed) return;
-                    const player = document.querySelector('#movie_player, #player');
-                    if (!player) return;
-                    const rect = player.getBoundingClientRect();
-                    bar.style.display = rect.bottom < -50 ? 'flex' : 'none';
-                };
-                window.addEventListener('scroll', this._scrollHandler, { passive: true });
+                // Show/hide when player scrolls out of view (IntersectionObserver is
+                // far more efficient than a scroll listener — fires only on threshold
+                // crossings instead of every scroll tick)
+                const player = document.querySelector('#movie_player, #player');
+                if (player) {
+                    this._playerObserver = new IntersectionObserver((entries) => {
+                        if (this._dismissed) return;
+                        const entry = entries[0];
+                        bar.style.display = entry.isIntersecting ? 'none' : 'flex';
+                    }, { threshold: 0.1 });
+                    this._playerObserver.observe(player);
+                }
             },
 
             init() {
@@ -11935,7 +12109,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             _cleanup() {
-                if (this._scrollHandler) { window.removeEventListener('scroll', this._scrollHandler); this._scrollHandler = null; }
+                if (this._playerObserver) { this._playerObserver.disconnect(); this._playerObserver = null; }
                 if (this._progressInterval) { clearInterval(this._progressInterval); this._progressInterval = null; }
                 this._bar?.remove(); this._bar = null;
                 this._dismissed = false;
@@ -12917,17 +13091,24 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 this._apply();
+                this._lastCss = appState.settings.customCssCode || '';
                 // Re-apply when settings change
-                this._settingsObserver = setInterval(() => {
-                    const current = appState.settings.customCssCode || '';
-                    if (this._lastCss !== current) {
-                        this._lastCss = current;
-                        this._apply();
+                this._settingsHandler = (event) => {
+                    if (event?.detail?.key === 'customCssCode' || event?.detail?.key === undefined) {
+                        const current = appState.settings.customCssCode || '';
+                        if (this._lastCss !== current) {
+                            this._lastCss = current;
+                            this._apply();
+                        }
                     }
-                }, 2000);
+                };
+                document.addEventListener('ytkit-settings-changed', this._settingsHandler);
             },
             destroy() {
-                if (this._settingsObserver) { clearInterval(this._settingsObserver); this._settingsObserver = null; }
+                if (this._settingsHandler) {
+                    document.removeEventListener('ytkit-settings-changed', this._settingsHandler);
+                    this._settingsHandler = null;
+                }
                 this._styleEl?.remove(); this._styleEl = null;
             }
         },
@@ -14045,7 +14226,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _styleElement: null,
             init() {
                 const accent = appState.settings.themeAccentColor;
-                if (!accent || !/^#[0-9a-fA-F]{3,8}$/.test(accent)) return;
+                if (!accent || !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(accent)) return;
                 const css = `
                     :root { --ytkit-accent: ${accent} !important; }
                     .ytp-swatch-background-color, .ytp-play-progress,
@@ -14429,13 +14610,23 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const cats = this._getEnabledCategories();
                 if (!cats.length) return [];
                 try {
+                    // Privacy-preserving hash-prefix lookup: only send the first
+                    // 4 chars of the SHA-256 hash so the server never sees the
+                    // full video ID.  Client-side filter for the exact match.
+                    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(videoId));
+                    const hashArray = Array.from(new Uint8Array(hashBuffer));
+                    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                    const prefix = hashHex.substring(0, 4);
                     const { data } = await extensionFetchJson({
                         method: 'GET',
-                        url: `https://sponsor.ajay.app/api/skipSegments?videoID=${encodeURIComponent(videoId)}&categories=${encodeURIComponent(JSON.stringify(cats))}`,
+                        url: `https://sponsor.ajay.app/api/skipSegments/${prefix}?categories=${encodeURIComponent(JSON.stringify(cats))}`,
                         timeout: 8000,
                     });
                     if (!Array.isArray(data)) return [];
-                    return data.filter(s => Array.isArray(s.segment) && s.segment.length === 2);
+                    // Filter for exact video ID match from hash-prefix results
+                    const match = data.find(entry => entry.videoID === videoId);
+                    if (!match || !Array.isArray(match.segments)) return [];
+                    return match.segments.filter(s => Array.isArray(s.segment) && s.segment.length === 2);
                 } catch (_) {
                     return [];
                 }
@@ -14466,13 +14657,50 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     if (currentTime >= start && currentTime < end - 0.3) {
                         video.currentTime = end;
                         DebugManager.log('SponsorBlock', `Skipped ${seg.category}: ${start.toFixed(1)}s -> ${end.toFixed(1)}s`);
-                        if (appState.settings.sbShowSkipNotice && seg.category !== 'sponsor') {
-                            const catName = seg.category.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                            showToast(`Skipped: ${catName}`, this._CATEGORY_COLORS[seg.category] || '#00d400', { duration: 2000 });
-                        }
-                        break;
+                        // Skip notification removed — toasts over the video are distracting
+                        // Reschedule after skip to handle next segment
+                        this._scheduleNextSkip();
+                        return;
                     }
                 }
+            },
+
+            // Scheduled skip: instead of 500ms polling, compute the delay to the
+            // next segment boundary and schedule a precise setTimeout.  Falls back
+            // to a 2s ceiling so we never wait forever if currentTime drifts.
+            _scheduleNextSkip() {
+                this._clearSchedule();
+                const video = getMainVideoElement();
+                if (!video || video.paused || !this._segments.length) return;
+                const currentTime = video.currentTime;
+                const rate = video.playbackRate || 1;
+                const enabledCats = this._getEnabledCategories();
+                let minDelay = Infinity;
+                for (const seg of this._segments) {
+                    if (!enabledCats.includes(seg.category)) continue;
+                    const [start, end] = seg.segment;
+                    if (currentTime >= start && currentTime < end - 0.3) {
+                        // Already inside a segment — skip immediately
+                        minDelay = 0;
+                        break;
+                    }
+                    if (start > currentTime) {
+                        const wallMs = ((start - currentTime) / rate) * 1000;
+                        if (wallMs < minDelay) minDelay = wallMs;
+                    }
+                }
+                if (minDelay === Infinity) return; // No upcoming segments
+                // Fire 100ms early for precision, cap at 2s to stay responsive
+                const delay = Math.max(0, Math.min(minDelay - 100, 2000));
+                this._skipTimer = setTimeout(() => {
+                    this._checkSkip();
+                    // If checkSkip didn't skip (edge of segment), reschedule
+                    if (!video.paused) this._scheduleNextSkip();
+                }, delay);
+            },
+
+            _clearSchedule() {
+                if (this._skipTimer) { clearTimeout(this._skipTimer); this._skipTimer = null; }
             },
 
             _renderBarSegments() {
@@ -14502,14 +14730,22 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             init() {
                 const self = this;
                 this._styleEl = injectStyle('.ytkit-sb-segment { border-radius: 1px; }', this.id, true);
-                // Guard against stacking if init() runs twice before destroy()
-                if (this._skipHandler) clearInterval(this._skipHandler);
-                this._skipHandler = setInterval(() => self._checkSkip(), 500);
+                // Event-driven skip scheduling: reschedule on play/seek/rate changes
+                this._playHandler = () => self._scheduleNextSkip();
+                this._seekHandler = () => self._scheduleNextSkip();
+                this._pauseHandler = () => self._clearSchedule();
+                document.addEventListener('playing', this._playHandler, true);
+                document.addEventListener('seeked', this._seekHandler, true);
+                document.addEventListener('ratechange', this._seekHandler, true);
+                document.addEventListener('pause', this._pauseHandler, true);
                 const reloadSegments = () => {
                     self._videoId = null;
                     self._segments = [];
                     self._clearBarSegments();
-                    setTimeout(() => self._loadForVideo(), 800);
+                    self._clearSchedule();
+                    setTimeout(() => {
+                        self._loadForVideo().then(() => self._scheduleNextSkip());
+                    }, 800);
                 };
                 addNavigateRule(this._navRuleId, reloadSegments);
                 // Also watch for video duration becoming available (for bar rendering)
@@ -14524,7 +14760,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             destroy() {
-                if (this._skipHandler) clearInterval(this._skipHandler);
+                this._clearSchedule();
+                if (this._playHandler) document.removeEventListener('playing', this._playHandler, true);
+                if (this._seekHandler) {
+                    document.removeEventListener('seeked', this._seekHandler, true);
+                    document.removeEventListener('ratechange', this._seekHandler, true);
+                }
+                if (this._pauseHandler) document.removeEventListener('pause', this._pauseHandler, true);
                 removeNavigateRule(this._navRuleId);
                 this._barObserver?.disconnect();
                 this._clearBarSegments();
@@ -14543,7 +14785,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         { id: 'sbCat_preview', name: 'Skip Previews', description: 'Preview or recap of upcoming content', group: 'Content', icon: 'fast-forward', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
         { id: 'sbCat_filler', name: 'Skip Filler', description: 'Tangential or filler content', group: 'Content', icon: 'scissors', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
         { id: 'sbCat_poi_highlight', name: 'Highlight Point of Interest', description: 'Jump to the highlight/point of interest (disabled by default)', group: 'Content', icon: 'star', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
-        { id: 'sbShowSkipNotice', name: 'Show Skip Notice', description: 'Show a toast notification when a segment is skipped', group: 'Content', icon: 'message-circle', isSubFeature: true, parentId: 'sponsorBlock', init(){}, destroy(){} },
 
         // ── DeArrow ──
         {
@@ -15509,6 +15750,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             if (_wasPanelOpen && !isOpen) {
                 _panelCleanups.forEach(fn => { try { fn(); } catch(e) {} });
                 _panelCleanups.length = 0;
+                // Allow panel listeners to re-attach on next open
+                _panelUIListenersAttached = false;
             }
             _wasPanelOpen = isOpen;
         });
@@ -16435,7 +16678,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             badge.id = 'ytkit-whats-new-badge';
             badge.style.cssText = 'position:absolute;top:-3px;right:-8px;width:8px;height:8px;background:#ef4444;border-radius:50%;animation:ytkit-badge-pulse 2s infinite;';
             versionSpan.appendChild(badge);
-            versionSpan.title = `New in v${YTKIT_VERSION}: Fixed resolution selector, codec selector, MAIN world bridge`;
+            versionSpan.title = `New in v${YTKIT_VERSION}: Performance audit — fixed listener leaks, replaced polling with events, seek stutter fix`;
             versionSpan.onclick = () => {
                 storageWrite('ytkit_last_seen_version', CURRENT_VER);
                 badge.remove();
@@ -16810,17 +17053,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         if (_panelUIListenersAttached || !document.getElementById('ytkit-settings-panel')) return;
         _panelUIListenersAttached = true;
 
-        // Close panel
+        // Close panel + Tab navigation (single delegated handler)
         doc.addEventListener('click', (e) => {
             if (!isSettingsPanelOpen()) return;
             if (e.target.closest('.ytkit-close') || e.target.matches('#ytkit-overlay')) {
                 setSettingsPanelOpen(false);
+                return;
             }
-        });
-
-        // Tab navigation
-        doc.addEventListener('click', (e) => {
-            if (!isSettingsPanelOpen()) return;
             const navBtn = e.target.closest('.ytkit-nav-btn');
             if (navBtn) {
                 doc.querySelectorAll('.ytkit-nav-btn').forEach(btn => btn.classList.remove('active'));
@@ -16831,9 +17070,38 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     pane.classList.add('active');
                     pane.scrollTop = 0;
                 }
-                // Also scroll the main content area
                 const contentArea = doc.querySelector('.ytkit-content');
                 if (contentArea) contentArea.scrollTop = 0;
+                // Clear search on tab click
+                const searchInput = doc.getElementById('ytkit-search');
+                if (searchInput && searchInput.value) {
+                    searchInput.value = '';
+                    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                return;
+            }
+            // Export/Import
+            if (e.target.closest('#ytkit-export')) {
+                const configString = settingsManager.exportAllSettings();
+                handleFileExport('astra_deck_settings.json', configString);
+                createToast('Settings exported successfully', 'success');
+                return;
+            }
+            if (e.target.closest('#ytkit-import')) {
+                handleFileImport(async (content) => {
+                    const success = settingsManager.importAllSettings(content);
+                    if (success) {
+                        handleExternalStorageChanges({
+                            [STORAGE_KEYS.settings]: { newValue: StorageManager.get(STORAGE_KEYS.settings, settingsManager.defaults) },
+                            [STORAGE_KEYS.hiddenVideos]: { newValue: StorageManager.get(STORAGE_KEYS.hiddenVideos, []) },
+                            [STORAGE_KEYS.blockedChannels]: { newValue: StorageManager.get(STORAGE_KEYS.blockedChannels, []) },
+                            [STORAGE_KEYS.bookmarks]: { newValue: StorageManager.get(STORAGE_KEYS.bookmarks, {}) }
+                        }, 'import', { forceApplyLocal: true });
+                        createToast('Settings imported. Changes applied live.', 'success');
+                    } else {
+                        createToast('Import failed. Invalid file format.', 'error');
+                    }
+                });
             }
         });
 
@@ -16933,18 +17201,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }
             });
         }
-
-        // Clear search on tab click
-        doc.addEventListener('click', (e) => {
-            if (!isSettingsPanelOpen()) return;
-            if (e.target.closest('.ytkit-nav-btn')) {
-                const searchInput = doc.getElementById('ytkit-search');
-                if (searchInput && searchInput.value) {
-                    searchInput.value = '';
-                    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-            }
-        });
 
         // Feature toggles
         doc.addEventListener('change', (e) => {
@@ -17161,30 +17417,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         DebugManager.log('Color', `Init failed for "${featureId}": ${err.message}`);
                     }
                 }
-            }
-        });
-        doc.addEventListener('click', (e) => {
-            if (!isSettingsPanelOpen()) return;
-            if (e.target.closest('#ytkit-export')) {
-                const configString = settingsManager.exportAllSettings();
-                handleFileExport('astra_deck_settings.json', configString);
-                createToast('Settings exported successfully', 'success');
-            }
-            if (e.target.closest('#ytkit-import')) {
-                handleFileImport(async (content) => {
-                    const success = settingsManager.importAllSettings(content);
-                    if (success) {
-                        handleExternalStorageChanges({
-                            [STORAGE_KEYS.settings]: { newValue: StorageManager.get(STORAGE_KEYS.settings, settingsManager.defaults) },
-                            [STORAGE_KEYS.hiddenVideos]: { newValue: StorageManager.get(STORAGE_KEYS.hiddenVideos, []) },
-                            [STORAGE_KEYS.blockedChannels]: { newValue: StorageManager.get(STORAGE_KEYS.blockedChannels, []) },
-                            [STORAGE_KEYS.bookmarks]: { newValue: StorageManager.get(STORAGE_KEYS.bookmarks, {}) }
-                        }, 'import', { forceApplyLocal: true });
-                        createToast('Settings imported. Changes applied live.', 'success');
-                    } else {
-                        createToast('Import failed. Invalid file format.', 'error');
-                    }
-                });
             }
         });
     }
