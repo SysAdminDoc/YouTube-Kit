@@ -1682,6 +1682,15 @@ return response;
             } catch (err) {
                 DebugManager.log('Download', 'Poll failed: ' + err.message);
                 clearInterval(pollInterval);
+                // Show error state on the progress panel so user knows the download died
+                fill.classList.remove('is-success');
+                fill.classList.add('is-error');
+                title.textContent = 'Connection to downloader lost';
+                pct.textContent = 'Error';
+                spd.textContent = '';
+                eta.textContent = '';
+                showToast('Lost connection to local downloader', '#ef4444', { duration: 5 });
+                setTimeout(() => panel.remove(), 6000);
             }
         }
 
@@ -1949,7 +1958,13 @@ return response;
     // Main download handler — the extension now relies exclusively on the local
     // yt-dlp service. If the server is unavailable, we guide the user through the
     // single install path instead of branching into web or direct-download fallbacks.
+    let _downloadInProgress = false;
     async function ytKitDownload(videoUrl, audioOnly) {
+        if (_downloadInProgress) {
+            showToast('A download is already in progress', '#f59e0b', { duration: 3 });
+            return;
+        }
+        _downloadInProgress = true;
         DebugManager.log('Download', `Download requested: ${videoUrl} (audio=${audioOnly})`);
         showToast(audioOnly ? 'Preparing local audio download...' : 'Preparing local video download...', '#3b82f6', { duration: 2 });
 
@@ -1963,6 +1978,7 @@ return response;
             if (!storageRead('ytkit_mediadl_prompt_dismissed', false)) {
                 MediaDLManager.showInstallPrompt(MediaDLManager._autoStartAttempted ? 'retry' : 'install');
             }
+            _downloadInProgress = false;
             return;
         }
 
@@ -1972,6 +1988,8 @@ return response;
             DebugManager.log('Download', `MediaDL download failed: ${e.message}`);
             showToast('Local downloader request failed.', '#ef4444', { duration: 4 });
             MediaDLManager.showInstallPrompt('retry');
+        } finally {
+            _downloadInProgress = false;
         }
     }
 
@@ -8917,7 +8935,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                             const regexMatch = filterStr.match(/^\/(.+)\/([gimsuy]*)$/);
                             if (regexMatch) {
                                 // Reject patterns with nested quantifiers (ReDoS risk)
-                                if (/([+*?]|\{\d+,?\d*\})\s*[+*?]|\(\?[^)]*[+*]/.test(regexMatch[1])) {
+                                // Catches: a*+, a{2}*, (a+)+, (a|b*)+, etc.
+                                const pat = regexMatch[1];
+                                const hasNestedQuantifiers = /([+*?]|\{\d+,?\d*\})\s*[+*?]/.test(pat)
+                                    || /\([^)]*[+*][^)]*\)\s*[+*?{]/.test(pat);
+                                if (hasNestedQuantifiers) {
                                     DebugManager.log('VideoHider', 'Regex rejected: nested quantifiers (ReDoS risk)');
                                 } else {
                                     const regex = new RegExp(regexMatch[1], regexMatch[2]);
@@ -9407,9 +9429,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             _showMenu(x, y) {
-                if (!this._menu) {
-                    this._menu = this._createMenu();
-                }
+                // Rebuild menu each time so it reflects current MediaDL server status
+                if (this._menu) this._menu.remove();
+                this._menu = this._createMenu();
 
                 // Position menu
                 this._menu.style.display = 'block';
@@ -11092,7 +11114,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             init() {
                 this._scheduleProcess(1500);
                 addMutationRule(this.id, () => this._process());
-                addNavigateRule('antiTranslate', () => this._scheduleProcess(2000));
+                addNavigateRule('antiTranslate', () => {
+                    // Clear processed markers so elements get re-checked with new video data
+                    document.querySelectorAll('[ytkit-antitranslate]').forEach(el => el.removeAttribute('ytkit-antitranslate'));
+                    this._scheduleProcess(2000);
+                });
             },
             destroy() {
                 if (this._processTimer) clearTimeout(this._processTimer);
@@ -14185,6 +14211,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 countEl.setAttribute('aria-live', 'polite');
                 countEl.setAttribute('aria-atomic', 'true');
 
+                // Cache textContent per thread to avoid re-reading on every keystroke
+                const _textCache = new WeakMap();
+                const _getThreadText = (thread) => {
+                    let cached = _textCache.get(thread);
+                    if (!cached) {
+                        cached = (thread.textContent || '').toLowerCase();
+                        _textCache.set(thread, cached);
+                    }
+                    return cached;
+                };
                 const applyFilter = () => {
                     const query = input.value.toLowerCase().trim();
                     const threads = Array.from(document.querySelectorAll('ytd-comment-thread-renderer'));
@@ -14193,7 +14229,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                             thread.style.display = '';
                             return;
                         }
-                        const text = thread.textContent?.toLowerCase() || '';
+                        const text = _getThreadText(thread);
                         thread.style.display = text.includes(query) ? '' : 'none';
                     });
 
@@ -16291,6 +16327,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     }, 800);
                 };
                 addNavigateRule(this._navRuleId, reloadSegments);
+                // Re-render bar segments when video duration changes (live streams, late loadedmetadata)
+                this._durationHandler = () => {
+                    if (this._segments.length) this._renderBarSegments();
+                };
+                document.addEventListener('durationchange', this._durationHandler, true);
                 // Also watch for video duration becoming available (for bar rendering)
                 this._barObserver = new MutationObserver(() => {
                     const video = getMainVideoElement();
@@ -16312,6 +16353,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     document.removeEventListener('ratechange', this._seekHandler, true);
                 }
                 if (this._pauseHandler) document.removeEventListener('pause', this._pauseHandler, true);
+                if (this._durationHandler) document.removeEventListener('durationchange', this._durationHandler, true);
                 removeNavigateRule(this._navRuleId);
                 this._barObserver?.disconnect();
                 this._clearBarSegments();
@@ -16355,7 +16397,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const cached = storageReadJSON('da_branding_cache', null);
                 if (cached) {
                     const ttl = parseInt(appState.settings.daCacheTTL || '4', 10) * 3600000;
-                    const maxAge = ttl * 6 || 86400000;
+                    const maxAge = ttl > 0 ? ttl * 6 : 0;
                     const now = Date.now();
                     for (const [k, v] of Object.entries(cached)) {
                         if (v._ts && (now - v._ts) < maxAge) {
@@ -16398,7 +16440,28 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._observer.observe(document.body, { childList: true, subtree: true });
             },
             async _fetchBranding(videoId) {
-                if (this._cache[videoId]) return this._cache[videoId];
+                // Check cache with TTL enforcement
+                if (this._cache[videoId]) {
+                    const ttl = parseInt(appState.settings.daCacheTTL || '4', 10) * 3600000;
+                    if (ttl > 0 && (Date.now() - (this._cache[videoId]._ts || 0)) < ttl) {
+                        return this._cache[videoId];
+                    } else if (ttl === 0) {
+                        // TTL=0 means no cache — evict stale entry
+                        delete this._cache[videoId];
+                        delete this._cacheMeta[videoId];
+                    } else if ((Date.now() - (this._cache[videoId]._ts || 0)) >= ttl) {
+                        delete this._cache[videoId];
+                        delete this._cacheMeta[videoId];
+                    }
+                }
+                // Deduplicate in-flight fetches for the same videoId
+                if (this._pending?.[videoId]) return this._pending[videoId];
+                const promise = this._doFetch(videoId);
+                if (!this._pending) this._pending = {};
+                this._pending[videoId] = promise;
+                try { return await promise; } finally { delete this._pending[videoId]; }
+            },
+            async _doFetch(videoId) {
                 try {
                     const { data } = await extensionFetchJson({
                         method: 'GET',
@@ -16432,7 +16495,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (!title) return title;
                 title = title.replace(/^>\s*/, '');
                 if (format === 'sentence') {
-                    return title.charAt(0).toUpperCase() + title.slice(1).replace(/\b[A-Z]{2,}\b/g, m => m).toLowerCase().replace(/^./, c => c.toUpperCase());
+                    // Lowercase everything, then capitalize only the first character
+                    return title.charAt(0).toUpperCase() + title.slice(1).toLowerCase();
                 }
                 if (format === 'title_case') {
                     const lower = new Set(['a','an','the','and','but','or','for','nor','on','at','to','by','in','of','up','as','is','it']);
@@ -16467,7 +16531,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                                 clone.className = 'daCustomTitle ' + titleEl.className;
                                 clone.removeAttribute('id');
                                 clone.textContent = formatted;
-                                clone.title = formatted;
+                                // Show original title on hover if setting enabled
+                                clone.title = appState.settings.daShowOriginalHover ? titleEl.textContent.trim() : formatted;
                                 titleEl.style.display = 'none';
                                 titleEl.dataset.daProcessed = '1';
                                 titleEl.parentNode.insertBefore(clone, titleEl);
@@ -16509,6 +16574,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._resetTimer = null;
                 clearTimeout(this._persistTimer);
                 this._persistTimer = null;
+                this._cache = {};
+                this._cacheMeta = {};
+                this._pending = {};
                 removeNavigateRule(this._navRuleId);
                 this._observer?.disconnect();
                 this._styleEl?.remove();
@@ -16583,7 +16651,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _snapshot() {
                 // Capture all user-facing settings, excluding internal profile state and version
                 const snap = {};
-                const skip = new Set(['_profiles', '_activeProfile', '_settingsVersion', 'dwWatchTimeToday']);
+                const skip = new Set(['_profiles', '_activeProfile', '_settingsVersion', 'dwWatchTimeToday', '_errors']);
                 for (const [k, v] of Object.entries(appState.settings)) {
                     if (skip.has(k)) continue;
                     snap[k] = v;
@@ -16593,6 +16661,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             save(name) {
                 if (!name || typeof name !== 'string') return false;
+                name = name.trim();
+                if (!name) return false;
                 const profiles = { ...this._profiles() };
                 profiles[name] = this._snapshot();
                 appState.settings._profiles = profiles;
@@ -16645,7 +16715,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 try {
                     const data = JSON.parse(text);
                     if (!data || typeof data.profiles !== 'object') throw new Error('Invalid profile JSON');
-                    const profiles = { ...this._profiles(), ...data.profiles };
+                    // Sanitize each imported profile against known defaults
+                    const importedProfiles = {};
+                    for (const [pName, pSnap] of Object.entries(data.profiles)) {
+                        if (!pName || typeof pSnap !== 'object' || pSnap === null || Array.isArray(pSnap)) continue;
+                        const sanitized = {};
+                        for (const [k, v] of Object.entries(pSnap)) {
+                            if (k in settingsManager.defaults) sanitized[k] = v;
+                        }
+                        importedProfiles[pName.trim() || 'imported'] = sanitized;
+                    }
+                    const profiles = { ...this._profiles(), ...importedProfiles };
                     appState.settings._profiles = profiles;
                     settingsManager.save(appState.settings);
                     if (typeof showToast === 'function') showToast(`Imported ${Object.keys(data.profiles).length} profile(s)`, '#22c55e');
@@ -18844,8 +18924,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             if (_wasPanelOpen && !isOpen) {
                 _panelCleanups.forEach(fn => { try { fn(); } catch(e) {} });
                 _panelCleanups.length = 0;
-                // Allow panel listeners to re-attach on next open
-                _panelUIListenersAttached = false;
+                // Panel listeners persist on document with isSettingsPanelOpen() guards —
+                // do NOT reset _panelUIListenersAttached here, or duplicates stack on each open.
             }
             _wasPanelOpen = isOpen;
         });
@@ -20622,7 +20702,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                                 }
                                 // Update toggle UI in settings panel
                                 const toggle = document.querySelector(`[data-feature-id="${cid}"] input[type="checkbox"]`);
-                                if (toggle) toggle.checked = false;
+                                if (toggle) {
+                                    toggle.checked = false;
+                                    const switchEl = toggle.closest('.ytkit-switch');
+                                    if (switchEl) switchEl.classList.remove('active');
+                                }
                             });
                             const conflictNames = activeConflicts.map(cid => {
                                 const cf = getFeatureById(cid);
@@ -20697,6 +20781,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
         // Textarea input — debounce reinit to avoid destroy/init churn per keystroke
         let _textareaReinitTimer = null;
+        let _rangeReinitTimer = null;
         doc.addEventListener('input', (e) => {
             if (!isSettingsPanelOpen()) return;
             if (e.target.matches('.ytkit-input')) {
@@ -20743,7 +20828,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const selectedText = e.target.options[e.target.selectedIndex].text;
                 createToast(`${feature?.name || 'Setting'} changed to ${selectedText}`, 'success');
             }
-            // Range slider
+            // Range slider — debounce reinit to avoid destroy/init churn during drag
             if (e.target.matches('.ytkit-range')) {
                 const card = e.target.closest('[data-feature-id]');
                 if (!card) return;
@@ -20754,12 +20839,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 appState.settings[settingKey] = val;
                 settingsManager.save(appState.settings);
                 if (feature) {
-                    try { feature.destroy?.(); feature._initialized = false; } catch(err) {
-                        DebugManager.log('Range', `Destroy failed for "${featureId}": ${err.message}`);
-                    }
-                    try { feature.init?.(); feature._initialized = true; } catch(err) {
-                        DebugManager.log('Range', `Init failed for "${featureId}": ${err.message}`);
-                    }
+                    if (_rangeReinitTimer) clearTimeout(_rangeReinitTimer);
+                    _rangeReinitTimer = setTimeout(() => {
+                        _rangeReinitTimer = null;
+                        try { feature.destroy?.(); feature._initialized = false; } catch(err) {
+                            DebugManager.log('Range', `Destroy failed for "${featureId}": ${err.message}`);
+                        }
+                        try { feature.init?.(); feature._initialized = true; } catch(err) {
+                            DebugManager.log('Range', `Init failed for "${featureId}": ${err.message}`);
+                        }
+                    }, 300);
                 }
             }
             // Color picker
