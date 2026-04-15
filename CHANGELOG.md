@@ -4,6 +4,36 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.8.0] - Toolbar Popup, Digital Wellbeing, Settings Profiles, New Player Features
+
+### Added
+
+- **Toolbar popup with quick-toggles.** Clicking the toolbar icon now opens a Catppuccin-Mocha popup with 15 curated toggles (hide Shorts, hide related, SponsorBlock, DeArrow, RYD, no autoplay, cap scroll, persistent speed, blue-light, clean URLs, auto theater, transcript sidebar, mini player bar, digital wellbeing, debug mode), a live filter search, and buttons to open the full in-page panel or options page. Toggles broadcast via `YTKIT_SETTING_CHANGED` to the active YouTube tab for live init/destroy with no reload. Replaces the previous click-to-toggle-panel behavior; the full panel is one click deeper via the footer.
+- **Settings Profiles (real implementation).** The previous stub is replaced with working save / load / delete / export / import JSON. State lives in `_profiles` and `_activeProfile`. Profile import merges on top of current defaults so missing keys pick up new-version defaults automatically. Exposed as `window.__ytkitProfiles` for panel / popup integration. Schema is versioned (`schemaVersion: 1`) for future migrations.
+- **Digital Wellbeing.** Break reminders every N minutes of active playback + optional daily watch-time cap. Ticker runs only while the video is playing AND the tab is visible (no battery drain when idle). Persists `dwWatchTimeToday` keyed by local date — resets at midnight. Full-viewport overlay with Catppuccin card UI on break / cap; auto-pauses the video.
+- **Video Rotation.** Rotate the active video 90° / 180° / 270° via CSS transform. 90/270° apply a 0.5625 scale to keep the rotated frame inside the player's 16:9 box. Useful for sideways phone-recorded videos.
+- **Frame-by-Frame Buttons.** Visible ⏮ / ⏭ buttons inserted into the player's right-controls, stepping 1/30s at a time and auto-pausing the video. Surfaces YouTube's built-in `,` / `.` keyboard shortcuts for users who don't know they exist.
+
+### Changed
+
+- **Toolbar action behavior.** `default_popup` is now set in the manifest, so `chrome.action.onClicked` no longer fires — the popup handles it. `Ctrl+Shift+Y` still toggles the in-page panel directly.
+- **`YTKIT_SETTING_CHANGED` message type.** Content script gains a new live-toggle path that re-inits / destroys the matching feature without a page reload.
+
+---
+
+## [3.7.0] - Transcript Export, Privacy Hardening, Tracking-Param Strip
+
+### Added
+
+- **Transcript export.** The `transcriptViewer` sidebar now has four export buttons under the header: **Copy** (plain-text to clipboard), **.txt** (download), **.srt** (download SubRip subtitles with `HH:MM:SS,mmm` timestamps), and **LLM** (copies a ready-to-paste summarization prompt with title, URL, and timestamped transcript). All exports use the already-fetched JSON3 caption data — no extra network requests. SRT cue end-times derive from `dDurationMs` when available, falling back to the next cue's start.
+- **Expanded URL tracking-param strip.** `cleanShareUrls` now strips UTM parameters (`utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`, `utm_id`) and click-tracking IDs (`gclid`, `fbclid`, `mc_cid`, `mc_eid`, `igshid`, `twclid`, `yclid`) in addition to the existing YouTube-internal params. Applies on copy, share-panel display, and address-bar replaceState.
+
+### Security
+
+- **Cookie isolation on EXT_FETCH proxy.** `background.js` previously sent `credentials: 'include'` on every proxied fetch, leaking YouTube session cookies to third-party APIs (SponsorBlock, Return YouTube Dislike, DeArrow). The proxy now defaults to `credentials: 'omit'` and only includes credentials for the explicit allowlist of YouTube-family origins and the local MediaDL endpoint. No behavior change for SponsorBlock/RYD/DeArrow — those endpoints don't require auth.
+
+---
+
 ## [3.6.7] - Theater Split Overhaul + SponsorBlock Cleanup
 
 ### Fixed

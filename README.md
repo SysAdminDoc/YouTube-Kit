@@ -1,3 +1,13 @@
+<!-- codex-branding:start -->
+<p align="center"><img src="icon.png" width="128" alt="Astra Deck"></p>
+
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-preview-58A6FF?style=for-the-badge">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-4ade80?style=for-the-badge">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Userscript-58A6FF?style=for-the-badge">
+</p>
+<!-- codex-branding:end -->
+
 <p align="center">
   <img src="extension/icons/icon128.png" alt="Astra Deck" width="80">
 </p>
@@ -5,7 +15,7 @@
 <h1 align="center">Astra Deck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.2.1-ff4e45?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-3.8.0-ff4e45?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/manifest-V3-blue?style=flat-square" alt="Manifest V3">
   <img src="https://img.shields.io/badge/YouTube-Desktop-ff0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube">

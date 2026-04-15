@@ -23,6 +23,30 @@ const ALLOWED_FETCH_ORIGINS = [
     'http://localhost:9751',
 ];
 
+// Origins that are allowed to receive cookies on proxied requests.
+// All other origins (third-party APIs like SponsorBlock, RYD, DeArrow) get
+// credentials: 'omit' so YouTube session cookies are never leaked off-site.
+const CREDENTIALED_FETCH_ORIGINS = new Set([
+    'https://www.youtube.com',
+    'https://youtube.com',
+    'https://m.youtube.com',
+    'https://music.youtube.com',
+    'https://youtu.be',
+    'https://www.youtube-nocookie.com',
+    'http://127.0.0.1:9751',
+    'http://localhost:9751',
+]);
+
+function shouldSendCredentials(url) {
+    try {
+        const parsed = new URL(url);
+        const originKey = `${parsed.protocol}//${parsed.hostname}${parsed.port ? ':' + parsed.port : ''}`;
+        return CREDENTIALED_FETCH_ORIGINS.has(originKey);
+    } catch {
+        return false;
+    }
+}
+
 // Headers that must not be forwarded from content script requests
 const BLOCKED_REQUEST_HEADERS = new Set([
     'host', 'origin', 'referer', 'cookie', 'authorization',
@@ -180,7 +204,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const fetchOpts = {
             method: safeMethod,
             signal: controller.signal,
-            credentials: 'include'
+            credentials: shouldSendCredentials(url) ? 'include' : 'omit'
         };
 
         const filteredHeaders = filterHeaders(headers, BLOCKED_REQUEST_HEADERS);

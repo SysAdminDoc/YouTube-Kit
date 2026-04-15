@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Astra Deck",
-  "version": "3.6.7",
+  "version": "3.8.0",
   "description": "Premium watch-page customization, split layouts, content controls, and local downloads for YouTube.",
   "author": "Matthew Parker",
   "homepage_url": "https://github.com/SysAdminDoc/YouTube-Kit",
@@ -13,6 +13,7 @@
   },
   "action": {
     "default_title": "Astra Deck",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/16.png",
       "32": "icons/32.png",

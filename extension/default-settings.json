@@ -240,5 +240,17 @@
   "debugMode": false,
   "nyanCatProgressBar": false,
   "fitPlayerToWindow": false,
-  "disableSpaNavigation": false
+  "disableSpaNavigation": false,
+  "videoRotation": false,
+  "videoRotationAngle": 0,
+  "frameByFrameButtons": false,
+  "digitalWellbeing": false,
+  "dwBreakIntervalMin": 30,
+  "dwDailyCapMin": 0,
+  "dwWatchTimeToday": {
+    "date": "",
+    "seconds": 0
+  },
+  "_profiles": {},
+  "_activeProfile": "default"
 }

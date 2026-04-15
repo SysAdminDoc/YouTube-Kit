@@ -330,7 +330,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.6.7';
+    const YTKIT_VERSION = '3.8.0';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -2301,7 +2301,16 @@ return response;
             nyanCatProgressBar: false,
             fitPlayerToWindow: false,
             disableSpaNavigation: false,
-
+            // v3.8.0 additions
+            videoRotation: false,
+            videoRotationAngle: 0,           // 0 | 90 | 180 | 270
+            frameByFrameButtons: false,
+            digitalWellbeing: false,
+            dwBreakIntervalMin: 30,          // 0 = off
+            dwDailyCapMin: 0,                // 0 = off
+            dwWatchTimeToday: { date: '', seconds: 0 },
+            _profiles: {},                   // { profileName: { settingKey: value, ... } }
+            _activeProfile: 'default',
         },
 
         // Settings versioning and migration
@@ -2843,6 +2852,28 @@ return response;
                 if (message.type === PANEL_MESSAGE_TYPES.close) {
                     setSettingsPanelOpen(false);
                     sendResponse?.({ ok: true, open: false });
+                    return false;
+                }
+                // v3.8.0: live setting updates from the toolbar popup without reload.
+                if (message.type === 'YTKIT_SETTING_CHANGED' && message.key) {
+                    try {
+                        const key = message.key;
+                        const value = message.value;
+                        const prev = appState.settings[key];
+                        appState.settings[key] = value;
+                        // If this key maps to a feature ID, re-init/destroy that feature.
+                        const feat = (typeof features !== 'undefined' && Array.isArray(features))
+                            ? features.find(f => f.id === key) : null;
+                        if (feat && prev !== value) {
+                            try {
+                                if (value && typeof feat.init === 'function') feat.init();
+                                else if (!value && typeof feat.destroy === 'function') feat.destroy();
+                            } catch (e) { console.warn('[YTKit] live toggle failed for', key, e); }
+                        }
+                        sendResponse?.({ ok: true });
+                    } catch (e) {
+                        sendResponse?.({ ok: false, error: String(e?.message || e) });
+                    }
                     return false;
                 }
                 return false;
@@ -4689,7 +4720,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _observer: null,
             _clipboardHandler: null,
             init() {
-                const STRIP_PARAMS = ['si', 'pp', 'feature', 'cbrd', 'ucbcb', 'app', 'sttick'];
+                const STRIP_PARAMS = [
+                    // YouTube-internal tracking
+                    'si', 'pp', 'feature', 'cbrd', 'ucbcb', 'app', 'sttick',
+                    // Cross-platform analytics tracking
+                    'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id',
+                    // Click-tracking IDs
+                    'gclid', 'fbclid', 'mc_cid', 'mc_eid', 'igshid', 'twclid', 'yclid',
+                ];
                 const cleanUrl = (url) => {
                     try {
                         const u = new URL(url);
@@ -11644,18 +11682,92 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         {
             id: 'transcriptViewer',
             name: 'Transcript Sidebar',
-            description: 'Adds a clickable transcript panel in the sidebar with timestamp navigation',
+            description: 'Adds a clickable transcript panel in the sidebar with timestamp navigation and export (txt/srt/clipboard/LLM prompt)',
             group: 'Watch Page',
             icon: 'file-text',
             _panel: null,
             _navRule: null,
+            _cues: [],
+
+            _formatSrtTime(sec) {
+                const ms = Math.max(0, Math.round(sec * 1000));
+                const h = Math.floor(ms / 3600000);
+                const m = Math.floor((ms % 3600000) / 60000);
+                const s = Math.floor((ms % 60000) / 1000);
+                const u = ms % 1000;
+                const pad = (n, w) => String(n).padStart(w, '0');
+                return `${pad(h,2)}:${pad(m,2)}:${pad(s,2)},${pad(u,3)}`;
+            },
+
+            _buildPlainText() {
+                return this._cues.map(c => c.text).join('\n');
+            },
+
+            _buildSrt() {
+                const out = [];
+                for (let i = 0; i < this._cues.length; i++) {
+                    const cue = this._cues[i];
+                    const next = this._cues[i + 1];
+                    const end = cue.end != null ? cue.end : (next ? next.start : cue.start + 3);
+                    out.push(String(i + 1));
+                    out.push(`${this._formatSrtTime(cue.start)} --> ${this._formatSrtTime(end)}`);
+                    out.push(cue.text);
+                    out.push('');
+                }
+                return out.join('\n');
+            },
+
+            _buildLlmPrompt() {
+                const title = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim()
+                    || document.title.replace(/ - YouTube$/, '');
+                const url = location.href;
+                const transcript = this._cues.map(c => {
+                    const m = Math.floor(c.start / 60);
+                    const s = Math.floor(c.start % 60).toString().padStart(2, '0');
+                    return `[${m}:${s}] ${c.text}`;
+                }).join('\n');
+                return `Summarize this YouTube video transcript. Provide: (1) a 2-3 sentence TL;DR, (2) 5-8 key points with timestamps, (3) any actionable takeaways.\n\nTitle: ${title}\nURL: ${url}\n\nTranscript:\n${transcript}`;
+            },
+
+            async _copyToClipboard(text, label) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    if (typeof showToast === 'function') showToast(`${label} copied to clipboard`, '#22c55e');
+                } catch (_) {
+                    if (typeof showToast === 'function') showToast(`Failed to copy ${label}`, '#ef4444');
+                }
+            },
+
+            _downloadFile(content, filename, mime) {
+                try {
+                    const blob = new Blob([content], { type: mime });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                } catch (_) {
+                    if (typeof showToast === 'function') showToast('Download failed', '#ef4444');
+                }
+            },
+
+            _videoIdSafe() {
+                try { return new URL(location.href).searchParams.get('v') || 'transcript'; }
+                catch { return 'transcript'; }
+            },
 
             async _loadTranscript() {
                 const panel = this._panel;
                 if (!panel) return;
                 const body = panel.querySelector('.ytkit-transcript-body');
+                const exportBar = panel.querySelector('.ytkit-transcript-export');
                 if (!body) return;
                 body.textContent = 'Loading transcript...';
+                if (exportBar) exportBar.style.display = 'none';
+                this._cues = [];
 
                 try {
                     const pageData = document.querySelector('ytd-watch-flexy');
@@ -11676,6 +11788,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         const text = ev.segs.map(s => s.utf8).join('').trim();
                         if (!text) return;
                         const startSec = (ev.tStartMs || 0) / 1000;
+                        const durSec = (ev.dDurationMs != null) ? ev.dDurationMs / 1000 : null;
+                        const endSec = durSec != null ? startSec + durSec : null;
+                        this._cues.push({ start: startSec, end: endSec, text });
                         const mins = Math.floor(startSec / 60);
                         const secs = Math.floor(startSec % 60);
 
@@ -11698,6 +11813,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         });
                         body.appendChild(line);
                     });
+                    if (exportBar && this._cues.length) exportBar.style.display = '';
                 } catch(e) {
                     body.textContent = 'Failed to load transcript.';
                 }
@@ -11726,17 +11842,40 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 header.appendChild(title);
                 header.appendChild(closeBtn);
 
+                const exportBar = document.createElement('div');
+                exportBar.className = 'ytkit-transcript-export';
+                exportBar.style.display = 'none';
+                const mkBtn = (label, title, handler) => {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'ytkit-transcript-export__btn';
+                    b.textContent = label;
+                    b.title = title;
+                    b.addEventListener('click', handler);
+                    return b;
+                };
+                exportBar.appendChild(mkBtn('Copy', 'Copy plain-text transcript to clipboard',
+                    () => this._copyToClipboard(this._buildPlainText(), 'Transcript')));
+                exportBar.appendChild(mkBtn('.txt', 'Download plain-text transcript',
+                    () => this._downloadFile(this._buildPlainText(), `${this._videoIdSafe()}.txt`, 'text/plain;charset=utf-8')));
+                exportBar.appendChild(mkBtn('.srt', 'Download SubRip subtitle file',
+                    () => this._downloadFile(this._buildSrt(), `${this._videoIdSafe()}.srt`, 'application/x-subrip;charset=utf-8')));
+                exportBar.appendChild(mkBtn('LLM', 'Copy a ready-to-paste summary prompt',
+                    () => this._copyToClipboard(this._buildLlmPrompt(), 'LLM prompt')));
+
                 const body = document.createElement('div');
                 body.className = 'ytkit-transcript-body';
                 closeBtn.addEventListener('click', () => {
                     const collapsed = panel.classList.toggle('is-collapsed');
                     body.hidden = collapsed;
+                    exportBar.hidden = collapsed;
                     closeBtn.textContent = collapsed ? 'Show' : 'Hide';
                     closeBtn.setAttribute('aria-expanded', String(!collapsed));
                     closeBtn.setAttribute('aria-label', collapsed ? 'Expand transcript' : 'Collapse transcript');
                 });
 
                 panel.appendChild(header);
+                panel.appendChild(exportBar);
                 panel.appendChild(body);
                 secondary.insertBefore(panel, secondary.firstChild);
                 this._panel = panel;
@@ -15055,10 +15194,101 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         {
             id: 'settingsProfiles',
             name: 'Settings Profiles',
-            description: 'Save and load different configurations (used via settings panel)',
+            description: 'Save, load, switch, import, and export named setting configurations (e.g. Gaming / Work / Music). Controls appear at the top of the settings panel when enabled.',
             group: 'Advanced',
             icon: 'list-tree',
-            init() {}, destroy() {}
+            _ui: null,
+
+            _profiles() {
+                return appState.settings._profiles && typeof appState.settings._profiles === 'object'
+                    ? appState.settings._profiles : {};
+            },
+
+            _activeName() { return appState.settings._activeProfile || 'default'; },
+
+            _snapshot() {
+                // Capture all user-facing settings, excluding internal profile state and version
+                const snap = {};
+                const skip = new Set(['_profiles', '_activeProfile', '_settingsVersion', 'dwWatchTimeToday']);
+                for (const [k, v] of Object.entries(appState.settings)) {
+                    if (skip.has(k)) continue;
+                    snap[k] = v;
+                }
+                return snap;
+            },
+
+            save(name) {
+                if (!name || typeof name !== 'string') return false;
+                const profiles = { ...this._profiles() };
+                profiles[name] = this._snapshot();
+                appState.settings._profiles = profiles;
+                appState.settings._activeProfile = name;
+                settingsManager.save(appState.settings);
+                if (typeof showToast === 'function') showToast(`Profile saved: ${name}`, '#22c55e');
+                return true;
+            },
+
+            load(name) {
+                const profiles = this._profiles();
+                if (!profiles[name]) {
+                    if (typeof showToast === 'function') showToast(`Profile not found: ${name}`, '#ef4444');
+                    return false;
+                }
+                // Shallow-merge snapshot over defaults so missing keys get default values
+                const merged = { ...settingsManager.defaults, ...profiles[name] };
+                merged._profiles = profiles;
+                merged._activeProfile = name;
+                merged._settingsVersion = settingsManager.SETTINGS_VERSION;
+                settingsManager.save(merged);
+                if (typeof showToast === 'function') showToast(`Applied profile: ${name}. Reloading...`, '#22c55e');
+                setTimeout(() => location.reload(), 600);
+                return true;
+            },
+
+            delete(name) {
+                const profiles = { ...this._profiles() };
+                if (!profiles[name]) return false;
+                delete profiles[name];
+                appState.settings._profiles = profiles;
+                if (this._activeName() === name) appState.settings._activeProfile = 'default';
+                settingsManager.save(appState.settings);
+                if (typeof showToast === 'function') showToast(`Profile deleted: ${name}`, '#f59e0b');
+                return true;
+            },
+
+            exportJson() {
+                const payload = {
+                    schemaVersion: 1,
+                    exportedAt: new Date().toISOString(),
+                    activeProfile: this._activeName(),
+                    profiles: this._profiles(),
+                    currentSnapshot: this._snapshot(),
+                };
+                return JSON.stringify(payload, null, 2);
+            },
+
+            importJson(text) {
+                try {
+                    const data = JSON.parse(text);
+                    if (!data || typeof data.profiles !== 'object') throw new Error('Invalid profile JSON');
+                    const profiles = { ...this._profiles(), ...data.profiles };
+                    appState.settings._profiles = profiles;
+                    settingsManager.save(appState.settings);
+                    if (typeof showToast === 'function') showToast(`Imported ${Object.keys(data.profiles).length} profile(s)`, '#22c55e');
+                    return true;
+                } catch (e) {
+                    if (typeof showToast === 'function') showToast(`Import failed: ${e.message}`, '#ef4444');
+                    return false;
+                }
+            },
+
+            init() {
+                // Expose on window for panel UI + toolbar popup to use
+                window.__ytkitProfiles = this;
+            },
+            destroy() {
+                delete window.__ytkitProfiles;
+            }
         },
 
         // ── Debug Mode ──
@@ -15166,6 +15396,213 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     document.removeEventListener('click', this._clickHandler, true);
                     this._clickHandler = null;
                 }
+            }
+        },
+
+        // ═══════════════════════════════════════════════════════════════════
+        // v3.8.0 — New Feature Wave
+        // ═══════════════════════════════════════════════════════════════════
+
+        // ── Video Rotation ──
+        {
+            id: 'videoRotation',
+            name: 'Video Rotation',
+            description: 'Rotate the video 90/180/270 degrees via CSS transform — useful for sideways phone recordings',
+            group: 'Video Player',
+            icon: 'rotate-cw',
+            type: 'select',
+            options: [
+                { value: 0,   label: '0° (normal)' },
+                { value: 90,  label: '90° clockwise' },
+                { value: 180, label: '180° (flip)' },
+                { value: 270, label: '270° (90° counter-clockwise)' },
+            ],
+            settingKey: 'videoRotationAngle',
+            _styleEl: null,
+            _apply() {
+                const angle = parseInt(appState.settings.videoRotationAngle) || 0;
+                const css = angle === 0
+                    ? `.html5-main-video { transform: none !important; }`
+                    : `.html5-main-video {
+                        transform: rotate(${angle}deg) ${angle % 180 !== 0 ? 'scale(0.5625)' : ''} !important;
+                        transform-origin: center center !important;
+                    }`;
+                if (this._styleEl) this._styleEl.textContent = css;
+                else this._styleEl = injectStyle(css, this.id, true);
+            },
+            init() {
+                this._apply();
+                this._navRule = () => this._apply();
+                addNavigateRule('videoRotation', this._navRule);
+            },
+            destroy() {
+                this._styleEl?.remove(); this._styleEl = null;
+                removeNavigateRule('videoRotation');
+            }
+        },
+
+        // ── Frame-by-Frame Buttons ──
+        {
+            id: 'frameByFrameButtons',
+            name: 'Frame-by-Frame Buttons',
+            description: 'Add visible step-back (,) and step-forward (.) buttons to the player controls for precise frame navigation',
+            group: 'Video Player',
+            icon: 'skip-forward',
+            _buttons: [],
+            _injected: false,
+            _styleEl: null,
+            _insert() {
+                if (this._injected) return;
+                const controls = document.querySelector('.ytp-right-controls');
+                if (!controls) return;
+                const video = getMainVideoElement ? getMainVideoElement() : document.querySelector('video');
+                if (!video) return;
+                const step = (dir) => {
+                    const fps = 30; // best-effort; YT doesn't expose exact fps
+                    if (!video.paused) video.pause();
+                    video.currentTime = Math.max(0, video.currentTime + dir * (1 / fps));
+                };
+                const mk = (label, title, dir) => {
+                    const btn = document.createElement('button');
+                    btn.className = 'ytp-button ytkit-frame-btn';
+                    btn.type = 'button';
+                    btn.title = title;
+                    btn.setAttribute('aria-label', title);
+                    btn.textContent = label;
+                    btn.addEventListener('click', (e) => { e.stopPropagation(); step(dir); });
+                    return btn;
+                };
+                const back = mk('⏮', 'Previous frame', -1);
+                const fwd  = mk('⏭', 'Next frame',  +1);
+                controls.insertBefore(back, controls.firstChild);
+                controls.insertBefore(fwd, back.nextSibling);
+                this._buttons = [back, fwd];
+                this._injected = true;
+            },
+            init() {
+                this._styleEl = injectStyle(
+                    `.ytkit-frame-btn{font-size:13px!important;line-height:36px!important;width:36px!important;opacity:.85!important;}
+                     .ytkit-frame-btn:hover{opacity:1!important;}`,
+                    this.id, true
+                );
+                this._insert();
+                this._navRule = () => { this._injected = false; this._buttons = []; setTimeout(() => this._insert(), 1500); };
+                addNavigateRule('frameByFrameButtons', this._navRule);
+            },
+            destroy() {
+                this._buttons.forEach(b => b.remove());
+                this._buttons = []; this._injected = false;
+                this._styleEl?.remove(); this._styleEl = null;
+                removeNavigateRule('frameByFrameButtons');
+            }
+        },
+
+        // ── Digital Wellbeing (Break Reminders + Daily Cap) ──
+        {
+            id: 'digitalWellbeing',
+            name: 'Digital Wellbeing',
+            description: 'Break reminders every N minutes of active playback + optional daily watch-time cap. Timers persist across SPA navigation.',
+            group: 'Advanced',
+            icon: 'clock',
+            _timer: null,
+            _overlay: null,
+            _sessionStart: 0,
+            _persistTimer: null,
+
+            _todayKey() { return new Date().toISOString().slice(0, 10); },
+
+            _loadToday() {
+                const raw = appState.settings.dwWatchTimeToday || { date: '', seconds: 0 };
+                if (raw.date !== this._todayKey()) {
+                    return { date: this._todayKey(), seconds: 0 };
+                }
+                return { date: raw.date, seconds: raw.seconds || 0 };
+            },
+
+            _saveToday(state) {
+                appState.settings.dwWatchTimeToday = state;
+                if (typeof settingsManager !== 'undefined' && settingsManager.save) {
+                    try { settingsManager.save(appState.settings); } catch (_) {}
+                }
+            },
+
+            _showOverlay(kind, message, onDismiss) {
+                if (this._overlay) this._overlay.remove();
+                const video = document.querySelector('video');
+                if (video && !video.paused) video.pause();
+                const o = document.createElement('div');
+                o.className = 'ytkit-wellbeing-overlay';
+                o.innerHTML = `
+                    <div class="ytkit-wellbeing-card">
+                        <div class="ytkit-wellbeing-icon">${kind === 'break' ? '☕' : '⏰'}</div>
+                        <h2 class="ytkit-wellbeing-title">${kind === 'break' ? 'Take a break' : 'Daily limit reached'}</h2>
+                        <p class="ytkit-wellbeing-msg">${message}</p>
+                        <button type="button" class="ytkit-wellbeing-btn">${kind === 'break' ? 'Continue watching' : 'Dismiss until tomorrow'}</button>
+                    </div>`;
+                document.body.appendChild(o);
+                this._overlay = o;
+                o.querySelector('.ytkit-wellbeing-btn').addEventListener('click', () => {
+                    o.remove(); this._overlay = null;
+                    if (onDismiss) onDismiss();
+                });
+            },
+
+            _tick() {
+                const video = document.querySelector('video');
+                if (!video || video.paused || document.hidden) return;
+                const today = this._loadToday();
+                today.seconds = (today.seconds || 0) + 1;
+                this._saveToday(today);
+                this._sessionStart = this._sessionStart || today.seconds;
+                const sessionElapsed = today.seconds - this._sessionStart;
+                const breakEvery = (parseInt(appState.settings.dwBreakIntervalMin) || 0) * 60;
+                const dailyCap   = (parseInt(appState.settings.dwDailyCapMin) || 0) * 60;
+                if (dailyCap > 0 && today.seconds >= dailyCap && !this._overlay) {
+                    this._showOverlay('cap',
+                        `You've watched ${Math.floor(today.seconds/60)} minutes today. Take the rest of the day off.`,
+                        () => { /* dismiss just hides; timer keeps ticking and will re-fire on next minute tick */ });
+                    return;
+                }
+                if (breakEvery > 0 && sessionElapsed >= breakEvery && !this._overlay) {
+                    this._sessionStart = today.seconds;
+                    this._showOverlay('break',
+                        `You've been watching for ${Math.floor(breakEvery/60)} minutes. Rest your eyes.`);
+                }
+            },
+
+            init() {
+                this._styleEl = injectStyle(`
+                    .ytkit-wellbeing-overlay {
+                        position: fixed; inset: 0; z-index: 2147483600;
+                        background: rgba(10, 10, 14, 0.88); backdrop-filter: blur(8px);
+                        display: flex; align-items: center; justify-content: center;
+                        animation: ytkit-wb-fade 220ms ease-out;
+                    }
+                    @keyframes ytkit-wb-fade { from { opacity: 0; } to { opacity: 1; } }
+                    .ytkit-wellbeing-card {
+                        background: linear-gradient(145deg, #1e1e2e, #181825);
+                        color: #cdd6f4; border: 1px solid rgba(137, 180, 250, 0.28);
+                        border-radius: 16px; padding: 32px 40px; max-width: 440px;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.6); text-align: center;
+                    }
+                    .ytkit-wellbeing-icon { font-size: 48px; margin-bottom: 12px; }
+                    .ytkit-wellbeing-title { margin: 0 0 12px; font: 700 22px/1.2 'Roboto', system-ui, sans-serif; }
+                    .ytkit-wellbeing-msg { margin: 0 0 24px; font-size: 15px; color: #a6adc8; }
+                    .ytkit-wellbeing-btn {
+                        background: linear-gradient(135deg, #89b4fa, #b4befe);
+                        color: #1e1e2e; border: none; border-radius: 999px;
+                        padding: 10px 22px; font: 600 14px 'Roboto', system-ui, sans-serif;
+                        cursor: pointer; transition: transform 120ms ease;
+                    }
+                    .ytkit-wellbeing-btn:hover { transform: translateY(-1px); }
+                `, this.id, true);
+                this._timer = setInterval(() => this._tick(), 1000);
+            },
+            destroy() {
+                if (this._timer) clearInterval(this._timer);
+                this._timer = null;
+                this._overlay?.remove(); this._overlay = null;
+                this._styleEl?.remove(); this._styleEl = null;
             }
         },
 
@@ -21271,6 +21708,35 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
         .ytkit-transcript-panel.is-collapsed .ytkit-transcript-header {
             border-bottom-color: transparent;
+        }
+
+        .ytkit-transcript-export {
+            display: flex;
+            gap: 6px;
+            padding: 6px 10px 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            flex-wrap: wrap;
+        }
+        .ytkit-transcript-export__btn {
+            background: rgba(255,255,255,0.06);
+            color: #f3f4f6;
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 6px;
+            padding: 4px 10px;
+            font: 600 11px/1 'Roboto', system-ui, sans-serif;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            transition: background 120ms ease, transform 120ms ease, border-color 120ms ease;
+        }
+        .ytkit-transcript-export__btn:hover {
+            background: rgba(99, 102, 241, 0.18);
+            border-color: rgba(99, 102, 241, 0.45);
+            transform: translateY(-1px);
+        }
+        .ytkit-transcript-export__btn:active { transform: translateY(0); }
+        .ytkit-transcript-export__btn:focus-visible {
+            outline: 2px solid #818cf8;
+            outline-offset: 2px;
         }
 
         .ytkit-transcript-body {
