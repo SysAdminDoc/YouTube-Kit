@@ -391,7 +391,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.9.0';
+    const YTKIT_VERSION = '3.10.0';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -2389,6 +2389,23 @@ return response;
             _errors: [],                     // { ts, ctx, msg }
             storageQuotaLRU: false,
             apiRetryBackoff: true,
+            // v3.10.0 additions
+            watchHistoryAnalytics: false,
+            subtitleStyling: false,
+            subStyleFontSize: 100,           // 50-300%
+            subStyleFontFamily: 'default',   // default | sans | serif | mono | 'YouTube Sans'
+            subStyleColor: '#ffffff',
+            subStyleBgOpacity: 75,           // 0-100%
+            subStyleBgColor: '#000000',
+            subStyleBottomOffset: 10,        // % from bottom
+            subStyleTextShadow: true,
+            aiVideoSummary: false,
+            aiSummaryEndpoint: 'https://api.openai.com/v1/chat/completions',
+            aiSummaryModel: 'gpt-4o-mini',
+            aiSummaryApiKey: '',
+            aiSummaryProvider: 'openai',     // openai | anthropic | gemini | ollama
+            copyChapterMarkdown: false,
+            chapterJumpButtons: false,
         },
 
         // Settings versioning and migration
@@ -16254,6 +16271,456 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             destroy() {
                 if (this._timer) clearInterval(this._timer);
                 this._timer = null;
+            }
+        },
+
+        // ═══════════════════════════════════════════════════════════════════
+        // v3.10.0 — New Feature Wave
+        // ═══════════════════════════════════════════════════════════════════
+
+        // ── Watch History Analytics Dashboard ──
+        {
+            id: 'watchHistoryAnalytics',
+            name: 'Watch History Analytics',
+            description: 'Modal dashboard visualizing your 30-day YouTube watch time as a CSS bar chart (requires Watch Time Tracker)',
+            group: 'Watch Page',
+            icon: 'bar-chart',
+            _modal: null,
+            _storageKey: 'ytkit-watch-time',
+            _fmt(s) { const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); return h > 0 ? `${h}h ${m}m` : `${m}m`; },
+            _open() {
+                if (this._modal) { this._modal.remove(); this._modal = null; return; }
+                const stats = StorageManager.get(this._storageKey, { days: {}, total: 0 });
+                const days = [];
+                for (let i = 29; i >= 0; i--) {
+                    const d = new Date(); d.setDate(d.getDate() - i);
+                    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                    days.push({ key, label: `${d.getMonth()+1}/${d.getDate()}`, secs: stats.days[key] || 0 });
+                }
+                const max = Math.max(1, ...days.map(d => d.secs));
+                const total = days.reduce((s, d) => s + d.secs, 0);
+                const avg = total / 30;
+                const active = days.filter(d => d.secs > 0).length;
+                const overlay = document.createElement('div');
+                overlay.className = 'ytkit-wha-overlay';
+                overlay.onclick = (e) => { if (e.target === overlay) this._open(); };
+                const card = document.createElement('div');
+                card.className = 'ytkit-wha-card';
+                const head = document.createElement('div');
+                head.className = 'ytkit-wha-head';
+                head.innerHTML = '';
+                const title = document.createElement('h2'); title.textContent = 'Watch Time — Last 30 Days';
+                const close = document.createElement('button'); close.textContent = '×'; close.className = 'ytkit-wha-close'; close.onclick = () => this._open();
+                head.append(title, close);
+                const statsRow = document.createElement('div');
+                statsRow.className = 'ytkit-wha-stats';
+                const mk = (lbl, val) => { const d = document.createElement('div'); d.className = 'ytkit-wha-stat';
+                    const v = document.createElement('div'); v.className = 'ytkit-wha-stat-v'; v.textContent = val;
+                    const l = document.createElement('div'); l.className = 'ytkit-wha-stat-l'; l.textContent = lbl;
+                    d.append(v, l); return d; };
+                statsRow.append(
+                    mk('Total (30d)', this._fmt(total)),
+                    mk('Daily avg', this._fmt(avg)),
+                    mk('Active days', `${active}/30`),
+                    mk('All time', this._fmt(stats.total || 0)),
+                );
+                const chart = document.createElement('div');
+                chart.className = 'ytkit-wha-chart';
+                for (const d of days) {
+                    const col = document.createElement('div');
+                    col.className = 'ytkit-wha-col';
+                    const bar = document.createElement('div');
+                    bar.className = 'ytkit-wha-bar';
+                    const pct = (d.secs / max) * 100;
+                    bar.style.height = `${pct}%`;
+                    bar.title = `${d.label}: ${this._fmt(d.secs)}`;
+                    const lab = document.createElement('div');
+                    lab.className = 'ytkit-wha-lbl';
+                    lab.textContent = d.label;
+                    col.append(bar, lab);
+                    chart.appendChild(col);
+                }
+                card.append(head, statsRow, chart);
+                overlay.appendChild(card);
+                document.body.appendChild(overlay);
+                this._modal = overlay;
+            },
+            init() {
+                injectStyle(`
+                    .ytkit-wha-overlay {
+                        position: fixed; inset: 0; z-index: 2147483647;
+                        background: rgba(17, 17, 27, 0.85); display: flex; align-items: center; justify-content: center;
+                        backdrop-filter: blur(6px);
+                    }
+                    .ytkit-wha-card {
+                        background: #1e1e2e; color: #cdd6f4; border: 1px solid #45475a;
+                        border-radius: 14px; padding: 20px; min-width: 680px; max-width: 90vw;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.6); font: 13px Roboto, system-ui;
+                    }
+                    .ytkit-wha-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+                    .ytkit-wha-head h2 { margin: 0; font: 700 18px Roboto; color: #89b4fa; }
+                    .ytkit-wha-close { background: transparent; color: #cdd6f4; border: none; font-size: 24px; cursor: pointer; }
+                    .ytkit-wha-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+                    .ytkit-wha-stat { background: #313244; padding: 10px; border-radius: 8px; text-align: center; }
+                    .ytkit-wha-stat-v { font: 700 18px Roboto; color: #f5c2e7; }
+                    .ytkit-wha-stat-l { color: #a6adc8; font-size: 11px; margin-top: 2px; }
+                    .ytkit-wha-chart { display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; height: 240px; align-items: end; }
+                    .ytkit-wha-col { display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }
+                    .ytkit-wha-bar {
+                        width: 100%; background: linear-gradient(180deg, #89b4fa, #cba6f7);
+                        border-radius: 4px 4px 0 0; min-height: 2px; transition: filter 120ms;
+                    }
+                    .ytkit-wha-bar:hover { filter: brightness(1.3); }
+                    .ytkit-wha-lbl { font-size: 9px; color: #6c7086; margin-top: 4px; transform: rotate(-45deg); white-space: nowrap; }
+                `, this.id, true);
+                window.__ytkitOpenAnalytics = () => this._open();
+                // Add entry point as a button on watch page
+                this._navRule = () => setTimeout(() => this._injectBtn(), 2000);
+                setTimeout(() => this._injectBtn(), 2500);
+                addNavigateRule('watchHistoryAnalytics', this._navRule);
+            },
+            _injectBtn() {
+                const menu = document.querySelector('ytd-watch-metadata #top-row #actions') || document.querySelector('#above-the-fold');
+                if (!menu || document.querySelector('.ytkit-wha-btn')) return;
+                const btn = document.createElement('button');
+                btn.className = 'ytkit-wha-btn';
+                btn.textContent = '📊 Watch Stats';
+                btn.style.cssText = 'background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:999px;padding:6px 14px;font:600 12px Roboto;cursor:pointer;margin:4px;';
+                btn.onclick = () => this._open();
+                menu.appendChild(btn);
+            },
+            destroy() {
+                removeNavigateRule('watchHistoryAnalytics');
+                this._modal?.remove(); this._modal = null;
+                document.querySelectorAll('.ytkit-wha-btn').forEach(b => b.remove());
+                delete window.__ytkitOpenAnalytics;
+            }
+        },
+
+        // ── Subtitle Styling Panel ──
+        {
+            id: 'subtitleStyling',
+            name: 'Subtitle Styling',
+            description: 'Override YouTube caption appearance — font size/family/color, background, position, shadow',
+            group: 'Video Player',
+            icon: 'type',
+            _styleEl: null,
+            _apply() {
+                const s = appState.settings;
+                const sizePct = s.subStyleFontSize || 100;
+                const fam = ({ default: '', sans: 'Roboto, sans-serif', serif: 'Georgia, serif', mono: 'Menlo, Consolas, monospace', 'YouTube Sans': '"YouTube Sans", Roboto, sans-serif' }[s.subStyleFontFamily]) || '';
+                const bgOp = (s.subStyleBgOpacity ?? 75) / 100;
+                const bgHex = s.subStyleBgColor || '#000000';
+                const br = parseInt(bgHex.slice(1, 3), 16);
+                const bg = parseInt(bgHex.slice(3, 5), 16);
+                const bb = parseInt(bgHex.slice(5, 7), 16);
+                const bgRgba = `rgba(${br}, ${bg}, ${bb}, ${bgOp})`;
+                const bot = s.subStyleBottomOffset ?? 10;
+                const shadow = s.subStyleTextShadow !== false ? '2px 2px 4px rgba(0,0,0,0.9)' : 'none';
+                const css = `
+                    .ytp-caption-segment {
+                        font-size: ${sizePct}% !important;
+                        color: ${s.subStyleColor || '#ffffff'} !important;
+                        background: ${bgRgba} !important;
+                        ${fam ? `font-family: ${fam} !important;` : ''}
+                        text-shadow: ${shadow} !important;
+                        padding: 2px 6px !important;
+                    }
+                    .caption-window, .ytp-caption-window-container {
+                        bottom: ${bot}% !important;
+                    }
+                `;
+                if (this._styleEl) this._styleEl.textContent = css;
+                else this._styleEl = injectStyle(css, this.id, true);
+            },
+            init() { this._apply(); },
+            destroy() { this._styleEl?.remove(); this._styleEl = null; }
+        },
+
+        // ── AI Video Summary ──
+        {
+            id: 'aiVideoSummary',
+            name: 'AI Video Summary',
+            description: 'Bring-your-own-key LLM summary of the current video transcript (OpenAI/Anthropic/Gemini/Ollama)',
+            group: 'Watch Page',
+            icon: 'sparkles',
+            pages: [PageTypes.WATCH],
+            _btn: null, _panel: null, _navRule: null,
+            async _fetchTranscript(videoId) {
+                try {
+                    const pageData = document.querySelector('ytd-watch-flexy');
+                    const playerResponse = pageData?.__data?.playerResponse || pageData?.playerResponse;
+                    const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+                    if (!tracks?.length) throw new Error('No captions available');
+                    const track = tracks.find(t => t.languageCode === 'en') || tracks[0];
+                    const resp = await fetch(track.baseUrl + '&fmt=json3');
+                    if (!resp.ok) throw new Error('Caption fetch HTTP ' + resp.status);
+                    const data = await resp.json();
+                    return (data.events || [])
+                        .filter(e => e.segs)
+                        .map(e => e.segs.map(s => s.utf8 || '').join('').trim())
+                        .filter(Boolean)
+                        .join(' ');
+                } catch (e) { throw e; }
+            },
+            async _callLLM(prompt) {
+                const s = appState.settings;
+                if (!s.aiSummaryApiKey && s.aiSummaryProvider !== 'ollama') throw new Error('Set aiSummaryApiKey first (via options page)');
+                const provider = s.aiSummaryProvider || 'openai';
+                if (provider === 'openai' || provider === 'ollama') {
+                    const resp = await fetch(s.aiSummaryEndpoint, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...(s.aiSummaryApiKey ? { 'Authorization': 'Bearer ' + s.aiSummaryApiKey } : {}),
+                        },
+                        body: JSON.stringify({
+                            model: s.aiSummaryModel,
+                            messages: [{ role: 'user', content: prompt }],
+                            max_tokens: 800,
+                        }),
+                    });
+                    if (!resp.ok) throw new Error(`${provider} HTTP ${resp.status}`);
+                    const data = await resp.json();
+                    return data.choices?.[0]?.message?.content || '[no content]';
+                }
+                if (provider === 'anthropic') {
+                    const resp = await fetch(s.aiSummaryEndpoint || 'https://api.anthropic.com/v1/messages', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-api-key': s.aiSummaryApiKey,
+                            'anthropic-version': '2023-06-01',
+                            'anthropic-dangerous-direct-browser-access': 'true',
+                        },
+                        body: JSON.stringify({
+                            model: s.aiSummaryModel || 'claude-haiku-4-5-20251001',
+                            max_tokens: 800,
+                            messages: [{ role: 'user', content: prompt }],
+                        }),
+                    });
+                    if (!resp.ok) throw new Error(`anthropic HTTP ${resp.status}`);
+                    const data = await resp.json();
+                    return data.content?.[0]?.text || '[no content]';
+                }
+                if (provider === 'gemini') {
+                    const url = `${s.aiSummaryEndpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'}?key=${encodeURIComponent(s.aiSummaryApiKey)}`;
+                    const resp = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+                    });
+                    if (!resp.ok) throw new Error(`gemini HTTP ${resp.status}`);
+                    const data = await resp.json();
+                    return data.candidates?.[0]?.content?.parts?.[0]?.text || '[no content]';
+                }
+                throw new Error('Unknown provider: ' + provider);
+            },
+            async _run() {
+                if (this._panel) { this._panel.remove(); this._panel = null; return; }
+                const panel = document.createElement('div');
+                panel.className = 'ytkit-aisum-panel';
+                panel.textContent = 'Fetching transcript...';
+                document.body.appendChild(panel);
+                this._panel = panel;
+                const close = () => { panel.remove(); this._panel = null; };
+                panel.onclick = (e) => { if (e.target === panel) close(); };
+                try {
+                    const vid = getVideoId();
+                    const transcript = await this._fetchTranscript(vid);
+                    if (transcript.length > 120000) {
+                        // crude chunking: keep first 120k chars
+                        panel.textContent = 'Transcript truncated to 120k chars. Calling LLM...';
+                    } else {
+                        panel.textContent = 'Calling LLM...';
+                    }
+                    const titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string');
+                    const title = titleEl?.textContent?.trim() || '(video)';
+                    const prompt = `Summarize this YouTube video transcript in 5-8 bullet points, then add a one-line TL;DR at the end.\n\nTitle: ${title}\nURL: https://youtu.be/${vid}\n\nTranscript:\n${transcript.slice(0, 120000)}`;
+                    const result = await this._callLLM(prompt);
+                    panel.textContent = '';
+                    const head = document.createElement('div');
+                    head.className = 'ytkit-aisum-head';
+                    head.innerHTML = '';
+                    const h = document.createElement('h3'); h.textContent = '✨ AI Summary';
+                    const c = document.createElement('button'); c.textContent = '×'; c.className = 'ytkit-aisum-close'; c.onclick = close;
+                    head.append(h, c);
+                    const body = document.createElement('div');
+                    body.className = 'ytkit-aisum-body';
+                    body.textContent = result;
+                    const copy = document.createElement('button');
+                    copy.className = 'ytkit-aisum-copy';
+                    copy.textContent = 'Copy';
+                    copy.onclick = () => navigator.clipboard.writeText(result).then(() => showToast('Summary copied', '#22c55e'));
+                    panel.append(head, body, copy);
+                } catch (e) {
+                    DiagnosticLog?.record('aiVideoSummary', e.message);
+                    panel.textContent = 'Failed: ' + e.message;
+                }
+            },
+            _inject() {
+                const controls = document.querySelector('.ytp-right-controls');
+                if (!controls || controls.querySelector('.ytkit-aisum-btn')) return;
+                const btn = document.createElement('button');
+                btn.className = 'ytp-button ytkit-player-btn ytkit-aisum-btn';
+                btn.title = 'AI Summary (YTKit)';
+                TrustedHTML.setHTML(btn, '<svg viewBox="0 0 24 24"><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></svg>');
+                btn.onclick = (e) => { e.stopPropagation(); this._run(); };
+                controls.insertBefore(btn, controls.firstChild);
+                this._btn = btn;
+            },
+            init() {
+                injectStyle(`
+                    .ytkit-aisum-panel {
+                        position: fixed; top: 80px; right: 20px; z-index: 2147483647;
+                        width: 420px; max-height: 70vh; overflow: auto;
+                        background: #1e1e2e; color: #cdd6f4; border: 1px solid #45475a;
+                        border-radius: 12px; padding: 16px; font: 14px/1.5 Roboto, system-ui;
+                        box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+                    }
+                    .ytkit-aisum-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+                    .ytkit-aisum-head h3 { margin: 0; color: #f5c2e7; font-size: 16px; }
+                    .ytkit-aisum-close { background: transparent; border: none; color: #cdd6f4; font-size: 20px; cursor: pointer; }
+                    .ytkit-aisum-body { white-space: pre-wrap; font-size: 13px; }
+                    .ytkit-aisum-copy {
+                        margin-top: 12px; background: #89b4fa; color: #1e1e2e; border: none;
+                        border-radius: 6px; padding: 6px 14px; cursor: pointer; font-weight: 600;
+                    }
+                `, this.id, true);
+                setTimeout(() => this._inject(), 2000);
+                this._navRule = () => { this._btn = null; setTimeout(() => this._inject(), 2000); };
+                addNavigateRule('aiVideoSummary', this._navRule);
+            },
+            destroy() {
+                removeNavigateRule('aiVideoSummary');
+                this._btn?.remove(); this._btn = null;
+                this._panel?.remove(); this._panel = null;
+            }
+        },
+
+        // ── Copy Chapter Markdown ──
+        {
+            id: 'copyChapterMarkdown',
+            name: 'Copy Chapters as Markdown',
+            description: 'Copy all video chapters as a markdown timestamp list — button in player controls',
+            group: 'Watch Page',
+            icon: 'list',
+            pages: [PageTypes.WATCH],
+            _btn: null, _navRule: null,
+            _extract() {
+                // Parse chapters from macro markers
+                const chapters = [];
+                const nodes = document.querySelectorAll('ytd-macro-markers-list-item-renderer');
+                for (const n of nodes) {
+                    const time = n.querySelector('#time')?.textContent?.trim();
+                    const title = n.querySelector('h4, #details')?.textContent?.trim();
+                    if (time && title) chapters.push({ time, title });
+                }
+                // Fallback: parse from description
+                if (chapters.length === 0) {
+                    const desc = document.querySelector('ytd-text-inline-expander, #description-inline-expander')?.textContent || '';
+                    const re = /(\d{1,2}:\d{2}(?::\d{2})?)\s+[-–—:]*\s*([^\n]+)/g;
+                    let m;
+                    while ((m = re.exec(desc)) !== null) chapters.push({ time: m[1], title: m[2].trim() });
+                }
+                return chapters;
+            },
+            _copy() {
+                const chapters = this._extract();
+                if (!chapters.length) { showToast('No chapters found', '#ef4444'); return; }
+                const vid = getVideoId();
+                const mk = chapters.map(c => {
+                    const secs = c.time.split(':').reverse().reduce((acc, v, i) => acc + parseInt(v) * [1, 60, 3600][i], 0);
+                    return `- [${c.time}](https://youtu.be/${vid}?t=${secs}) — ${c.title}`;
+                }).join('\n');
+                navigator.clipboard.writeText(mk).then(
+                    () => showToast(`${chapters.length} chapters copied as markdown`, '#22c55e'),
+                    () => showToast('Clipboard write failed', '#ef4444'),
+                );
+            },
+            _inject() {
+                const controls = document.querySelector('.ytp-right-controls');
+                if (!controls || controls.querySelector('.ytkit-chaps-btn')) return;
+                const btn = document.createElement('button');
+                btn.className = 'ytp-button ytkit-player-btn ytkit-chaps-btn';
+                btn.title = 'Copy Chapters as Markdown (YTKit)';
+                TrustedHTML.setHTML(btn, '<svg viewBox="0 0 24 24"><path d="M3 4h18v2H3V4zm0 6h18v2H3v-2zm0 6h18v2H3v-2z"/></svg>');
+                btn.onclick = (e) => { e.stopPropagation(); this._copy(); };
+                controls.insertBefore(btn, controls.firstChild);
+                this._btn = btn;
+            },
+            init() {
+                setTimeout(() => this._inject(), 2000);
+                this._navRule = () => { this._btn = null; setTimeout(() => this._inject(), 2000); };
+                addNavigateRule('copyChapterMarkdown', this._navRule);
+            },
+            destroy() {
+                removeNavigateRule('copyChapterMarkdown');
+                this._btn?.remove(); this._btn = null;
+            }
+        },
+
+        // ── Chapter Jump Buttons ──
+        {
+            id: 'chapterJumpButtons',
+            name: 'Chapter Jump Buttons',
+            description: 'Prev/Next chapter buttons in the player right-controls — skip to the previous or next chapter',
+            group: 'Video Player',
+            icon: 'skip-forward',
+            pages: [PageTypes.WATCH],
+            _prev: null, _next: null, _navRule: null,
+            _getChapterTimes() {
+                const times = [];
+                const nodes = document.querySelectorAll('ytd-macro-markers-list-item-renderer');
+                for (const n of nodes) {
+                    const t = n.querySelector('#time')?.textContent?.trim();
+                    if (!t) continue;
+                    const secs = t.split(':').reverse().reduce((acc, v, i) => acc + parseInt(v) * [1, 60, 3600][i], 0);
+                    if (!isNaN(secs)) times.push(secs);
+                }
+                return times.sort((a, b) => a - b);
+            },
+            _jump(dir) {
+                const v = document.querySelector('video.html5-main-video');
+                if (!v) return;
+                const times = this._getChapterTimes();
+                if (!times.length) { showToast('No chapters', '#ef4444'); return; }
+                const cur = v.currentTime;
+                if (dir > 0) {
+                    const next = times.find(t => t > cur + 1);
+                    if (next !== undefined) v.currentTime = next;
+                } else {
+                    const rev = [...times].reverse();
+                    const prev = rev.find(t => t < cur - 2);
+                    v.currentTime = prev !== undefined ? prev : 0;
+                }
+            },
+            _inject() {
+                const controls = document.querySelector('.ytp-right-controls');
+                if (!controls || controls.querySelector('.ytkit-chjump-next')) return;
+                const mk = (title, svg, dir, cls) => {
+                    const b = document.createElement('button');
+                    b.className = 'ytp-button ytkit-player-btn ' + cls;
+                    b.title = title;
+                    TrustedHTML.setHTML(b, svg);
+                    b.onclick = (e) => { e.stopPropagation(); this._jump(dir); };
+                    return b;
+                };
+                const prev = mk('Previous chapter', '<svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/></svg>', -1, 'ytkit-chjump-prev');
+                const next = mk('Next chapter', '<svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6h2v12h-2z"/></svg>', 1, 'ytkit-chjump-next');
+                controls.insertBefore(next, controls.firstChild);
+                controls.insertBefore(prev, controls.firstChild);
+                this._prev = prev; this._next = next;
+            },
+            init() {
+                setTimeout(() => this._inject(), 2000);
+                this._navRule = () => { this._prev = null; this._next = null; setTimeout(() => this._inject(), 2000); };
+                addNavigateRule('chapterJumpButtons', this._navRule);
+            },
+            destroy() {
+                removeNavigateRule('chapterJumpButtons');
+                this._prev?.remove(); this._next?.remove();
+                this._prev = null; this._next = null;
             }
         },
 

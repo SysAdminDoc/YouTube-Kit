@@ -268,5 +268,21 @@
   "diagnosticLog": false,
   "_errors": [],
   "storageQuotaLRU": false,
-  "apiRetryBackoff": true
+  "apiRetryBackoff": true,
+  "watchHistoryAnalytics": false,
+  "subtitleStyling": false,
+  "subStyleFontSize": 100,
+  "subStyleFontFamily": "default",
+  "subStyleColor": "#ffffff",
+  "subStyleBgOpacity": 75,
+  "subStyleBgColor": "#000000",
+  "subStyleBottomOffset": 10,
+  "subStyleTextShadow": true,
+  "aiVideoSummary": false,
+  "aiSummaryEndpoint": "https://api.openai.com/v1/chat/completions",
+  "aiSummaryModel": "gpt-4o-mini",
+  "aiSummaryApiKey": "",
+  "aiSummaryProvider": "openai",
+  "copyChapterMarkdown": false,
+  "chapterJumpButtons": false
 }

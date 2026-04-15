@@ -4,6 +4,22 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.10.0] - Watch Analytics, Subtitle Styling, AI Summary, Chapters
+
+### Added
+
+- **Watch History Analytics.** Modal dashboard plotting your last 30 days of YouTube watch time as a CSS bar chart. Stats row: 30-day total, daily average, active days, all-time. Entry via "📊 Watch Stats" button next to like/share on watch page, or `window.__ytkitOpenAnalytics()` from console. Uses the existing `watchTimeTracker` data store — enable both for it to populate.
+- **Subtitle Styling.** Override YouTube caption appearance — font size (50–300%), font family (default / sans / serif / mono / YouTube Sans), color, background color + opacity, vertical offset, optional text shadow. Pure CSS override on `.ytp-caption-segment`, reacts live to setting changes.
+- **AI Video Summary.** Bring-your-own-key LLM summarization button in player controls. Supports OpenAI-compatible, Anthropic (with `anthropic-dangerous-direct-browser-access: true`), Gemini, and Ollama (localhost). Fetches JSON3 transcript, truncates to 120k chars, renders response in a floating Catppuccin panel with Copy button. API key persists via `chrome.storage.local`. Fetch is direct from the content script (not through EXT_FETCH) so users can point to any endpoint without allowlist edits.
+- **Copy Chapters as Markdown.** Player-button copies all chapters as a Markdown timestamped list with `youtu.be/<id>?t=<secs>` deep links. Falls back to parsing the description if no macro-markers are present.
+- **Chapter Jump Buttons.** Prev / Next chapter buttons in the player right-controls, seeking to surrounding chapter start times.
+
+### Changed
+
+- `DiagnosticLog.record()` hooks for `aiVideoSummary` and `subtitleDownload` failures so errors show up in the diagnostic export.
+
+---
+
 ## [3.9.0] - Visual Filters, Subtitle Download, Reddit Comments, Diagnostics
 
 ### Added
