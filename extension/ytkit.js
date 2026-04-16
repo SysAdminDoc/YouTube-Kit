@@ -1287,6 +1287,56 @@ return response;
             background: rgba(251,191,36,0.18) !important;
             border-color: rgba(251,191,36,0.28) !important;
         }
+        .ytkit-screenshot-btn {
+            width: auto !important;
+            min-width: 32px !important;
+            gap: 6px !important;
+            padding: 0 10px !important;
+            border-radius: 999px !important;
+            font-size: 11px !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.02em !important;
+            font-family: inherit !important;
+            font-variant-numeric: tabular-nums !important;
+            touch-action: manipulation !important;
+        }
+        .ytkit-screenshot-btn__icon {
+            width: 16px;
+            height: 16px;
+            display: inline-grid;
+            place-items: center;
+            flex-shrink: 0;
+        }
+        .ytkit-screenshot-btn__label {
+            line-height: 1;
+            white-space: nowrap;
+            color: inherit;
+        }
+        .ytkit-screenshot-btn[data-state="capturing"] {
+            color: rgba(226,241,255,0.96) !important;
+            border-color: rgba(96,165,250,0.34) !important;
+            background: rgba(59,130,246,0.18) !important;
+        }
+        .ytkit-screenshot-btn[data-state="saved"] {
+            color: #dfffea !important;
+            border-color: rgba(34,197,94,0.32) !important;
+            background: rgba(22,163,74,0.18) !important;
+        }
+        .ytkit-screenshot-btn[data-state="error"] {
+            color: #fff5f5 !important;
+            border-color: rgba(248,113,113,0.34) !important;
+            background: rgba(127,29,29,0.24) !important;
+        }
+        .ytkit-screenshot-btn[data-state="capturing"] .ytkit-screenshot-btn__icon svg {
+            animation: ytkit-spin 0.8s linear infinite;
+            transform-box: fill-box;
+            transform-origin: center;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .ytkit-screenshot-btn[data-state="capturing"] .ytkit-screenshot-btn__icon svg {
+                animation: none;
+            }
+        }
     `;
     (document.head || document.documentElement).appendChild(_playerBtnCSS);
 
@@ -1442,117 +1492,311 @@ return response;
 
         .ytkit-global-toast {
             position: fixed;
-            bottom: 80px;
+            bottom: calc(18px + env(safe-area-inset-bottom, 0px));
             left: 50%;
-            transform: translateX(-50%);
-            display: flex;
+            transform: translateX(-50%) translateY(16px);
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto;
             align-items: center;
             gap: 12px;
-            min-height: 44px;
-            max-width: min(560px, calc(100vw - 24px));
-            padding: 10px 16px;
-            border-radius: 14px;
-            background: var(--ytkit-toast-color, #22c55e);
+            width: min(620px, calc(100vw - 24px));
+            min-height: 56px;
+            padding: 12px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(var(--ytkit-toast-rgb, 34,197,94),0.24);
+            background:
+                radial-gradient(circle at top right, rgba(var(--ytkit-toast-rgb, 34,197,94),0.18), transparent 42%),
+                linear-gradient(180deg, rgba(18,24,34,0.98), rgba(8,11,16,0.98));
             color: #fff;
             font-family: var(--ytkit-font, "Segoe UI", "SF Pro Text", "Helvetica Neue", Arial, sans-serif);
+            z-index: var(--ytkit-toast-z, 2147483646);
+            box-shadow: 0 22px 48px rgba(0,0,0,0.34);
+            opacity: 0;
+            pointer-events: none;
+            overscroll-behavior: contain;
+            transition: opacity 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+        }
+
+        .ytkit-global-toast.is-visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .ytkit-global-toast[data-tone="error"] {
+            box-shadow: 0 22px 52px rgba(120, 20, 20, 0.28);
+        }
+
+        .ytkit-global-toast[data-tone="warning"] {
+            box-shadow: 0 22px 52px rgba(120, 72, 20, 0.24);
+        }
+
+        .ytkit-toast-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 74px;
+            min-height: 28px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(var(--ytkit-toast-rgb, 34,197,94),0.24);
+            background: rgba(var(--ytkit-toast-rgb, 34,197,94),0.14);
+            color: rgba(255,255,255,0.96);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .ytkit-toast-body {
+            min-width: 0;
+            display: grid;
+            gap: 2px;
+        }
+
+        .ytkit-toast-message {
+            min-width: 0;
+            color: rgba(255,255,255,0.94);
             font-size: 13px;
             font-weight: 700;
             letter-spacing: -0.01em;
-            z-index: var(--ytkit-toast-z, 2147483646);
-            box-shadow: 0 22px 48px rgba(0,0,0,0.34);
-            animation: ytkit-toast-fade var(--ytkit-toast-duration, 2.5s) ease-out forwards;
+            line-height: 1.4;
+            text-wrap: pretty;
+            overflow-wrap: anywhere;
         }
 
-        @media (prefers-reduced-motion: reduce) {
-            .ytkit-global-toast {
-                animation: none;
-            }
+        .ytkit-toast-actions {
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
         }
 
-        .ytkit-toast-action {
+        .ytkit-toast-action,
+        .ytkit-toast-close {
             appearance: none;
             -webkit-appearance: none;
-            min-height: 30px;
+            min-height: 32px;
             padding: 0 12px;
             border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.22);
-            background: rgba(255,255,255,0.14);
-            color: #fff;
+            border: 1px solid rgba(255,255,255,0.14);
+            background: rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.96);
             font-family: inherit;
             font-size: 11px;
             font-weight: 700;
             cursor: pointer;
-            transition: border-color 160ms ease, background-color 160ms ease, transform 120ms ease;
+            touch-action: manipulation;
+            transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
             outline: none;
         }
 
-        .ytkit-toast-action:hover {
-            background: rgba(255,255,255,0.22);
-            border-color: rgba(255,255,255,0.3);
+        .ytkit-toast-action:hover,
+        .ytkit-toast-close:hover {
+            background: rgba(255,255,255,0.14);
+            border-color: rgba(255,255,255,0.24);
         }
 
-        .ytkit-toast-action:active {
+        .ytkit-toast-action:active,
+        .ytkit-toast-close:active {
             transform: scale(0.985);
         }
 
-        .ytkit-toast-action:focus-visible {
-            box-shadow: 0 0 0 2px rgba(8,11,16,0.22), 0 0 0 4px rgba(255,255,255,0.22);
+        .ytkit-toast-action:focus-visible,
+        .ytkit-toast-close:focus-visible {
+            box-shadow: 0 0 0 2px rgba(8,11,16,0.22), 0 0 0 4px rgba(var(--ytkit-toast-rgb, 34,197,94),0.28);
+        }
+
+        .ytkit-toast-action--secondary {
+            background: transparent;
+            color: rgba(255,255,255,0.76);
+        }
+
+        .ytkit-toast-action--secondary:hover {
+            color: #fff;
+        }
+
+        .ytkit-toast-close {
+            width: 32px;
+            min-width: 32px;
+            padding: 0;
+            justify-content: center;
+            color: rgba(255,255,255,0.7);
+        }
+
+        @media (max-width: 680px) {
+            .ytkit-global-toast {
+                grid-template-columns: minmax(0, 1fr);
+                justify-items: stretch;
+                gap: 10px;
+                padding: 12px;
+            }
+
+            .ytkit-toast-actions {
+                justify-content: flex-start;
+            }
+
+            .ytkit-toast-close {
+                justify-self: end;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .ytkit-global-toast {
+                transition: none;
+            }
         }
     `);
 
-    // Global toast notification function with optional action button
+    function inferToastTone(color = '') {
+        const normalized = String(color).toLowerCase();
+        if (normalized === '#ef4444') return 'error';
+        if (normalized === '#f59e0b' || normalized === '#f97316') return 'warning';
+        if (normalized === '#3b82f6') return 'info';
+        if (normalized === '#6b7280') return 'neutral';
+        return 'success';
+    }
+
+    function getToastRgb(tone) {
+        switch (tone) {
+            case 'error': return '239,68,68';
+            case 'warning': return '245,158,11';
+            case 'info': return '59,130,246';
+            case 'neutral': return '107,114,128';
+            default: return '34,197,94';
+        }
+    }
+
+    function getToastBadgeLabel(tone) {
+        switch (tone) {
+            case 'error': return 'Issue';
+            case 'warning': return 'Heads Up';
+            case 'info': return 'Update';
+            case 'neutral': return 'Notice';
+            default: return 'Done';
+        }
+    }
+
+    function dismissToast(toast, immediate = false) {
+        if (!toast) return;
+        if (toast._dismissTimer) {
+            clearTimeout(toast._dismissTimer);
+            toast._dismissTimer = null;
+        }
+        if (toast._removeTimer) {
+            clearTimeout(toast._removeTimer);
+            toast._removeTimer = null;
+        }
+        toast.classList.remove('is-visible');
+        if (immediate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            toast.remove();
+            return;
+        }
+        toast._removeTimer = setTimeout(() => {
+            if (toast.isConnected) toast.remove();
+        }, 180);
+    }
+
+    // Global toast notification function with optional action button(s)
     function showToast(message, color = '#22c55e', options = {}) {
-        // Remove existing toast if present
-        document.querySelector('.ytkit-global-toast')?.remove();
+        const existingToast = document.querySelector('.ytkit-global-toast');
+        if (existingToast) dismissToast(existingToast, true);
+
+        const tone = options.tone || inferToastTone(color);
+        const actions = [
+            ...(Array.isArray(options.actions) ? options.actions : []),
+            ...(options.action ? [options.action] : [])
+        ].filter(Boolean).slice(0, 2);
+        const durationMs = Math.max(0, Number(options.duration ?? 2.5) * 1000);
 
         const toast = document.createElement('div');
         toast.className = 'ytkit-global-toast';
-        toast.style.setProperty('--ytkit-toast-color', color);
+        toast.dataset.tone = tone;
+        toast.style.setProperty('--ytkit-toast-rgb', getToastRgb(tone));
         toast.style.setProperty('--ytkit-toast-z', String(Z.TOAST));
-        toast.style.setProperty('--ytkit-toast-duration', `${options.duration || 2.5}s`);
         toast.setAttribute('role', options.role || (color === '#ef4444' ? 'alert' : 'status'));
         toast.setAttribute('aria-live', options.ariaLive || (color === '#ef4444' ? 'assertive' : 'polite'));
         toast.setAttribute('aria-atomic', 'true');
+        toast.tabIndex = -1;
+
+        const badge = document.createElement('span');
+        badge.className = 'ytkit-toast-badge';
+        badge.textContent = getToastBadgeLabel(tone);
+
+        const body = document.createElement('div');
+        body.className = 'ytkit-toast-body';
 
         const textSpan = document.createElement('span');
+        textSpan.className = 'ytkit-toast-message';
         textSpan.textContent = message;
-        toast.appendChild(textSpan);
+        body.appendChild(textSpan);
 
-        // Add action button if provided (e.g., for Undo)
-        if (options.action) {
+        const actionWrap = document.createElement('div');
+        actionWrap.className = 'ytkit-toast-actions';
+
+        actions.forEach((action, index) => {
             const actionBtn = document.createElement('button');
-            actionBtn.className = 'ytkit-toast-action';
+            actionBtn.className = `ytkit-toast-action${index > 0 ? ' ytkit-toast-action--secondary' : ''}`;
             actionBtn.type = 'button';
-            actionBtn.textContent = options.action.text || 'Undo';
-            actionBtn.onclick = (e) => {
-                e.stopPropagation();
-                toast.remove();
-                options.action.onClick?.();
-            };
-            toast.appendChild(actionBtn);
-        }
+            actionBtn.textContent = action.text || (index === 0 ? 'Undo' : 'Open');
+            actionBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                dismissToast(toast);
+                action.onClick?.();
+            });
+            actionWrap.appendChild(actionBtn);
+        });
 
-        // Add animation keyframes if not exists
-        if (!document.getElementById('ytkit-toast-animation')) {
-            const style = document.createElement('style');
-            style.id = 'ytkit-toast-animation';
-            style.textContent = `
-                @keyframes ytkit-toast-fade {
-                    0% { opacity: 0; transform: translateX(-50%) translateY(20px); }
-                    10% { opacity: 1; transform: translateX(-50%) translateY(0); }
-                    80% { opacity: 1; transform: translateX(-50%) translateY(0); }
-                    100% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
-                }
-            `;
-            document.head.appendChild(style);
+        if (options.dismissible !== false) {
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'ytkit-toast-close';
+            closeBtn.type = 'button';
+            closeBtn.setAttribute('aria-label', 'Dismiss notification');
+            closeBtn.textContent = '\u2715';
+            closeBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                dismissToast(toast);
+            });
+            actionWrap.appendChild(closeBtn);
         }
-
+        toast.appendChild(badge);
+        toast.appendChild(body);
+        toast.appendChild(actionWrap);
         document.body.appendChild(toast);
-        const duration = (options.duration || 2.5) * 1000;
-        const removeToast = () => {
-            if (toast.isConnected) toast.remove();
+
+        let remainingMs = durationMs;
+        let dismissAt = Date.now() + remainingMs;
+        const pauseDismiss = () => {
+            if (!toast._dismissTimer) return;
+            clearTimeout(toast._dismissTimer);
+            toast._dismissTimer = null;
+            remainingMs = Math.max(0, dismissAt - Date.now());
         };
-        setTimeout(removeToast, duration);
+        const resumeDismiss = () => {
+            if (!toast.isConnected || remainingMs <= 0 || options.persistent) return;
+            dismissAt = Date.now() + remainingMs;
+            toast._dismissTimer = setTimeout(() => dismissToast(toast), remainingMs);
+        };
+
+        toast.addEventListener('pointerenter', pauseDismiss);
+        toast.addEventListener('pointerleave', resumeDismiss);
+        toast.addEventListener('focusin', pauseDismiss);
+        toast.addEventListener('focusout', (event) => {
+            if (!toast.contains(event.relatedTarget)) resumeDismiss();
+        });
+        toast.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                dismissToast(toast);
+            }
+        });
+
+        requestAnimationFrame(() => toast.classList.add('is-visible'));
+        if (!options.persistent && durationMs > 0) {
+            toast._dismissTimer = setTimeout(() => dismissToast(toast), durationMs);
+        }
 
         return toast;
     }
@@ -1581,13 +1825,15 @@ return response;
         const panel = document.createElement('div');
         panel.id = panelId;
         panel.className = 'ytkit-dl-progress';
+        panel.setAttribute('role', 'status');
+        panel.setAttribute('aria-live', 'polite');
+        panel.setAttribute('aria-atomic', 'true');
 
         if (!document.getElementById('ytkit-dl-anim')) {
             const s = document.createElement('style');
             s.id = 'ytkit-dl-anim';
             s.textContent = `
                 @keyframes ytkit-slide-in{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-                #ytkit-dl-bar-fill{transition:width 0.4s ease}
             `;
             document.head.appendChild(s);
         }
@@ -1607,7 +1853,20 @@ return response;
 
         const title = document.createElement('div');
         title.className = 'ytkit-dl-progress__title';
-        title.textContent = 'Starting...';
+        title.textContent = 'Preparing download…';
+
+        const statusRow = document.createElement('div');
+        statusRow.className = 'ytkit-dl-progress__status';
+        const statePill = document.createElement('span');
+        statePill.className = 'ytkit-dl-progress__state';
+        statePill.textContent = 'Preparing';
+        const statusCopy = document.createElement('span');
+        statusCopy.className = 'ytkit-dl-progress__status-copy';
+        statusCopy.textContent = audioOnly
+            ? 'Connecting to the local audio downloader.'
+            : 'Connecting to the local video downloader.';
+        statusRow.appendChild(statePill);
+        statusRow.appendChild(statusCopy);
 
         const bar = document.createElement('div');
         bar.className = 'ytkit-dl-progress__bar';
@@ -1622,16 +1881,45 @@ return response;
         pct.textContent = '0%';
         const spd = document.createElement('span');
         spd.className = 'ytkit-dl-progress__stat';
+        spd.textContent = 'Waiting';
         const eta = document.createElement('span');
         eta.className = 'ytkit-dl-progress__stat';
+        eta.textContent = 'Queue';
         meta.appendChild(pct);
         meta.appendChild(spd);
         meta.appendChild(eta);
 
+        const actions = document.createElement('div');
+        actions.className = 'ytkit-dl-progress__actions';
+        actions.hidden = true;
+        const repairBtn = document.createElement('button');
+        repairBtn.type = 'button';
+        repairBtn.className = 'ytkit-dl-progress__action';
+        repairBtn.textContent = 'Open Repair Steps';
+        repairBtn.setAttribute('aria-label', 'Open local downloader repair steps');
+        repairBtn.addEventListener('click', () => MediaDLManager.showInstallPrompt('retry'));
+        actions.appendChild(repairBtn);
+
+        const setProgressState = (tone, label, copy, showRepair = false) => {
+            panel.dataset.state = tone;
+            statePill.textContent = label;
+            statusCopy.textContent = copy;
+            actions.hidden = !showRepair;
+        };
+        setProgressState(
+            'pending',
+            'Preparing',
+            audioOnly
+                ? 'Connecting to the local audio downloader.'
+                : 'Connecting to the local video downloader.'
+        );
+
         panel.appendChild(header);
         panel.appendChild(title);
+        panel.appendChild(statusRow);
         panel.appendChild(bar);
         panel.appendChild(meta);
+        panel.appendChild(actions);
         document.body.appendChild(panel);
 
         closeBtn.addEventListener('click', () => panel.remove());
@@ -1652,8 +1940,15 @@ return response;
                 const p = Math.min(data.progress || 0, 100);
                 fill.style.width = p + '%';
                 pct.textContent = p.toFixed(1) + '%';
-                if (data.speed) spd.textContent = data.speed;
-                if (data.eta)   eta.textContent = 'ETA ' + data.eta;
+                spd.textContent = data.speed || 'Local';
+                eta.textContent = data.eta ? 'ETA ' + data.eta : (p >= 99 ? 'Wrapping up' : 'In progress');
+                setProgressState(
+                    'active',
+                    data.status === 'processing' ? 'Finishing' : 'Downloading',
+                    data.eta
+                        ? `${p.toFixed(1)}% complete. ${data.eta} remaining.`
+                        : `${p.toFixed(1)}% complete. Stay on YouTube while the local downloader finishes.`
+                );
 
                 if (data.status === 'done' || data.status === 'complete') {
                     clearInterval(pollInterval);
@@ -1662,7 +1957,8 @@ return response;
                     fill.classList.add('is-success');
                     pct.textContent = '100%';
                     spd.textContent = '';
-                    eta.textContent = 'Done!';
+                    eta.textContent = 'Ready';
+                    setProgressState('success', 'Complete', 'The local downloader finished successfully.');
                     setTimeout(() => panel.remove(), 4000);
                 } else if (data.status === 'error' || data.status === 'failed' || data.status === 'cancelled') {
                     clearInterval(pollInterval);
@@ -1673,8 +1969,10 @@ return response;
                     pct.textContent = 'Failed';
                     spd.textContent = '';
                     eta.textContent = '';
+                    const needsRepair = /cookie|yt-dlp|unauthorized|local downloader/i.test(failureReason);
+                    setProgressState('error', 'Needs Attention', failureReason, needsRepair);
                     showToast(failureReason, '#ef4444', { duration: 6 });
-                    if (/cookie|yt-dlp|unauthorized|local downloader/i.test(failureReason)) {
+                    if (needsRepair) {
                         MediaDLManager.showInstallPrompt('retry');
                     }
                     setTimeout(() => panel.remove(), 5000);
@@ -1689,6 +1987,7 @@ return response;
                 pct.textContent = 'Error';
                 spd.textContent = '';
                 eta.textContent = '';
+                setProgressState('error', 'Connection Lost', 'Astra Deck lost contact with the local downloader. Reopen the repair steps to recover.', true);
                 showToast('Lost connection to local downloader', '#ef4444', { duration: 5 });
                 setTimeout(() => panel.remove(), 6000);
             }
@@ -1822,11 +2121,20 @@ return response;
             const prompt = document.createElement('div');
             prompt.id = 'ytkit-mediadl-install-prompt';
             prompt.className = 'ytkit-install-prompt';
+            prompt.setAttribute('role', 'region');
+            prompt.setAttribute('aria-labelledby', 'ytkit-install-prompt-title');
+            prompt.setAttribute('aria-describedby', 'ytkit-install-prompt-desc');
 
             // ── Header ──
             const header = document.createElement('div');
             header.className = 'ytkit-install-prompt__header';
+            const heading = document.createElement('div');
+            heading.className = 'ytkit-install-prompt__heading';
+            const eyebrow = document.createElement('span');
+            eyebrow.className = 'ytkit-install-prompt__eyebrow';
+            eyebrow.textContent = isRetryMode ? 'Repair Needed' : 'Local Downloads';
             const titleEl = document.createElement('span');
+            titleEl.id = 'ytkit-install-prompt-title';
             titleEl.className = 'ytkit-install-prompt__title';
             titleEl.textContent = isRetryMode ? 'Local Downloader Not Responding' : 'Install Local Downloader';
             const closeBtn = document.createElement('button');
@@ -1835,15 +2143,39 @@ return response;
             closeBtn.setAttribute('aria-label', 'Close local downloader prompt');
             closeBtn.textContent = '\u2715';
             closeBtn.onclick = () => prompt.remove();
-            header.appendChild(titleEl);
+            heading.appendChild(eyebrow);
+            heading.appendChild(titleEl);
+            header.appendChild(heading);
             header.appendChild(closeBtn);
 
             // ── Description ──
             const desc = document.createElement('p');
+            desc.id = 'ytkit-install-prompt-desc';
             desc.className = 'ytkit-install-prompt__desc';
             desc.textContent = isRetryMode
-                ? 'The local downloader needs a repair. Download the Astra Deck setup again, run it with PowerShell, then retry your download.'
-                : 'Download the Astra Deck setup, then in Downloads right-click the file and choose Run with PowerShell. It installs everything automatically.';
+                ? 'Try a quick restart first. If the downloader still does not answer, run the Astra Deck setup again to repair the local service.'
+                : 'Set up local downloads once, then Astra Deck can send video or audio jobs straight to the downloader on your device.';
+
+            const note = document.createElement('div');
+            note.className = 'ytkit-install-prompt__note';
+            note.textContent = isRetryMode
+                ? 'Fastest recovery: start the service again first, then fall back to the setup if needed.'
+                : 'Recommended path: use Download Setup. It installs and repairs everything automatically.';
+
+            const steps = document.createElement('ol');
+            steps.className = 'ytkit-install-prompt__steps';
+            [
+                isRetryMode
+                    ? 'Try Starting Again to wake the local service if it is already installed.'
+                    : 'Download Setup to grab the Astra Deck installer for local downloads.',
+                'Run the downloaded file with PowerShell from your Downloads folder.',
+                'Use Check Again after setup finishes so Astra Deck can confirm everything is ready.'
+            ].forEach((copy) => {
+                const item = document.createElement('li');
+                item.className = 'ytkit-install-prompt__step';
+                item.textContent = copy;
+                steps.appendChild(item);
+            });
 
             // ── Buttons ──
             const btnCol = document.createElement('div');
@@ -1858,44 +2190,57 @@ return response;
                 if (tone === 'danger') button.classList.add('is-danger');
             };
 
-            const makeBtn = (text, variant, onClick) => {
+            const makeBtn = (text, variant, onClick, detail = '') => {
                 const b = document.createElement('button');
                 b.type = 'button';
                 b.className = `ytkit-install-prompt__btn ytkit-install-prompt__btn--${variant}`;
+                const copy = document.createElement('span');
+                copy.className = 'ytkit-install-prompt__btn-copy';
                 const label = document.createElement('span');
                 label.className = 'ytkit-install-prompt__btn-label';
                 label.textContent = text;
-                b.appendChild(label);
+                copy.appendChild(label);
+                if (detail) {
+                    const meta = document.createElement('span');
+                    meta.className = 'ytkit-install-prompt__btn-meta';
+                    meta.textContent = detail;
+                    copy.appendChild(meta);
+                }
+                b.appendChild(copy);
                 b.onclick = onClick;
                 return b;
             };
 
             // 1. Retry / Start Server
             if (isRetryMode) {
-                const retryBtn = makeBtn('Try Starting Server Again', 'primary', async () => {
-                    setPromptButtonState(retryBtn, 'Starting...');
+                const retryBtn = makeBtn('Try Starting Again', 'primary', async () => {
+                    setPromptButtonState(retryBtn, 'Starting…');
                     retryBtn.disabled = true;
+                    retryBtn.setAttribute('aria-busy', 'true');
                     this.resetAutoStart();
                     const result = await this.tryAutoStart(5);
                     if (result.ok) {
                         showToast('MediaDL server is running!', '#22c55e', { duration: 3 });
                         prompt.remove();
                     } else {
-                        setPromptButtonState(retryBtn, 'Still not responding — try installing below', 'danger');
+                        retryBtn.setAttribute('aria-busy', 'false');
+                        setPromptButtonState(retryBtn, 'Still not responding — use setup below', 'danger');
                         retryBtn.disabled = false;
                     }
-                });
+                }, 'Best if the downloader is already installed but idle.');
                 btnCol.appendChild(retryBtn);
             }
 
             // 2. Copy Install Command
             const copyBtn = makeBtn('Download Setup', 'accent', async () => {
-                setPromptButtonState(copyBtn, 'Downloading setup...');
+                setPromptButtonState(copyBtn, 'Downloading setup…');
                 copyBtn.disabled = true;
+                copyBtn.setAttribute('aria-busy', 'true');
                 const result = await this.runInstallAssist();
-                setPromptButtonState(copyBtn, result.downloaded ? 'Setup file ready' : 'Open setup file', result.downloaded ? 'success' : '');
+                copyBtn.setAttribute('aria-busy', 'false');
+                setPromptButtonState(copyBtn, result.downloaded ? 'Setup File Ready' : 'Open Setup File', result.downloaded ? 'success' : '');
                 copyBtn.disabled = false;
-            });
+            }, 'Recommended. Installs or repairs the local downloader.');
             btnCol.appendChild(copyBtn);
 
             // 3. Copy PowerShell command
@@ -1908,24 +2253,26 @@ return response;
                 } else {
                     void openExternalUrl(this.INSTALLER_URL).catch(() => {});
                 }
-            });
+            }, 'Use only if the downloaded setup file cannot run.');
             btnCol.appendChild(dlBtn);
 
             // 4. "I just installed it" — re-check
             const recheckBtn = makeBtn('Check Again', 'ghost', async () => {
-                setPromptButtonState(recheckBtn, 'Checking...');
+                setPromptButtonState(recheckBtn, 'Checking…');
                 recheckBtn.disabled = true;
+                recheckBtn.setAttribute('aria-busy', 'true');
                 this.resetAutoStart();
                 const result = await this.tryAutoStart(5);
                 if (result.ok) {
                     showToast('Local downloader is ready.', '#22c55e', { duration: 4 });
                     prompt.remove();
                 } else {
+                    recheckBtn.setAttribute('aria-busy', 'false');
                     setPromptButtonState(recheckBtn, 'Not detected — make sure the installer completed', 'danger');
                     recheckBtn.disabled = false;
                     setTimeout(() => { setPromptButtonState(recheckBtn, 'Check Again'); }, 4000);
                 }
-            });
+            }, 'Use this after running the setup file.');
             btnCol.appendChild(recheckBtn);
 
             // 5. Dismiss
@@ -1939,6 +2286,8 @@ return response;
 
             prompt.appendChild(header);
             prompt.appendChild(desc);
+            prompt.appendChild(note);
+            prompt.appendChild(steps);
             prompt.appendChild(btnCol);
             document.body.appendChild(prompt);
 
@@ -4408,7 +4757,52 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     }
 
                     #comments .ytkit-comment-search {
-                        margin: 10px 0 14px !important;
+                        display: grid !important;
+                        gap: 12px !important;
+                        margin: 12px 0 16px !important;
+                        padding: 14px !important;
+                        border-radius: 20px !important;
+                        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+                        background:
+                            radial-gradient(circle at top right, rgba(var(--ytkit-accent-rgb), 0.12), transparent 42%),
+                            linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012)),
+                            rgba(8, 11, 18, 0.92) !important;
+                        box-shadow: 0 20px 44px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+                    }
+
+                    #comments .ytkit-comment-search[data-search-empty="1"] {
+                        border-color: rgba(245, 158, 11, 0.24) !important;
+                        box-shadow: 0 22px 48px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(245, 158, 11, 0.08) !important;
+                    }
+
+                    #comments .ytkit-comment-search-head {
+                        display: flex !important;
+                        align-items: flex-start !important;
+                        justify-content: space-between !important;
+                        gap: 12px !important;
+                    }
+
+                    #comments .ytkit-comment-search-copy {
+                        display: grid !important;
+                        gap: 4px !important;
+                        min-width: 0 !important;
+                    }
+
+                    #comments .ytkit-comment-search-eyebrow {
+                        color: rgba(255, 255, 255, 0.48) !important;
+                        font-size: 10px !important;
+                        font-weight: 800 !important;
+                        letter-spacing: 0.12em !important;
+                        text-transform: uppercase !important;
+                    }
+
+                    #comments .ytkit-comment-search-summary {
+                        margin: 0 !important;
+                        color: rgba(255, 255, 255, 0.92) !important;
+                        font-size: 12.5px !important;
+                        line-height: 1.45 !important;
+                        font-weight: 600 !important;
+                        text-wrap: pretty !important;
                     }
 
                     #comments .ytkit-comment-search-field {
@@ -4416,16 +4810,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         grid-template-columns: auto minmax(0, 1fr) auto !important;
                         align-items: center !important;
                         gap: 10px !important;
-                        min-height: 42px !important;
-                        padding: 0 12px !important;
-                        border-radius: 14px !important;
+                        min-height: 48px !important;
+                        padding: 0 14px !important;
+                        border-radius: 16px !important;
                         border: 1px solid rgba(255, 255, 255, 0.08) !important;
-                        background: rgba(255, 255, 255, 0.03) !important;
+                        background: rgba(255, 255, 255, 0.035) !important;
+                        transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease !important;
                     }
 
                     #comments .ytkit-comment-search-field:focus-within {
-                        border-color: rgba(var(--ytkit-accent-rgb), 0.28) !important;
-                        background: rgba(255, 255, 255, 0.05) !important;
+                        border-color: rgba(var(--ytkit-accent-rgb), 0.3) !important;
+                        background: rgba(255, 255, 255, 0.055) !important;
                         box-shadow: 0 0 0 4px rgba(var(--ytkit-accent-rgb), 0.08) !important;
                     }
 
@@ -4434,13 +4829,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         min-width: 0 !important;
                         border: none !important;
                         background: transparent !important;
-                        color: rgba(255, 255, 255, 0.92) !important;
+                        color: rgba(255, 255, 255, 0.94) !important;
                         font-size: 13px !important;
                         font-weight: 600 !important;
                         outline: none !important;
                     }
 
                     #comments .ytkit-comment-search-input:focus-visible,
+                    #comments .ytkit-comment-search-clear:focus-visible,
+                    #comments .ytkit-comment-search-empty-btn:focus-visible,
                     #comments ytd-comment-engagement-bar #toolbar button:focus-visible,
                     #comments ytd-comment-engagement-bar #toolbar .yt-spec-button-shape-next:focus-visible {
                         outline: 2px solid rgba(var(--ytkit-accent-rgb), 0.44) !important;
@@ -4457,20 +4854,111 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         color: rgba(255, 255, 255, 0.52) !important;
                     }
 
+                    #comments .ytkit-comment-search-clear {
+                        width: 34px !important;
+                        height: 34px !important;
+                        padding: 0 !important;
+                        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+                        border-radius: 12px !important;
+                        background: rgba(255, 255, 255, 0.04) !important;
+                        color: rgba(255, 255, 255, 0.72) !important;
+                        display: inline-flex !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                        cursor: pointer !important;
+                        touch-action: manipulation !important;
+                        transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease !important;
+                    }
+
+                    #comments .ytkit-comment-search-clear:hover:not(:disabled) {
+                        border-color: rgba(var(--ytkit-accent-rgb), 0.2) !important;
+                        background: rgba(var(--ytkit-accent-rgb), 0.12) !important;
+                        color: rgba(255, 255, 255, 0.96) !important;
+                        transform: translateY(-1px) !important;
+                    }
+
+                    #comments .ytkit-comment-search-clear:disabled {
+                        opacity: 0.5 !important;
+                        cursor: default !important;
+                    }
+
+                    #comments .ytkit-comment-search-clear svg {
+                        width: 14px !important;
+                        height: 14px !important;
+                    }
+
                     #comments .ytkit-search-count {
                         display: inline-flex !important;
                         align-items: center !important;
                         justify-content: center !important;
-                        min-width: 52px !important;
-                        padding: 5px 9px !important;
+                        min-height: 34px !important;
+                        min-width: 96px !important;
+                        padding: 0 12px !important;
                         border-radius: 999px !important;
                         background: rgba(255, 255, 255, 0.05) !important;
                         border: 1px solid rgba(255, 255, 255, 0.06) !important;
-                        color: rgba(255, 255, 255, 0.72) !important;
-                        font-size: 9px !important;
+                        color: rgba(255, 255, 255, 0.76) !important;
+                        font-size: 10px !important;
                         font-weight: 800 !important;
                         letter-spacing: 0.08em !important;
                         text-transform: uppercase !important;
+                        white-space: nowrap !important;
+                        font-variant-numeric: tabular-nums !important;
+                    }
+
+                    #comments .ytkit-comment-search-hint {
+                        color: rgba(255, 255, 255, 0.56) !important;
+                        font-size: 11px !important;
+                        font-weight: 600 !important;
+                        line-height: 1.45 !important;
+                        text-wrap: pretty !important;
+                    }
+
+                    #comments .ytkit-comment-search-empty {
+                        display: grid !important;
+                        gap: 10px !important;
+                        padding: 14px !important;
+                        border-radius: 16px !important;
+                        border: 1px solid rgba(245, 158, 11, 0.16) !important;
+                        background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), rgba(255, 255, 255, 0.015)) !important;
+                    }
+
+                    #comments .ytkit-comment-search-empty[hidden] {
+                        display: none !important;
+                    }
+
+                    #comments .ytkit-comment-search-empty-title {
+                        color: rgba(255, 255, 255, 0.96) !important;
+                        font-size: 13px !important;
+                        font-weight: 700 !important;
+                    }
+
+                    #comments .ytkit-comment-search-empty-copy {
+                        color: rgba(255, 255, 255, 0.68) !important;
+                        font-size: 11.5px !important;
+                        line-height: 1.5 !important;
+                        text-wrap: pretty !important;
+                    }
+
+                    #comments .ytkit-comment-search-empty-btn {
+                        justify-self: start !important;
+                        min-height: 34px !important;
+                        padding: 0 14px !important;
+                        border-radius: 999px !important;
+                        border: 1px solid rgba(var(--ytkit-accent-rgb), 0.22) !important;
+                        background: rgba(var(--ytkit-accent-rgb), 0.12) !important;
+                        color: rgba(255, 255, 255, 0.96) !important;
+                        font-size: 11px !important;
+                        font-weight: 700 !important;
+                        cursor: pointer !important;
+                        touch-action: manipulation !important;
+                        transition: border-color 160ms ease, background 160ms ease, transform 160ms ease !important;
+                    }
+
+                    #comments .ytkit-comment-search-empty-btn:hover {
+                        border-color: rgba(var(--ytkit-accent-rgb), 0.34) !important;
+                        background: rgba(var(--ytkit-accent-rgb), 0.18) !important;
+                        transform: translateY(-1px) !important;
                     }
 
                     #comments ytd-comment-simplebox-renderer {
@@ -4550,19 +5038,24 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below #comments .ytkit-comment-search {
                         margin: 10px 0 14px !important;
+                        padding: 12px !important;
+                        gap: 10px !important;
                     }
 
-                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments .ytkit-comment-search-field {
-                        min-height: 42px !important;
-                        gap: 8px !important;
-                        padding: 0 12px !important;
-                        border-radius: 14px !important;
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments .ytkit-comment-search-head {
+                        flex-direction: column !important;
+                        align-items: stretch !important;
                     }
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below #comments .ytkit-search-count {
-                        min-width: 48px !important;
-                        padding: 5px 8px !important;
-                        font-size: 9px !important;
+                        align-self: flex-start !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments .ytkit-comment-search-field {
+                        min-height: 46px !important;
+                        gap: 8px !important;
+                        padding: 0 12px !important;
+                        border-radius: 14px !important;
                     }
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer {
@@ -7965,27 +8458,276 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             icon: 'message-square',
             pages: [PageTypes.WATCH],
             _styleElement: null,
+            _formatCount(value) {
+                return new Intl.NumberFormat().format(Math.max(0, Math.floor(Number(value) || 0)));
+            },
+            _parseVoteCount(voteText) {
+                const raw = String(voteText || '').replace(/\u00A0/g, ' ').trim();
+                if (!raw || raw === '0') return 0;
+
+                const lower = raw.toLowerCase();
+                const suffix = lower.includes('m') ? 'm' : lower.includes('k') ? 'k' : '';
+                let numeric = lower.replace(/[^0-9,.\s]/g, '').replace(/\s+/g, '');
+
+                if (!numeric) return 0;
+
+                if (suffix) {
+                    if (numeric.includes(',') && !numeric.includes('.')) numeric = numeric.replace(',', '.');
+                    else numeric = numeric.replace(/,/g, '');
+                } else {
+                    numeric = numeric.replace(/(\d),(?=\d{3}\b)/g, '$1').replace(/\s+/g, '');
+                    if (numeric.includes(',') && !numeric.includes('.')) numeric = numeric.replace(',', '.');
+                    else numeric = numeric.replace(/,/g, '');
+                }
+
+                let count = Number.parseFloat(numeric);
+                if (!Number.isFinite(count)) return 0;
+                if (suffix === 'k') count *= 1000;
+                if (suffix === 'm') count *= 1000000;
+                return count;
+            },
+            _getReplyButtons(replies) {
+                return {
+                    more: replies.querySelector('#more-replies .yt-spec-button-shape-next, #more-replies-sub-thread .yt-spec-button-shape-next, #more-replies button, #more-replies-sub-thread button'),
+                    less: replies.querySelector('#less-replies .yt-spec-button-shape-next, #less-replies-sub-thread .yt-spec-button-shape-next, #less-replies button, #less-replies-sub-thread button')
+                };
+            },
+            _getReplyContainer(replies) {
+                return replies.querySelector('#expanded-threads, #expander-contents');
+            },
+            _getLoadedReplyCount(replies) {
+                return replies.querySelectorAll('#expanded-threads ytd-comment-view-model, #expanded-threads ytd-comment-renderer, #expander-contents ytd-comment-view-model, #expander-contents ytd-comment-renderer').length;
+            },
+            _isRepliesExpanded(replies) {
+                const { less } = this._getReplyButtons(replies);
+                if (less) return true;
+                const container = this._getReplyContainer(replies);
+                if (!(container instanceof HTMLElement)) return false;
+                if (container.offsetParent === null) return false;
+                if (getComputedStyle(container).display === 'none') return false;
+                return this._getLoadedReplyCount(replies) > 0;
+            },
+            _getReplyMeta(replies, loadedCount) {
+                const { more, less } = this._getReplyButtons(replies);
+                const nativeText = (less?.textContent || more?.textContent || '').trim().replace(/\s+/g, ' ');
+                if (nativeText) return nativeText;
+                return `${this._formatCount(loadedCount)} repl${loadedCount === 1 ? 'y' : 'ies'}`;
+            },
+            _syncReplyToggle(replies) {
+                if (!(replies instanceof HTMLElement)) return;
+
+                const loadedCount = this._getLoadedReplyCount(replies);
+                const expanded = this._isRepliesExpanded(replies);
+                let tools = replies.querySelector('.ytkit-comment-replies-tools');
+
+                if (!expanded || loadedCount === 0) {
+                    delete replies.dataset.ytkitRepliesCollapsed;
+                    tools?.remove();
+                    return;
+                }
+
+                if (!tools) {
+                    tools = document.createElement('div');
+                    tools.className = 'ytkit-comment-replies-tools';
+
+                    const toggle = document.createElement('button');
+                    toggle.type = 'button';
+                    toggle.className = 'ytkit-comment-replies-toggle';
+                    toggle.setAttribute('aria-label', 'Collapse replies');
+
+                    const iconWrap = document.createElement('span');
+                    iconWrap.className = 'ytkit-comment-replies-toggle-icon';
+                    const chevron = ICONS.chevronRight();
+                    chevron.setAttribute('aria-hidden', 'true');
+                    iconWrap.appendChild(chevron);
+
+                    const copy = document.createElement('span');
+                    copy.className = 'ytkit-comment-replies-toggle-copy';
+
+                    const label = document.createElement('span');
+                    label.className = 'ytkit-comment-replies-toggle-label';
+
+                    const meta = document.createElement('span');
+                    meta.className = 'ytkit-comment-replies-toggle-meta';
+                    meta.setAttribute('translate', 'no');
+
+                    copy.appendChild(label);
+                    copy.appendChild(meta);
+                    toggle.appendChild(iconWrap);
+                    toggle.appendChild(copy);
+                    toggle.addEventListener('click', () => {
+                        if (replies.dataset.ytkitRepliesCollapsed === '1') delete replies.dataset.ytkitRepliesCollapsed;
+                        else replies.dataset.ytkitRepliesCollapsed = '1';
+                        this._syncReplyToggle(replies);
+                    });
+
+                    tools.appendChild(toggle);
+                    replies.insertBefore(tools, replies.firstChild);
+                }
+
+                const toggle = tools.querySelector('.ytkit-comment-replies-toggle');
+                const label = tools.querySelector('.ytkit-comment-replies-toggle-label');
+                const meta = tools.querySelector('.ytkit-comment-replies-toggle-meta');
+                const collapsed = replies.dataset.ytkitRepliesCollapsed === '1';
+
+                toggle.dataset.state = collapsed ? 'collapsed' : 'expanded';
+                toggle.setAttribute('aria-expanded', String(!collapsed));
+                toggle.setAttribute('aria-label', collapsed ? 'Expand replies' : 'Collapse replies');
+                toggle.title = collapsed ? 'Show loaded replies' : 'Hide loaded replies';
+                label.textContent = collapsed ? 'Expand Replies' : 'Collapse Replies';
+                meta.textContent = this._getReplyMeta(replies, loadedCount);
+            },
             init() {
                 const css = `
                     /* Creator/OP reply highlight */
                     ytd-comment-view-model[data-ytkit-creator],
                     ytd-comment-renderer[data-ytkit-creator] {
-                        border-left: 3px solid rgba(255,69,58,0.6) !important;
-                        background: rgba(255,69,58,0.03) !important;
+                        border-left: 3px solid rgba(245, 158, 11, 0.52) !important;
+                        background:
+                            linear-gradient(90deg, rgba(245, 158, 11, 0.1), rgba(245, 158, 11, 0.02) 26%, transparent 56%) !important;
+                        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
                     }
                     ytd-comment-view-model[data-ytkit-creator] #author-text,
                     ytd-comment-renderer[data-ytkit-creator] #author-text {
-                        color: #ff453a !important;
+                        color: rgba(255, 244, 219, 0.98) !important;
+                    }
+                    .ytkit-comment-role-badge {
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        min-height: 18px;
+                        padding: 0 7px;
+                        margin-left: 6px;
+                        border-radius: 999px;
+                        border: 1px solid rgba(245, 158, 11, 0.18);
+                        background: rgba(245, 158, 11, 0.12);
+                        color: rgba(255, 239, 204, 0.96);
+                        font-size: 9px;
+                        font-weight: 800;
+                        letter-spacing: 0.08em;
+                        text-transform: uppercase;
+                        vertical-align: middle;
                     }
                     /* Like heat indicator */
                     .ytkit-heat-indicator {
-                        display: inline-flex; align-items: center; gap: 3px;
-                        font-size: 10px; padding: 1px 5px; border-radius: 3px;
-                        margin-left: 4px; vertical-align: baseline;
-                        font-weight: 600; letter-spacing: 0.02em;
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 6px;
+                        min-height: 22px;
+                        padding: 0 8px;
+                        border-radius: 999px;
+                        margin-left: 8px;
+                        vertical-align: middle;
+                        font-size: 10px;
+                        font-weight: 700;
+                        letter-spacing: 0.02em;
+                        line-height: 1;
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        font-variant-numeric: tabular-nums;
                     }
-                    .ytkit-heat-hot { color: #ef4444; background: rgba(239,68,68,0.1); }
-                    .ytkit-heat-fire { color: #ff6b6b; background: rgba(255,107,107,0.12); text-shadow: 0 0 6px rgba(255,107,107,0.3); }
+                    .ytkit-heat-indicator::before {
+                        content: '';
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 999px;
+                        background: currentColor;
+                        box-shadow: 0 0 10px currentColor;
+                        opacity: 0.88;
+                    }
+                    .ytkit-heat-hot {
+                        color: #fb7185;
+                        background: rgba(251, 113, 133, 0.12);
+                        border-color: rgba(251, 113, 133, 0.18);
+                    }
+                    .ytkit-heat-fire {
+                        color: #fda4af;
+                        background: linear-gradient(180deg, rgba(251, 113, 133, 0.18), rgba(244, 63, 94, 0.1));
+                        border-color: rgba(244, 63, 94, 0.22);
+                        box-shadow: 0 0 0 1px rgba(244, 63, 94, 0.05);
+                    }
+                    .ytkit-comment-replies-tools {
+                        display: flex;
+                        justify-content: flex-end;
+                        margin: 4px 0 8px;
+                        padding-left: 12px;
+                    }
+                    .ytkit-comment-replies-toggle {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 10px;
+                        min-height: 32px;
+                        padding: 0 12px;
+                        border-radius: 999px;
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        background: rgba(255, 255, 255, 0.035);
+                        color: rgba(255, 255, 255, 0.86);
+                        cursor: pointer;
+                        touch-action: manipulation;
+                        transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
+                    }
+                    .ytkit-comment-replies-toggle:hover {
+                        border-color: rgba(var(--ytkit-accent-rgb), 0.18);
+                        background: rgba(var(--ytkit-accent-rgb), 0.1);
+                        color: rgba(255, 255, 255, 0.96);
+                        transform: translateY(-1px);
+                    }
+                    .ytkit-comment-replies-toggle:focus-visible {
+                        outline: 2px solid rgba(var(--ytkit-accent-rgb), 0.4);
+                        outline-offset: 2px;
+                    }
+                    .ytkit-comment-replies-toggle-icon {
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 999px;
+                        background: rgba(255, 255, 255, 0.06);
+                        flex-shrink: 0;
+                    }
+                    .ytkit-comment-replies-toggle-icon svg {
+                        width: 14px;
+                        height: 14px;
+                        transition: transform 160ms ease;
+                    }
+                    .ytkit-comment-replies-toggle[data-state="expanded"] .ytkit-comment-replies-toggle-icon svg {
+                        transform: rotate(90deg);
+                    }
+                    .ytkit-comment-replies-toggle[data-state="collapsed"] .ytkit-comment-replies-toggle-icon svg {
+                        transform: rotate(0deg);
+                    }
+                    .ytkit-comment-replies-toggle-copy {
+                        display: grid;
+                        gap: 2px;
+                        min-width: 0;
+                        text-align: left;
+                    }
+                    .ytkit-comment-replies-toggle-label {
+                        font-size: 11px;
+                        font-weight: 700;
+                        line-height: 1;
+                    }
+                    .ytkit-comment-replies-toggle-meta {
+                        color: rgba(255, 255, 255, 0.58);
+                        font-size: 10px;
+                        font-weight: 600;
+                        line-height: 1;
+                        font-variant-numeric: tabular-nums;
+                    }
+                    ytd-comment-replies-renderer[data-ytkit-replies-collapsed="1"] #expanded-threads,
+                    ytd-comment-replies-renderer[data-ytkit-replies-collapsed="1"] #expander-contents {
+                        display: none !important;
+                    }
+                    @media (max-width: 720px) {
+                        .ytkit-comment-replies-tools {
+                            justify-content: stretch;
+                            padding-left: 0;
+                        }
+                        .ytkit-comment-replies-toggle {
+                            width: 100%;
+                            justify-content: space-between;
+                        }
+                    }
                 `;
                 this._styleElement = injectStyle(css, this.id, true);
 
@@ -8003,39 +8745,51 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         const hasBadge = comment.querySelector('ytd-author-comment-badge-renderer');
                         if (hasBadge || (channelName && authorName && channelName.includes(authorName))) {
                             comment.dataset.ytkitCreator = '1';
+                            if (!hasBadge && authorEl && !authorEl.parentElement?.querySelector('.ytkit-comment-role-badge')) {
+                                const roleBadge = document.createElement('span');
+                                roleBadge.className = 'ytkit-comment-role-badge';
+                                roleBadge.textContent = 'OP';
+                                roleBadge.setAttribute('translate', 'no');
+                                authorEl.after(roleBadge);
+                            }
                         }
 
                         // Like heat indicator
                         const voteEl = comment.querySelector('#vote-count-middle');
                         const voteText = voteEl?.textContent?.trim() || '';
-                        if (voteText && voteText !== '0') {
-                            let count = 0;
-                            const lower = voteText.toLowerCase();
-                            if (lower.includes('k')) count = parseFloat(lower) * 1000;
-                            else if (lower.includes('m')) count = parseFloat(lower) * 1000000;
-                            else count = parseInt(voteText.replace(/,/g, ''), 10) || 0;
-
-                            if (count >= 1000) {
+                        const count = this._parseVoteCount(voteText);
+                        if (count >= 1000) {
+                            const timeEl = comment.querySelector('#published-time-text, .published-time-text');
+                            if (timeEl && !comment.querySelector('.ytkit-heat-indicator')) {
                                 const heat = document.createElement('span');
                                 heat.className = 'ytkit-heat-indicator';
-                                if (count >= 10000) { heat.classList.add('ytkit-heat-fire'); heat.textContent = voteText; }
-                                else { heat.classList.add('ytkit-heat-hot'); heat.textContent = voteText; }
-                                const timeEl = comment.querySelector('#published-time-text, .published-time-text');
-                                if (timeEl && !comment.querySelector('.ytkit-heat-indicator')) timeEl.after(heat);
+                                heat.setAttribute('translate', 'no');
+                                heat.textContent = voteText;
+                                if (count >= 10000) heat.classList.add('ytkit-heat-fire');
+                                else heat.classList.add('ytkit-heat-hot');
+                                heat.title = `${this._formatCount(count)} likes`;
+                                timeEl.after(heat);
                             }
                         }
                     });
 
+                    document.querySelectorAll('ytd-comment-replies-renderer').forEach(replies => {
+                        this._syncReplyToggle(replies);
+                    });
                 };
 
                 addMutationRule(this.id, processCommentEnhancements);
+                processCommentEnhancements();
             },
             destroy() {
                 removeMutationRule(this.id);
                 this._styleElement?.remove(); this._styleElement = null;
                 document.querySelectorAll('[data-ytkit-enhanced]').forEach(el => delete el.dataset.ytkitEnhanced);
                 document.querySelectorAll('[data-ytkit-creator]').forEach(el => delete el.dataset.ytkitCreator);
+                document.querySelectorAll('[data-ytkit-replies-collapsed]').forEach(el => delete el.dataset.ytkitRepliesCollapsed);
+                document.querySelectorAll('.ytkit-comment-role-badge').forEach(el => el.remove());
                 document.querySelectorAll('.ytkit-heat-indicator').forEach(el => el.remove());
+                document.querySelectorAll('.ytkit-comment-replies-tools').forEach(el => el.remove());
             }
         },
         cssFeature('hideLiveChatEngagement', 'Hide Chat Engagement', 'Remove engagement prompts in live chat', 'Live Chat', 'message-circle-off',
@@ -8612,13 +9366,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             isParent: true,
             _styleElement: null,
             _observer: null,
-            _toastTimeout: null,
             _lastHidden: null,
             _STORAGE_KEY: 'ytkit-hidden-videos',
             _CHANNELS_KEY: 'ytkit-blocked-channels',
             _hiddenSet: null,
             _hiddenList: null,
             _channelsCache: null,
+            _subsBannerCollapsed: false,
             _subsLoadState: {
                 consecutiveHiddenBatches: 0,
                 lastBatchSize: 0,
@@ -8626,6 +9380,95 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 loadingBlocked: false,
                 totalVideosLoaded: 0,
                 totalVideosHidden: 0
+            },
+            _formatSubsLoadCount(value) {
+                return new Intl.NumberFormat().format(Math.max(0, Math.floor(Number(value) || 0)));
+            },
+            _formatSubsLoadPercent(value, total) {
+                if (!total) return '0%';
+                const percent = Math.max(0, Math.min(100, Math.round((Number(value) / Number(total)) * 100)));
+                return `${new Intl.NumberFormat().format(percent)}%`;
+            },
+            _createSubsLoadStat(label, value) {
+                const stat = document.createElement('div');
+                stat.className = 'ytkit-subs-load-banner__stat';
+
+                const statLabel = document.createElement('span');
+                statLabel.className = 'ytkit-subs-load-banner__stat-label';
+                statLabel.textContent = label;
+
+                const statValue = document.createElement('span');
+                statValue.className = 'ytkit-subs-load-banner__stat-value';
+                statValue.textContent = value;
+                statValue.setAttribute('translate', 'no');
+
+                stat.appendChild(statLabel);
+                stat.appendChild(statValue);
+                return stat;
+            },
+            _removeLoadBlockedUi() {
+                document.getElementById('ytkit-subs-load-banner')?.remove();
+                document.getElementById('ytkit-subs-load-chip')?.remove();
+            },
+            _resumeSubsLoading() {
+                this._subsLoadState.consecutiveHiddenBatches = 0;
+                this._subsBannerCollapsed = false;
+                this._removeLoadBlocker();
+                window.scrollBy(0, 100);
+                setTimeout(() => window.scrollBy(0, -100), 100);
+            },
+            _expandLoadBlockedBanner() {
+                if (!this._subsLoadState.loadingBlocked) return;
+                this._subsBannerCollapsed = false;
+                this._showLoadBlockedBanner();
+            },
+            _collapseLoadBlockedBanner() {
+                if (!this._subsLoadState.loadingBlocked) return;
+                this._subsBannerCollapsed = true;
+                this._showLoadBlockedChip();
+            },
+            _showLoadBlockedChip() {
+                if (!this._subsLoadState.loadingBlocked) return;
+                this._removeLoadBlockedUi();
+
+                const chip = document.createElement('div');
+                chip.id = 'ytkit-subs-load-chip';
+                chip.className = 'ytkit-subs-load-chip';
+                chip.style.setProperty('--ytkit-banner-z', String(Z.BANNER));
+                chip.setAttribute('role', 'status');
+                chip.setAttribute('aria-live', 'polite');
+
+                const summaryBtn = document.createElement('button');
+                summaryBtn.type = 'button';
+                summaryBtn.className = 'ytkit-subs-load-chip__main';
+                summaryBtn.setAttribute('aria-label', 'Open subscription load controls');
+
+                const copy = document.createElement('span');
+                copy.className = 'ytkit-subs-load-chip__copy';
+
+                const title = document.createElement('span');
+                title.className = 'ytkit-subs-load-chip__title';
+                title.textContent = 'Subscriptions Paused';
+
+                const meta = document.createElement('span');
+                meta.className = 'ytkit-subs-load-chip__meta';
+                meta.textContent = `${this._formatSubsLoadCount(this._subsLoadState.totalVideosHidden)} hidden of ${this._formatSubsLoadCount(this._subsLoadState.totalVideosLoaded)} scanned`;
+                meta.setAttribute('translate', 'no');
+
+                copy.appendChild(title);
+                copy.appendChild(meta);
+                summaryBtn.appendChild(copy);
+                summaryBtn.addEventListener('click', () => this._expandLoadBlockedBanner());
+
+                const resumeBtn = document.createElement('button');
+                resumeBtn.type = 'button';
+                resumeBtn.className = 'ytkit-subs-load-chip__resume';
+                resumeBtn.textContent = 'Resume';
+                resumeBtn.addEventListener('click', () => this._resumeSubsLoading());
+
+                chip.appendChild(summaryBtn);
+                chip.appendChild(resumeBtn);
+                document.body.appendChild(chip);
             },
 
             _resetSubsLoadState() {
@@ -8643,6 +9486,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _blockSubsLoading() {
                 if (this._subsLoadState.loadingBlocked) return;
                 this._subsLoadState.loadingBlocked = true;
+                this._subsBannerCollapsed = false;
                 if (this._clearBatchBuffer) this._clearBatchBuffer();
                 const continuations = document.querySelectorAll('ytd-continuation-item-renderer, #continuations, ytd-browse[page-subtype="subscriptions"] ytd-continuation-item-renderer');
                 continuations.forEach(cont => {
@@ -8656,20 +9500,28 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _removeLoadBlocker() {
                 this._subsLoadState.loadingBlocked = false;
+                this._subsBannerCollapsed = false;
                 document.querySelectorAll('[data-ytkit-blocked="true"]').forEach(el => {
                     if (!(el instanceof HTMLElement)) return;
                     el.style.display = '';
                     delete el.dataset.ytkitBlocked;
                 });
-                document.getElementById('ytkit-subs-load-banner')?.remove();
+                this._removeLoadBlockedUi();
             },
 
             _showLoadBlockedBanner() {
-                if (document.getElementById('ytkit-subs-load-banner')) return;
+                if (!this._subsLoadState.loadingBlocked) return;
+                if (this._subsBannerCollapsed) {
+                    this._showLoadBlockedChip();
+                    return;
+                }
+                this._removeLoadBlockedUi();
                 const banner = document.createElement('div');
                 banner.id = 'ytkit-subs-load-banner';
                 banner.className = 'ytkit-subs-load-banner';
                 banner.style.setProperty('--ytkit-banner-z', String(Z.BANNER));
+                banner.setAttribute('role', 'status');
+                banner.setAttribute('aria-live', 'polite');
 
                 const icon = document.createElement('div');
                 icon.className = 'ytkit-subs-load-banner__icon';
@@ -8686,37 +9538,64 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 svg.appendChild(circle); svg.appendChild(line1); svg.appendChild(line2);
                 icon.appendChild(svg);
 
+                const body = document.createElement('div');
+                body.className = 'ytkit-subs-load-banner__body';
+
                 const textContainer = document.createElement('div');
                 textContainer.className = 'ytkit-subs-load-banner__copy';
+
+                const eyebrow = document.createElement('div');
+                eyebrow.className = 'ytkit-subs-load-banner__eyebrow';
+                eyebrow.textContent = 'Subscriptions Guard';
+
                 const title = document.createElement('div');
                 title.className = 'ytkit-subs-load-banner__title';
-                title.textContent = 'Infinite scroll stopped';
+                title.textContent = 'Subscription Feed Paused';
+
                 const subtitle = document.createElement('div');
                 subtitle.className = 'ytkit-subs-load-banner__subtitle';
-                subtitle.textContent = `${this._subsLoadState.totalVideosHidden} of ${this._subsLoadState.totalVideosLoaded} videos were hidden. Stopped loading to prevent performance issues.`;
-                textContainer.appendChild(title); textContainer.appendChild(subtitle);
+                subtitle.textContent = `${this._formatSubsLoadPercent(this._subsLoadState.totalVideosHidden, this._subsLoadState.totalVideosLoaded)} of scanned videos were hidden, so Astra Deck paused auto-loading before the feed churned through more empty batches.`;
+
+                const stats = document.createElement('div');
+                stats.className = 'ytkit-subs-load-banner__stats';
+                stats.appendChild(this._createSubsLoadStat('Hidden', this._formatSubsLoadCount(this._subsLoadState.totalVideosHidden)));
+                stats.appendChild(this._createSubsLoadStat('Scanned', this._formatSubsLoadCount(this._subsLoadState.totalVideosLoaded)));
+                stats.appendChild(this._createSubsLoadStat('Streak', this._formatSubsLoadCount(this._subsLoadState.consecutiveHiddenBatches)));
+
+                textContainer.appendChild(eyebrow);
+                textContainer.appendChild(title);
+                textContainer.appendChild(subtitle);
+                body.appendChild(textContainer);
+                body.appendChild(stats);
 
                 const buttonContainer = document.createElement('div');
                 buttonContainer.className = 'ytkit-subs-load-banner__actions';
+
                 const resumeBtn = document.createElement('button');
                 resumeBtn.type = 'button';
                 resumeBtn.className = 'ytkit-subs-load-banner__btn ytkit-subs-load-banner__btn--primary';
-                resumeBtn.textContent = 'Load More';
-                resumeBtn.onclick = () => {
-                    this._subsLoadState.consecutiveHiddenBatches = 0;
-                    this._removeLoadBlocker();
-                    window.scrollBy(0, 100);
-                    setTimeout(() => window.scrollBy(0, -100), 100);
-                };
-                const dismissBtn = document.createElement('button');
-                dismissBtn.type = 'button';
-                dismissBtn.className = 'ytkit-subs-load-banner__btn ytkit-subs-load-banner__btn--ghost';
-                dismissBtn.textContent = '\u2715';
-                dismissBtn.title = 'Dismiss';
-                dismissBtn.setAttribute('aria-label', 'Dismiss subscription load banner');
-                dismissBtn.onclick = () => banner.remove();
-                buttonContainer.appendChild(resumeBtn); buttonContainer.appendChild(dismissBtn);
-                banner.appendChild(icon); banner.appendChild(textContainer); banner.appendChild(buttonContainer);
+                resumeBtn.textContent = 'Resume Loading';
+                resumeBtn.addEventListener('click', () => this._resumeSubsLoading());
+
+                const settingsBtn = document.createElement('button');
+                settingsBtn.type = 'button';
+                settingsBtn.className = 'ytkit-subs-load-banner__btn';
+                settingsBtn.textContent = 'Review Filters';
+                settingsBtn.addEventListener('click', () => setSettingsPanelOpen(true));
+
+                const keepPausedBtn = document.createElement('button');
+                keepPausedBtn.type = 'button';
+                keepPausedBtn.className = 'ytkit-subs-load-banner__btn ytkit-subs-load-banner__btn--quiet';
+                keepPausedBtn.textContent = 'Keep Paused';
+                keepPausedBtn.addEventListener('click', () => this._collapseLoadBlockedBanner());
+
+                buttonContainer.appendChild(resumeBtn);
+                buttonContainer.appendChild(settingsBtn);
+                buttonContainer.appendChild(keepPausedBtn);
+
+                banner.appendChild(icon);
+                banner.appendChild(body);
+                banner.appendChild(buttonContainer);
                 document.body.appendChild(banner);
             },
 
@@ -8835,12 +9714,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             _showToast(message, buttons = []) {
-                document.getElementById('ytkit-hide-toast')?.remove();
-                if (this._toastTimeout) clearTimeout(this._toastTimeout);
-                const primaryAction = buttons[0];
                 showToast(message, '#6b7280', {
                     duration: 5,
-                    action: primaryAction ? { text: primaryAction.text, onClick: primaryAction.onClick } : undefined
+                    tone: 'neutral',
+                    actions: buttons.map(button => ({
+                        text: button.text,
+                        onClick: button.onClick
+                    }))
                 });
             },
 
@@ -8891,7 +9771,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._processAllVideos();
                 }
                 this._lastHidden = null;
-                document.getElementById('ytkit-hide-toast')?.classList.remove('show');
             },
 
             _unhideVideo(videoId) {
@@ -8910,7 +9789,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             _showManager() {
-                document.getElementById('ytkit-hide-toast')?.classList.remove('show');
                 setSettingsPanelOpen(true);
                 setTimeout(() => {
                     const navBtn = document.querySelector('.ytkit-nav-btn[data-tab="Video-Hider"]');
@@ -9061,7 +9939,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     v.element.classList.remove('ytkit-video-hidden');
                 });
                 this._setHiddenVideos(hidden);
-                document.getElementById('ytkit-hide-toast')?.classList.remove('show');
                 showToast('Restored all videos', '#22c55e');
             },
 
@@ -9124,10 +10001,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     .ytkit-video-hide-btn svg { width:16px;height:16px;fill:#fff;pointer-events:none; }
                     ytd-rich-item-renderer:hover .ytkit-video-hide-btn, ytd-video-renderer:hover .ytkit-video-hide-btn, ytd-grid-video-renderer:hover .ytkit-video-hide-btn, ytd-compact-video-renderer:hover .ytkit-video-hide-btn { opacity:1; }
                     .ytkit-video-hidden { display:none !important; }
-                    #ytkit-hide-toast { position:fixed;bottom:72px;left:50%;transform:translateX(-50%) translateY(100px);max-width:min(420px,calc(100vw - 20px));min-height:38px;background:linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0.015)),rgba(14,18,24,0.96);color:rgba(255,255,255,0.9);padding:8px 10px 8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);font-size:12px;z-index:${Z.TOAST};opacity:0;transition:opacity 0.18s ease,transform 0.18s ease;display:flex;align-items:center;gap:8px;box-shadow:0 14px 30px rgba(0,0,0,0.22); }
-                    #ytkit-hide-toast.show { transform:translateX(-50%) translateY(0);opacity:1; }
-                    #ytkit-hide-toast button { min-height:28px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.84);cursor:pointer;font-size:11px;font-weight:600;padding:0 10px;border-radius:999px;transition:background 0.15s ease,border-color 0.15s ease,color 0.15s ease; }
-                    #ytkit-hide-toast button:hover { background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.14);color:#fff; }
                 `;
                 this._styleElement = injectStyle(css, this.id, true);
                 this._processAllVideos();
@@ -9227,7 +10100,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 document.querySelectorAll('.ytkit-video-hide-btn').forEach(b => b.remove());
                 document.querySelectorAll('.ytkit-video-hidden').forEach(e => e.classList.remove('ytkit-video-hidden'));
                 document.querySelectorAll('[data-ytkit-hide-processed]').forEach(e => delete e.dataset.ytkitHideProcessed);
-                document.getElementById('ytkit-hide-toast')?.remove();
                 this._removeSubsHideAllButton();
                 this._removeHomeHideAllButton();
                 this._removeLoadBlocker();
@@ -10871,6 +11743,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             pages: [PageTypes.WATCH],
             _btn: null,
             _injectTimer: null,
+            _resetTimer: null,
             _scheduleInject(delay = 2000) {
                 if (this._injectTimer) clearTimeout(this._injectTimer);
                 this._injectTimer = setTimeout(() => {
@@ -10878,74 +11751,250 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._inject();
                 }, delay);
             },
+            _clearResetTimer() {
+                if (this._resetTimer) {
+                    clearTimeout(this._resetTimer);
+                    this._resetTimer = null;
+                }
+            },
+            _createIdleIcon() {
+                return createSVG('0 0 24 24', [
+                    { type: 'path', d: 'M9 3 7.35 5H4.75A2.75 2.75 0 0 0 2 7.75v8.5A2.75 2.75 0 0 0 4.75 19h14.5A2.75 2.75 0 0 0 22 16.25v-8.5A2.75 2.75 0 0 0 19.25 5h-2.6L15 3H9Z' },
+                    { type: 'circle', cx: 12, cy: 12, r: 4.1 }
+                ], { strokeWidth: '1.8', strokeLinecap: 'round', strokeLinejoin: 'round' });
+            },
+            _createLoadingIcon() {
+                const icon = createSVG('0 0 24 24', [
+                    { type: 'path', d: 'M21 12a9 9 0 1 1-2.64-6.36' },
+                    { type: 'path', d: 'M21 4v6h-6' }
+                ], { strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round' });
+                icon.classList.add('ytkit-spin-icon');
+                return icon;
+            },
+            _setState(state = 'idle') {
+                if (!this._btn) return;
+                this._clearResetTimer();
 
-            _capture() {
-                const video = document.querySelector('video.html5-main-video');
-                if (!video || !video.videoWidth) { showToast('No video to capture', '#ef4444'); return; }
+                const btn = this._btn;
+                const iconWrap = btn.querySelector('.ytkit-screenshot-btn__icon');
+                const labelEl = btn.querySelector('.ytkit-screenshot-btn__label');
+                if (!iconWrap || !labelEl) return;
+
+                let icon = this._createIdleIcon();
+                let label = 'Shot';
+                let aria = 'Capture screenshot';
+                let title = 'Capture screenshot';
+                let resetDelay = 0;
+
+                btn.classList.remove('ytkit-player-btn--active', 'ytkit-player-btn--warn');
+
+                if (state === 'capturing') {
+                    icon = this._createLoadingIcon();
+                    label = 'Saving…';
+                    aria = 'Saving screenshot…';
+                    title = 'Saving screenshot…';
+                } else if (state === 'saved') {
+                    icon = ICONS.check();
+                    label = 'Saved';
+                    aria = 'Screenshot saved';
+                    title = 'Screenshot saved';
+                    btn.classList.add('ytkit-player-btn--active');
+                    resetDelay = 1800;
+                } else if (state === 'error') {
+                    icon = ICONS.close();
+                    label = 'Retry';
+                    aria = 'Screenshot failed. Retry capture';
+                    title = 'Screenshot failed. Retry';
+                    btn.classList.add('ytkit-player-btn--warn');
+                    resetDelay = 2400;
+                }
+
+                icon.setAttribute('aria-hidden', 'true');
+                iconWrap.replaceChildren(icon);
+                labelEl.textContent = label;
+                btn.dataset.state = state;
+                btn.setAttribute('aria-label', aria);
+                btn.title = title;
+                btn.disabled = state === 'capturing';
+
+                if (resetDelay > 0) {
+                    this._resetTimer = setTimeout(() => {
+                        this._resetTimer = null;
+                        if (this._btn?.isConnected) this._setState('idle');
+                    }, resetDelay);
+                }
+            },
+            _getVideo() {
+                return getMainVideoElement() || document.querySelector('video.html5-main-video, video');
+            },
+            _sanitizeFilename(name) {
+                return String(name || '')
+                    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+                    .replace(/\s+/g, '_')
+                    .replace(/^\.+/, '')
+                    .substring(0, 96)
+                    || 'video';
+            },
+            _formatTimestampForFilename(seconds) {
+                const totalSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const secs = totalSeconds % 60;
+                const parts = [];
+                if (hours) parts.push(`${hours}h`);
+                if (hours || minutes) parts.push(`${String(minutes).padStart(hours ? 2 : 1, '0')}m`);
+                parts.push(`${String(secs).padStart(hours || minutes ? 2 : 1, '0')}s`);
+                return parts.join('');
+            },
+            _getFilename(video) {
+                const videoId = getVideoId() || 'video';
+                const rawTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, h1 yt-formatted-string, #title h1')?.textContent?.trim() || '';
+                const safeTitle = this._sanitizeFilename(rawTitle);
+                const time = this._formatTimestampForFilename(video?.currentTime ?? 0);
+                const nameParts = [videoId, safeTitle, time].filter(Boolean);
+                return `${nameParts.join('_')}.png`;
+            },
+            _blobFromCanvas(canvas) {
+                return new Promise((resolve, reject) => {
+                    try {
+                        canvas.toBlob((blob) => {
+                            if (!blob) {
+                                reject(new Error('Unable to render a PNG screenshot from this frame.'));
+                                return;
+                            }
+                            resolve(blob);
+                        }, 'image/png');
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+            },
+            async _copyBlobToClipboard(blob) {
+                if (!blob || typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+                    return 'unsupported';
+                }
+                try {
+                    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+                    return 'copied';
+                } catch (_) {
+                    return 'failed';
+                }
+            },
+            _downloadBlob(blob, filename) {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = filename;
+                link.style.display = 'none';
+                (document.body || document.documentElement).appendChild(link);
+                link.click();
+                link.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+            },
+            async _capture() {
+                const video = this._getVideo();
+                if (!video || !video.videoWidth) {
+                    throw new Error('The video frame is still loading. Try again in a moment.');
+                }
                 const canvas = document.createElement('canvas');
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 const ctx = canvas.getContext('2d');
-                // Cross-origin frames throw SecurityError from drawImage/toBlob — surface
-                // a clear message instead of leaving the user waiting on a silent fail.
+                if (!ctx) {
+                    throw new Error('The browser could not prepare a screenshot canvas.');
+                }
                 try {
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                 } catch (e) {
-                    showToast('Screenshot blocked: cross-origin video frame', '#ef4444');
-                    return;
+                    throw new Error('Screenshots are blocked for protected or cross-origin video frames.');
                 }
-                try {
-                    canvas.toBlob(blob => {
-                        if (!blob) {
-                            showToast('Screenshot failed', '#ef4444');
-                            return;
-                        }
-                        // Copy to clipboard
-                        try {
-                            navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).catch(() => {});
-                        } catch (_) { /* ClipboardItem unsupported — ignore */ }
-                        // Download — include video title for easier identification
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        const videoId = getVideoId() || 'video';
-                        const time = Math.floor(video.currentTime);
-                        const rawTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() || '';
-                        const safeTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').substring(0, 80).trim();
-                        const nameParts = [videoId, safeTitle, `${time}s`].filter(Boolean);
-                        a.href = url;
-                        a.download = `${nameParts.join('_')}.png`;
-                        a.click();
-                        setTimeout(() => URL.revokeObjectURL(url), 5000);
-                        showToast('Screenshot captured', '#22c55e');
-                    }, 'image/png');
-                } catch (e) {
-                    showToast('Screenshot blocked: ' + (e.message || 'canvas tainted'), '#ef4444');
-                }
+                const blob = await this._blobFromCanvas(canvas);
+                const filename = this._getFilename(video);
+                const clipboardState = await this._copyBlobToClipboard(blob);
+                this._downloadBlob(blob, filename);
+                return { clipboardState, filename };
             },
 
             _inject() {
+                if (location.pathname !== '/watch') return;
                 const controls = document.querySelector('.ytp-right-controls');
-                if (!controls || controls.querySelector('.ytkit-screenshot-btn')) return;
+                if (!controls) return;
+                const existingBtn = controls.querySelector('.ytkit-screenshot-btn');
+                if (existingBtn) {
+                    this._btn = existingBtn;
+                    return;
+                }
                 const btn = document.createElement('button');
-                btn.className = 'ytp-button ytkit-player-btn ytkit-screenshot-btn';
-                btn.title = 'Screenshot (YTKit)';
-                TrustedHTML.setHTML(btn, '<svg viewBox="0 0 24 24"><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.65 0-3 1.35-3 3s1.35 3 3 3 3-1.35 3-3-1.35-3-3-3z"/></svg>');
-                btn.onclick = (e) => { e.stopPropagation(); this._capture(); };
+                btn.type = 'button';
+                btn.className = 'ytp-button ytkit-player-btn ytkit-player-btn--text ytkit-screenshot-btn';
+                btn.setAttribute('aria-live', 'polite');
+
+                const iconWrap = document.createElement('span');
+                iconWrap.className = 'ytkit-screenshot-btn__icon';
+                iconWrap.setAttribute('aria-hidden', 'true');
+                btn.appendChild(iconWrap);
+
+                const label = document.createElement('span');
+                label.className = 'ytkit-screenshot-btn__label';
+                label.setAttribute('translate', 'no');
+                btn.appendChild(label);
+
                 controls.insertBefore(btn, controls.firstChild);
                 this._btn = btn;
+                this._setState('idle');
+
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    if (btn.disabled) return;
+
+                    this._setState('capturing');
+                    try {
+                        const result = await this._capture();
+                        this._setState('saved');
+
+                        if (result.clipboardState === 'copied') {
+                            showToast('Screenshot saved & copied to the clipboard.', '#22c55e', { duration: 3 });
+                        } else if (result.clipboardState === 'failed') {
+                            showToast('Screenshot saved. Copy to clipboard was blocked, but the PNG still downloaded.', '#f59e0b', {
+                                duration: 5,
+                                tone: 'warning'
+                            });
+                        } else {
+                            showToast('Screenshot saved. Clipboard image copy is not available here.', '#3b82f6', {
+                                duration: 4,
+                                tone: 'info'
+                            });
+                        }
+                    } catch (error) {
+                        this._setState('error');
+                        showToast(error?.message || 'Screenshot capture failed. Try again on a loaded video frame.', '#ef4444', {
+                            duration: 4,
+                            tone: 'error'
+                        });
+                    }
+                });
             },
 
             init() {
                 this._scheduleInject(2000);
-                addNavigateRule('screenshot', () => {
+                addNavigateRule('videoScreenshot', () => {
+                    this._clearResetTimer();
+                    this._btn?.remove();
                     this._btn = null;
                     this._scheduleInject(2000);
+                });
+                addMutationRule('videoScreenshot', () => {
+                    if (location.pathname === '/watch' && !document.querySelector('.ytkit-screenshot-btn')) {
+                        this._scheduleInject(400);
+                    }
                 });
             },
             destroy() {
                 if (this._injectTimer) clearTimeout(this._injectTimer);
                 this._injectTimer = null;
-                removeNavigateRule('screenshot');
+                this._clearResetTimer();
+                removeNavigateRule('videoScreenshot');
+                removeMutationRule('videoScreenshot');
                 this._btn?.remove(); this._btn = null;
             }
         },
@@ -11604,6 +12653,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _storageKey: 'ytkit-bookmarks',
             _panel: null,
             _btn: null,
+            _countEl: null,
+            _statusEl: null,
             _injectTimer: null,
             _scheduleInject(delay = 2500) {
                 if (this._injectTimer) clearTimeout(this._injectTimer);
@@ -11643,10 +12694,28 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _deleteBookmark(videoId, index) {
                 const bookmarks = this._getBookmarks();
                 if (!bookmarks[videoId]) return;
+                const removed = bookmarks[videoId][index];
                 bookmarks[videoId].splice(index, 1);
                 if (bookmarks[videoId].length === 0) delete bookmarks[videoId];
                 StorageManager.set(this._storageKey, bookmarks);
                 this._renderPanel();
+                if (!removed) return;
+                showToast(`Removed bookmark at ${this._formatTime(removed.t)}`, '#6b7280', {
+                    duration: 5,
+                    tone: 'neutral',
+                    action: {
+                        text: 'Undo',
+                        onClick: () => {
+                            const nextBookmarks = this._getBookmarks();
+                            if (!nextBookmarks[videoId]) nextBookmarks[videoId] = [];
+                            nextBookmarks[videoId].push(removed);
+                            nextBookmarks[videoId].sort((a, b) => a.t - b.t);
+                            StorageManager.set(this._storageKey, nextBookmarks);
+                            this._renderPanel();
+                            showToast(`Restored bookmark at ${this._formatTime(removed.t)}`, '#22c55e');
+                        }
+                    }
+                });
             },
 
             _renderPanel() {
@@ -11654,44 +12723,98 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const videoId = getVideoId();
                 const bookmarks = this._getBookmarks();
                 const list = bookmarks[videoId] || [];
+                if (this._countEl) {
+                    this._countEl.textContent = `${list.length} Saved`;
+                }
+                if (this._statusEl) {
+                    this._statusEl.textContent = list.length > 0
+                        ? 'Jump back to saved moments and keep quick notes beside each one.'
+                        : 'Save important moments here so you can jump back without scrubbing.';
+                }
                 this._panel.textContent = '';
+                this._panel.setAttribute('aria-label', `${list.length} bookmarks for this video`);
                 if (list.length === 0) {
                     const empty = document.createElement('div');
                     empty.className = 'ytkit-bookmarks-empty';
-                    empty.textContent = 'No bookmarks for this video';
+                    const emptyTitle = document.createElement('div');
+                    emptyTitle.className = 'ytkit-bookmarks-empty-title';
+                    emptyTitle.textContent = 'No bookmarks yet';
+                    const emptyCopy = document.createElement('div');
+                    emptyCopy.className = 'ytkit-bookmarks-empty-copy';
+                    emptyCopy.textContent = 'Use Save Current Time to pin a moment from this video and add notes you can revisit later.';
+                    empty.appendChild(emptyTitle);
+                    empty.appendChild(emptyCopy);
                     this._panel.appendChild(empty);
                     return;
                 }
+                const listEl = document.createElement('div');
+                listEl.className = 'ytkit-bookmarks-list';
+                listEl.setAttribute('role', 'list');
                 list.forEach((bm, idx) => {
-                    const row = document.createElement('div');
+                    const row = document.createElement('article');
                     row.className = 'ytkit-bookmark-row';
+                    row.setAttribute('role', 'listitem');
+                    const jump = document.createElement('button');
+                    jump.type = 'button';
+                    jump.className = 'ytkit-bookmark-jump';
+                    jump.setAttribute('aria-label', `Jump to ${this._formatTime(bm.t)}`);
                     const ts = document.createElement('span');
                     ts.className = 'ytkit-bookmark-ts';
+                    ts.setAttribute('translate', 'no');
                     ts.textContent = this._formatTime(bm.t);
+                    const jumpCopy = document.createElement('span');
+                    jumpCopy.className = 'ytkit-bookmark-jump-copy';
+                    const jumpLabel = document.createElement('span');
+                    jumpLabel.className = 'ytkit-bookmark-jump-label';
+                    jumpLabel.textContent = 'Jump to moment';
+                    const jumpMeta = document.createElement('span');
+                    jumpMeta.className = 'ytkit-bookmark-jump-meta';
+                    jumpMeta.textContent = bm.n ? 'Saved note included' : 'Add a note to remember why it matters';
+                    jumpCopy.appendChild(jumpLabel);
+                    jumpCopy.appendChild(jumpMeta);
+                    jump.appendChild(ts);
+                    jump.appendChild(jumpCopy);
                     const note = document.createElement('input');
                     note.type = 'text';
+                    note.name = `bookmark-note-${idx}`;
                     note.className = 'ytkit-bookmark-note';
+                    note.maxLength = IMPORT_LIMITS.bookmarkNoteChars;
                     note.value = bm.n || '';
-                    note.placeholder = 'Add note...';
+                    note.placeholder = 'Add note…';
+                    note.autocomplete = 'off';
+                    note.setAttribute('aria-label', `Note for bookmark at ${this._formatTime(bm.t)}`);
                     note.onclick = (e) => e.stopPropagation();
                     note.onchange = () => {
                         const bks = this._getBookmarks();
-                        if (bks[videoId]?.[idx]) { bks[videoId][idx].n = note.value; StorageManager.set(this._storageKey, bks); }
+                        if (bks[videoId]?.[idx]) {
+                            bks[videoId][idx].n = note.value.slice(0, IMPORT_LIMITS.bookmarkNoteChars);
+                            StorageManager.set(this._storageKey, bks);
+                            this._renderPanel();
+                        }
                     };
+                    const noteWrap = document.createElement('label');
+                    noteWrap.className = 'ytkit-bookmark-note-wrap';
+                    const noteLabel = document.createElement('span');
+                    noteLabel.className = 'ytkit-bookmark-note-label';
+                    noteLabel.textContent = 'Note';
+                    noteWrap.appendChild(noteLabel);
+                    noteWrap.appendChild(note);
                     const del = document.createElement('button');
                     del.type = 'button';
                     del.className = 'ytkit-bookmark-delete';
                     del.textContent = '\u00D7';
+                    del.setAttribute('aria-label', `Delete bookmark at ${this._formatTime(bm.t)}`);
                     del.onclick = (e) => { e.stopPropagation(); this._deleteBookmark(videoId, idx); };
-                    row.onclick = () => {
+                    jump.onclick = () => {
                         const video = document.querySelector('video.html5-main-video');
                         if (video) video.currentTime = bm.t;
                     };
-                    row.appendChild(ts);
-                    row.appendChild(note);
+                    row.appendChild(jump);
+                    row.appendChild(noteWrap);
                     row.appendChild(del);
-                    this._panel.appendChild(row);
+                    listEl.appendChild(row);
                 });
+                this._panel.appendChild(listEl);
             },
 
             _inject() {
@@ -11703,19 +12826,38 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const header = document.createElement('div');
                 header.className = 'ytkit-bookmarks-header';
+                const headerMain = document.createElement('div');
+                headerMain.className = 'ytkit-bookmarks-header-main';
+                const eyebrow = document.createElement('span');
+                eyebrow.className = 'ytkit-bookmarks-eyebrow';
+                eyebrow.textContent = 'Jump Back In';
                 const title = document.createElement('span');
                 title.className = 'ytkit-bookmarks-title';
-                title.textContent = 'Bookmarks';
+                title.textContent = 'Timestamp Bookmarks';
+                const status = document.createElement('p');
+                status.className = 'ytkit-bookmarks-status';
+                headerMain.appendChild(eyebrow);
+                headerMain.appendChild(title);
+                headerMain.appendChild(status);
+                this._statusEl = status;
+                const headerActions = document.createElement('div');
+                headerActions.className = 'ytkit-bookmarks-actions';
+                const count = document.createElement('span');
+                count.className = 'ytkit-bookmarks-count';
+                this._countEl = count;
                 const addBtn = document.createElement('button');
                 addBtn.type = 'button';
                 addBtn.className = 'ytkit-bookmarks-add';
-                addBtn.textContent = '+ Add';
+                addBtn.textContent = 'Save Current Time';
                 addBtn.onclick = () => this._addBookmark();
-                header.appendChild(title);
-                header.appendChild(addBtn);
+                headerActions.appendChild(count);
+                headerActions.appendChild(addBtn);
+                header.appendChild(headerMain);
+                header.appendChild(headerActions);
 
                 this._panel = document.createElement('div');
                 this._panel.className = 'ytkit-bookmarks-body';
+                this._panel.setAttribute('aria-live', 'polite');
 
                 container.appendChild(header);
                 container.appendChild(this._panel);
@@ -11727,6 +12869,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._scheduleInject(2500);
                 addNavigateRule('bookmarks', () => {
                     this._panel = null;
+                    this._countEl = null;
+                    this._statusEl = null;
                     this._scheduleInject(2500);
                 });
             },
@@ -11735,6 +12879,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._injectTimer = null;
                 removeNavigateRule('bookmarks');
                 this._panel = null;
+                this._countEl = null;
+                this._statusEl = null;
                 document.querySelectorAll('.ytkit-bookmarks-container').forEach(el => el.remove());
             }
         },
@@ -12744,8 +13890,59 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             _videoIdSafe() {
-                try { return new URL(location.href).searchParams.get('v') || 'transcript'; }
-                catch { return 'transcript'; }
+                return getVideoId() || 'transcript';
+            },
+
+            _getTrackLabel(track) {
+                const label = track?.name?.simpleText
+                    || track?.name?.runs?.map((run) => run.text).join('')
+                    || track?.languageName?.simpleText
+                    || track?.languageCode;
+                return label ? label.trim() : 'Captions';
+            },
+
+            _setTranscriptMeta(label, copy, tone = 'default') {
+                if (!this._panel) return;
+                const pill = this._panel.querySelector('.ytkit-transcript-meta__pill');
+                const summary = this._panel.querySelector('.ytkit-transcript-meta__copy');
+                if (pill) {
+                    pill.textContent = label;
+                    pill.dataset.tone = tone;
+                }
+                if (summary) summary.textContent = copy;
+            },
+
+            _renderBodyState(body, state, title, copy) {
+                if (!body) return;
+                body.textContent = '';
+                body.classList.toggle('is-stateful', true);
+                const shell = document.createElement('div');
+                shell.className = `ytkit-transcript-state ytkit-transcript-state--${state}`;
+
+                const stateTitle = document.createElement('div');
+                stateTitle.className = 'ytkit-transcript-state__title';
+                stateTitle.textContent = title;
+                shell.appendChild(stateTitle);
+
+                if (copy) {
+                    const stateCopy = document.createElement('div');
+                    stateCopy.className = 'ytkit-transcript-state__copy';
+                    stateCopy.textContent = copy;
+                    shell.appendChild(stateCopy);
+                }
+
+                if (state === 'loading') {
+                    const skeleton = document.createElement('div');
+                    skeleton.className = 'ytkit-transcript-state__skeleton';
+                    for (let i = 0; i < 4; i += 1) {
+                        const line = document.createElement('span');
+                        line.className = 'ytkit-transcript-state__skeleton-line';
+                        skeleton.appendChild(line);
+                    }
+                    shell.appendChild(skeleton);
+                }
+
+                body.appendChild(shell);
             },
 
             async _loadTranscript() {
@@ -12754,8 +13951,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const body = panel.querySelector('.ytkit-transcript-body');
                 const exportBar = panel.querySelector('.ytkit-transcript-export');
                 if (!body) return;
-                body.textContent = 'Loading transcript...';
-                if (exportBar) exportBar.style.display = 'none';
+                body.setAttribute('aria-busy', 'true');
+                this._renderBodyState(body, 'loading', 'Loading transcript…', 'Checking the available caption tracks for this video.');
+                if (exportBar) exportBar.hidden = true;
+                this._setTranscriptMeta('Loading…', 'Looking for caption tracks & preparing export actions.', 'info');
                 this._cues = [];
 
                 try {
@@ -12763,18 +13962,24 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const playerResponse = pageData?.__data?.playerResponse || pageData?.playerResponse;
                     const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
                     if (!tracks || tracks.length === 0) {
-                        body.textContent = 'No transcript available for this video.';
+                        this._setTranscriptMeta('No Captions', 'This video does not expose a transcript track that Astra Deck can read.', 'warning');
+                        this._renderBodyState(body, 'empty', 'No transcript available', 'Try another video with captions enabled, or reopen this panel after captions finish loading.');
+                        body.setAttribute('aria-busy', 'false');
                         return;
                     }
                     const track = tracks.find(t => t.languageCode === 'en') || tracks[0];
+                    const trackLabel = this._getTrackLabel(track);
                     const { response, data } = await extensionFetchJson({
                         url: track.baseUrl + '&fmt=json3'
                     });
                     if (!response || response.status < 200 || response.status >= 300) {
-                        body.textContent = 'Failed to load transcript.';
+                        this._setTranscriptMeta('Unavailable', 'The transcript could not be fetched from YouTube right now.', 'danger');
+                        this._renderBodyState(body, 'error', 'Transcript unavailable', 'Reload the page or try again in a moment if captions are still processing.');
+                        body.setAttribute('aria-busy', 'false');
                         return;
                     }
                     body.textContent = '';
+                    body.classList.remove('is-stateful');
 
                     (data.events || []).forEach(ev => {
                         if (!ev.segs) return;
@@ -12787,8 +13992,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         const mins = Math.floor(startSec / 60);
                         const secs = Math.floor(startSec % 60);
 
-                        const line = document.createElement('div');
+                        const line = document.createElement('button');
+                        line.type = 'button';
                         line.className = 'ytkit-transcript-line';
+                        line.title = `Jump to ${mins}:${secs.toString().padStart(2, '0')}`;
+                        line.setAttribute('aria-label', `Jump to ${mins}:${secs.toString().padStart(2, '0')} in the transcript`);
 
                         const ts = document.createElement('span');
                         ts.className = 'ytkit-transcript-line__ts';
@@ -12806,9 +14014,19 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         });
                         body.appendChild(line);
                     });
-                    if (exportBar && this._cues.length) exportBar.style.display = '';
+                    if (this._cues.length === 0) {
+                        this._setTranscriptMeta(trackLabel, 'The transcript track loaded, but no readable lines were returned.', 'warning');
+                        this._renderBodyState(body, 'empty', 'Transcript is empty', 'YouTube exposed a caption track, but it does not contain readable cue lines yet.');
+                    } else {
+                        const durationLabel = `${this._cues.length} lines ready`;
+                        this._setTranscriptMeta(trackLabel, `${durationLabel}. Jump to a moment or export below.`, 'success');
+                        if (exportBar) exportBar.hidden = false;
+                    }
+                    body.setAttribute('aria-busy', 'false');
                 } catch(e) {
-                    body.textContent = 'Failed to load transcript.';
+                    this._setTranscriptMeta('Unavailable', 'Astra Deck hit a problem while reading the transcript.', 'danger');
+                    this._renderBodyState(body, 'error', 'Failed to load transcript', 'Refresh the page or reopen the panel after YouTube finishes loading the video metadata.');
+                    body.setAttribute('aria-busy', 'false');
                 }
             },
 
@@ -12823,21 +14041,42 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const header = document.createElement('div');
                 header.className = 'ytkit-transcript-header';
+                const heading = document.createElement('div');
+                heading.className = 'ytkit-transcript-heading';
+                const eyebrow = document.createElement('span');
+                eyebrow.className = 'ytkit-transcript-eyebrow';
+                eyebrow.textContent = 'Captions & Exports';
                 const title = document.createElement('span');
                 title.className = 'ytkit-transcript-title';
                 title.textContent = 'Transcript';
+                heading.appendChild(eyebrow);
+                heading.appendChild(title);
                 const closeBtn = document.createElement('button');
                 closeBtn.type = 'button';
                 closeBtn.className = 'ytkit-transcript-toggle';
-                closeBtn.textContent = 'Hide';
+                closeBtn.textContent = 'Collapse';
                 closeBtn.setAttribute('aria-expanded', 'true');
                 closeBtn.setAttribute('aria-label', 'Collapse transcript');
-                header.appendChild(title);
+                header.appendChild(heading);
                 header.appendChild(closeBtn);
+
+                const meta = document.createElement('div');
+                meta.className = 'ytkit-transcript-meta';
+                meta.setAttribute('aria-live', 'polite');
+                const metaPill = document.createElement('span');
+                metaPill.className = 'ytkit-transcript-meta__pill';
+                metaPill.dataset.tone = 'info';
+                metaPill.textContent = 'Loading…';
+                const metaCopy = document.createElement('span');
+                metaCopy.className = 'ytkit-transcript-meta__copy';
+                metaCopy.textContent = 'Preparing transcript controls for this video.';
+                meta.appendChild(metaPill);
+                meta.appendChild(metaCopy);
 
                 const exportBar = document.createElement('div');
                 exportBar.className = 'ytkit-transcript-export';
-                exportBar.style.display = 'none';
+                exportBar.hidden = true;
+                exportBar.setAttribute('aria-label', 'Transcript export actions');
                 const mkBtn = (label, title, handler) => {
                     const b = document.createElement('button');
                     b.type = 'button';
@@ -12847,27 +14086,30 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     b.addEventListener('click', handler);
                     return b;
                 };
-                exportBar.appendChild(mkBtn('Copy', 'Copy plain-text transcript to clipboard',
+                exportBar.appendChild(mkBtn('Copy Text', 'Copy plain-text transcript to clipboard',
                     () => this._copyToClipboard(this._buildPlainText(), 'Transcript')));
-                exportBar.appendChild(mkBtn('.txt', 'Download plain-text transcript',
+                exportBar.appendChild(mkBtn('Download TXT', 'Download plain-text transcript',
                     () => this._downloadFile(this._buildPlainText(), `${this._videoIdSafe()}.txt`, 'text/plain;charset=utf-8')));
-                exportBar.appendChild(mkBtn('.srt', 'Download SubRip subtitle file',
+                exportBar.appendChild(mkBtn('Download SRT', 'Download SubRip subtitle file',
                     () => this._downloadFile(this._buildSrt(), `${this._videoIdSafe()}.srt`, 'application/x-subrip;charset=utf-8')));
-                exportBar.appendChild(mkBtn('LLM', 'Copy a ready-to-paste summary prompt',
+                exportBar.appendChild(mkBtn('Copy AI Prompt', 'Copy a ready-to-paste summary prompt',
                     () => this._copyToClipboard(this._buildLlmPrompt(), 'LLM prompt')));
 
                 const body = document.createElement('div');
                 body.className = 'ytkit-transcript-body';
+                body.setAttribute('aria-live', 'polite');
                 closeBtn.addEventListener('click', () => {
                     const collapsed = panel.classList.toggle('is-collapsed');
                     body.hidden = collapsed;
-                    exportBar.hidden = collapsed;
-                    closeBtn.textContent = collapsed ? 'Show' : 'Hide';
+                    meta.hidden = collapsed;
+                    exportBar.hidden = collapsed || !this._cues.length;
+                    closeBtn.textContent = collapsed ? 'Expand' : 'Collapse';
                     closeBtn.setAttribute('aria-expanded', String(!collapsed));
                     closeBtn.setAttribute('aria-label', collapsed ? 'Expand transcript' : 'Collapse transcript');
                 });
 
                 panel.appendChild(header);
+                panel.appendChild(meta);
                 panel.appendChild(exportBar);
                 panel.appendChild(body);
                 secondary.insertBefore(panel, secondary.firstChild);
@@ -13533,6 +14775,138 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             icon: 'clipboard',
             _btn: null,
             _createTimer: null,
+            _resetTimer: null,
+            _getTitleText() {
+                const titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, h1 yt-formatted-string, h1.ytd-watch-metadata, #title h1');
+                const title = titleEl?.textContent?.trim();
+                return title || '';
+            },
+            _createIdleIcon() {
+                return createSVG('0 0 24 24', [
+                    { type: 'rect', x: 9, y: 9, width: 11, height: 11, rx: 2 },
+                    { type: 'path', d: 'M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1' }
+                ], { strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round' });
+            },
+            _createLoadingIcon() {
+                const icon = createSVG('0 0 24 24', [
+                    { type: 'path', d: 'M21 12a9 9 0 1 1-2.64-6.36' },
+                    { type: 'path', d: 'M21 4v6h-6' }
+                ], { strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round' });
+                icon.classList.add('ytkit-spin-icon');
+                return icon;
+            },
+            _clearResetTimer() {
+                if (this._resetTimer) {
+                    clearTimeout(this._resetTimer);
+                    this._resetTimer = null;
+                }
+            },
+            _setState(state = 'idle') {
+                if (!this._btn) return;
+                this._clearResetTimer();
+
+                const btn = this._btn;
+                const iconWrap = btn.querySelector('.ytkit-copy-title-btn__icon');
+                const labelEl = btn.querySelector('.ytkit-copy-title-btn__label');
+
+                let icon = this._createIdleIcon();
+                let label = 'Copy';
+                let aria = 'Copy video title';
+                let title = 'Copy video title';
+                let resetDelay = 0;
+
+                if (state === 'copying') {
+                    icon = this._createLoadingIcon();
+                    label = 'Copying…';
+                    aria = 'Copying video title…';
+                    title = 'Copying video title…';
+                } else if (state === 'copied') {
+                    icon = ICONS.check();
+                    label = 'Copied';
+                    aria = 'Video title copied';
+                    title = 'Video title copied';
+                    resetDelay = 1800;
+                } else if (state === 'error') {
+                    icon = ICONS.close();
+                    label = 'Retry';
+                    aria = 'Copy failed. Retry copying the video title';
+                    title = 'Copy failed. Retry';
+                    resetDelay = 2400;
+                }
+
+                icon.setAttribute('aria-hidden', 'true');
+                if (iconWrap) {
+                    iconWrap.textContent = '';
+                    iconWrap.appendChild(icon);
+                }
+                if (labelEl) labelEl.textContent = label;
+                btn.dataset.state = state;
+                btn.setAttribute('aria-label', aria);
+                btn.title = title;
+                btn.disabled = state === 'copying';
+
+                if (resetDelay) {
+                    this._resetTimer = setTimeout(() => {
+                        this._resetTimer = null;
+                        this._setState('idle');
+                    }, resetDelay);
+                }
+            },
+            async _copyText(text) {
+                if (!text) return false;
+
+                if (navigator.clipboard?.writeText) {
+                    try {
+                        await navigator.clipboard.writeText(text);
+                        return true;
+                    } catch (_) {
+                        // Fall through to the legacy copy path below.
+                    }
+                }
+
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.setAttribute('readonly', 'true');
+                textarea.setAttribute('aria-hidden', 'true');
+                textarea.style.position = 'fixed';
+                textarea.style.top = '0';
+                textarea.style.left = '-9999px';
+                textarea.style.opacity = '0';
+                textarea.style.pointerEvents = 'none';
+
+                const selection = document.getSelection();
+                const savedRanges = [];
+                if (selection) {
+                    for (let i = 0; i < selection.rangeCount; i += 1) {
+                        savedRanges.push(selection.getRangeAt(i).cloneRange());
+                    }
+                }
+                const activeElement = document.activeElement;
+
+                document.body.appendChild(textarea);
+                textarea.focus({ preventScroll: true });
+                textarea.select();
+                textarea.setSelectionRange(0, textarea.value.length);
+
+                let copied = false;
+                try {
+                    copied = typeof document.execCommand === 'function' && document.execCommand('copy');
+                } catch (_) {
+                    copied = false;
+                }
+
+                textarea.remove();
+
+                if (selection) {
+                    selection.removeAllRanges();
+                    savedRanges.forEach((range) => selection.addRange(range));
+                }
+                if (activeElement instanceof HTMLElement) {
+                    activeElement.focus({ preventScroll: true });
+                }
+
+                return copied;
+            },
             _scheduleCreate(delay = 2000) {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = setTimeout(() => {
@@ -13552,39 +14926,52 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const btn = document.createElement('button');
                 btn.className = 'ytkit-copy-title-btn';
                 btn.type = 'button';
-                btn.title = 'Copy title';
-                btn.setAttribute('aria-label', 'Copy video title');
-                const renderIcon = (copied) => {
-                    btn.textContent = '';
-                    const icon = copied
-                        ? ICONS.check()
-                        : createSVG('0 0 24 24', [
-                            { type: 'rect', x: 9, y: 9, width: 11, height: 11, rx: 2 },
-                            { type: 'path', d: 'M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1' }
-                        ], { strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round' });
-                    icon.setAttribute('aria-hidden', 'true');
-                    btn.appendChild(icon);
-                    btn.classList.toggle('is-copied', !!copied);
-                };
-                renderIcon(false);
+                btn.setAttribute('aria-live', 'polite');
+
+                const iconWrap = document.createElement('span');
+                iconWrap.className = 'ytkit-copy-title-btn__icon';
+                iconWrap.setAttribute('aria-hidden', 'true');
+                btn.appendChild(iconWrap);
+
+                const label = document.createElement('span');
+                label.className = 'ytkit-copy-title-btn__label';
+                btn.appendChild(label);
+
+                this._btn = btn;
+                this._setState('idle');
+
                 btn.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    const title = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, h1 yt-formatted-string')?.textContent?.trim();
-                    if (title) {
-                        try {
-                            await navigator.clipboard.writeText(title);
-                            renderIcon(true);
-                            setTimeout(() => renderIcon(false), 1500);
-                        } catch(e) { /* clipboard API failed */ }
+                    if (btn.disabled) return;
+
+                    const title = this._getTitleText();
+                    if (!title) {
+                        this._setState('error');
+                        showToast('The video title is still loading. Try again in a moment.', '#f59e0b', {
+                            duration: 4,
+                            tone: 'warning'
+                        });
+                        return;
+                    }
+
+                    this._setState('copying');
+                    const copied = await this._copyText(title);
+                    if (copied) {
+                        this._setState('copied');
+                    } else {
+                        this._setState('error');
+                        showToast('Clipboard access was blocked. Try again or use the browser copy shortcut.', '#ef4444', {
+                            duration: 5
+                        });
                     }
                 });
 
                 titleContainer.appendChild(btn);
-                this._btn = btn;
             },
 
             init() {
                 addNavigateRule('copyVideoTitle', () => {
+                    this._clearResetTimer();
                     this._btn = null;
                     this._scheduleCreate(2000);
                 });
@@ -13598,6 +14985,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             destroy() {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = null;
+                this._clearResetTimer();
                 removeNavigateRule('copyVideoTitle');
                 removeMutationRule('copyVideoTitle');
                 document.querySelector('.ytkit-copy-title-btn')?.remove();
@@ -13612,6 +15000,114 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             icon: 'calendar',
             _el: null,
             _calculateTimer: null,
+            _getAnchorEl() {
+                const candidates = Array.from(document.querySelectorAll('#info-strings yt-formatted-string, ytd-watch-metadata #info-container yt-formatted-string'));
+                return candidates.find((el) => /(?:premiered|streamed|published|\b\d{4}\b)/i.test(el.textContent || ''))
+                    || candidates[0]
+                    || null;
+            },
+            _normalizeDate(date) {
+                return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+            },
+            _daysBetween(startDate, endDate) {
+                const startUtc = Date.UTC(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+                const endUtc = Date.UTC(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+                return Math.round((endUtc - startUtc) / 86400000);
+            },
+            _getCalendarDifference(fromDate, toDate) {
+                let years = toDate.getFullYear() - fromDate.getFullYear();
+                let months = toDate.getMonth() - fromDate.getMonth();
+                let days = toDate.getDate() - fromDate.getDate();
+
+                if (days < 0) {
+                    months -= 1;
+                    const daysInPreviousMonth = new Date(toDate.getFullYear(), toDate.getMonth(), 0).getDate();
+                    days += daysInPreviousMonth;
+                }
+
+                if (months < 0) {
+                    years -= 1;
+                    months += 12;
+                }
+
+                return { years, months, days };
+            },
+            _extractFallbackDate(text) {
+                const normalized = String(text || '').replace(/\u00A0/g, ' ').trim();
+                if (!normalized) return null;
+
+                const segments = normalized.split(/[•|]/).map((part) => part.trim()).filter(Boolean);
+                const preferredSegment = segments.find((segment) => /(?:premiered|streamed|published|\b\d{4}\b)/i.test(segment)) || normalized;
+                const cleaned = preferredSegment
+                    .replace(/^(Premiered|Published on|Streamed live on|Started streaming on|Streamed)\s*/i, '')
+                    .trim();
+                const parsed = new Date(cleaned);
+                return Number.isNaN(parsed.getTime()) ? null : parsed;
+            },
+            _getPublishDate(anchorEl) {
+                const currentVideoId = getVideoId();
+
+                try {
+                    const playerResponse = _rw.ytInitialPlayerResponse;
+                    const responseVideoId = playerResponse?.videoDetails?.videoId;
+                    if (!responseVideoId || !currentVideoId || responseVideoId === currentVideoId) {
+                        const microformat = playerResponse?.microformat?.playerMicroformatRenderer;
+                        const raw = microformat?.publishDate
+                            || microformat?.uploadDate
+                            || microformat?.liveBroadcastDetails?.startTimestamp
+                            || microformat?.liveBroadcastDetails?.endTimestamp;
+                        if (raw) {
+                            const parsed = new Date(raw);
+                            if (!Number.isNaN(parsed.getTime())) return parsed;
+                        }
+                    }
+                } catch {}
+
+                const meta = document.querySelector('meta[itemprop="datePublished"], meta[itemprop="uploadDate"]');
+                const metaValue = meta?.getAttribute('content');
+                if (metaValue) {
+                    const parsed = new Date(metaValue);
+                    if (!Number.isNaN(parsed.getTime())) return parsed;
+                }
+
+                return this._extractFallbackDate(anchorEl?.textContent || '');
+            },
+            _formatExactDate(date) {
+                return new Intl.DateTimeFormat(undefined, { dateStyle: 'long' }).format(date);
+            },
+            _formatRelativeAge(date) {
+                const today = this._normalizeDate(new Date());
+                const target = this._normalizeDate(date);
+                const diffDays = this._daysBetween(target, today);
+                const relativeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+                if (diffDays === 0) return { label: 'Today', tone: 'current' };
+                if (diffDays === 1) return { label: 'Yesterday', tone: 'past' };
+                if (diffDays === -1) return { label: 'Tomorrow', tone: 'future' };
+
+                const isFuture = diffDays < 0;
+                const from = isFuture ? today : target;
+                const to = isFuture ? target : today;
+                const { years, months, days } = this._getCalendarDifference(from, to);
+
+                let unit = 'day';
+                let value = Math.abs(diffDays);
+                if (years > 0) {
+                    unit = 'year';
+                    value = years;
+                } else if (months > 0) {
+                    unit = 'month';
+                    value = months;
+                } else if (days > 0) {
+                    unit = 'day';
+                    value = days;
+                }
+
+                return {
+                    label: relativeFormatter.format(isFuture ? value : -value, unit),
+                    tone: isFuture ? 'future' : 'past'
+                };
+            },
             _scheduleCalculate(delay = 2500) {
                 if (this._calculateTimer) clearTimeout(this._calculateTimer);
                 this._calculateTimer = setTimeout(() => {
@@ -13622,37 +15118,32 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _calculate() {
                 if (location.pathname !== '/watch') return;
-                const dateEl = document.querySelector('#info-strings yt-formatted-string, ytd-watch-metadata #info-container yt-formatted-string');
-                if (!dateEl) return;
-                const text = dateEl.textContent?.trim();
-                if (!text) return;
-
-                // YouTube shows dates like "Jan 15, 2023" or "Premiered Jan 15, 2023" or "Streamed live on Jan 15, 2023"
-                const cleaned = text.replace(/^(Premiered|Streamed live on|Streamed)\s*/i, '');
-                const date = new Date(cleaned);
-                if (isNaN(date.getTime())) return;
-
-                const now = new Date();
-                const diffMs = now - date;
-                const days = Math.floor(diffMs / 86400000);
-
-                let ageStr;
-                if (days < 1) ageStr = 'Today';
-                else if (days < 30) ageStr = `${days} day${days !== 1 ? 's' : ''} ago`;
-                else if (days < 365) {
-                    const months = Math.floor(days / 30);
-                    ageStr = `${months} month${months !== 1 ? 's' : ''} ago`;
-                } else {
-                    const years = Math.floor(days / 365);
-                    const remainMonths = Math.floor((days % 365) / 30);
-                    ageStr = `${years}y ${remainMonths}m ago`;
+                const dateEl = this._getAnchorEl();
+                if (!dateEl) {
+                    this._el?.remove();
+                    this._el = null;
+                    return;
                 }
 
-                // Remove existing badge
-                document.querySelector('.ytkit-age-badge')?.remove();
+                const publishDate = this._getPublishDate(dateEl);
+                if (!publishDate) {
+                    this._el?.remove();
+                    this._el = null;
+                    return;
+                }
+
+                const { label, tone } = this._formatRelativeAge(publishDate);
+                this._el?.remove();
                 const badge = document.createElement('span');
                 badge.className = 'ytkit-age-badge';
-                badge.textContent = ageStr;
+                badge.dataset.state = tone;
+                badge.textContent = label;
+                badge.setAttribute('translate', 'no');
+                const exactDate = this._formatExactDate(publishDate);
+                badge.title = tone === 'future'
+                    ? `Scheduled for ${exactDate}`
+                    : `Published on ${exactDate}`;
+                badge.setAttribute('aria-label', badge.title);
                 dateEl.parentElement?.appendChild(badge);
                 this._el = badge;
             },
@@ -13662,12 +15153,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._el?.remove(); this._el = null;
                     this._scheduleCalculate(2500);
                 });
+                addMutationRule('channelAgeDisplay', () => {
+                    if (location.pathname === '/watch') this._scheduleCalculate(400);
+                });
                 this._scheduleCalculate(2500);
             },
             destroy() {
                 if (this._calculateTimer) clearTimeout(this._calculateTimer);
                 this._calculateTimer = null;
                 removeNavigateRule('channelAgeDisplay');
+                removeMutationRule('channelAgeDisplay');
                 this._el?.remove(); this._el = null;
                 document.querySelector('.ytkit-age-badge')?.remove();
             }
@@ -14016,6 +15511,89 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             group: 'Content',
             icon: 'clock',
             _addButtonsTimer: null,
+            _createWatchLaterIcon() {
+                return createSVG('0 0 24 24', [
+                    { type: 'circle', cx: '12', cy: '13', r: '7' },
+                    { type: 'path', d: 'M12 10v3.5l2.5 1.5' },
+                    { type: 'path', d: 'M9 3h6' },
+                    { type: 'path', d: 'M12 3v3' }
+                ], {
+                    strokeWidth: '1.8',
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'round'
+                });
+            },
+            _createSavingIcon() {
+                const svg = createSVG('0 0 24 24', [
+                    { type: 'path', d: 'M12 4a8 8 0 1 1-5.66 2.34' }
+                ], {
+                    strokeWidth: '1.8',
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'round'
+                });
+                svg.classList.add('ytkit-wl-spin');
+                return svg;
+            },
+            _setButtonState(btn, state) {
+                if (!(btn instanceof HTMLElement)) return;
+                if (btn._ytkitResetTimer) {
+                    clearTimeout(btn._ytkitResetTimer);
+                    btn._ytkitResetTimer = null;
+                }
+
+                btn.dataset.state = state;
+                btn.disabled = state === 'saving';
+                btn.replaceChildren();
+
+                let icon;
+                let label;
+                let title;
+                let resetDelay = 0;
+
+                if (state === 'saving') {
+                    icon = this._createSavingIcon();
+                    label = 'Saving to Watch Later…';
+                    title = 'Saving to Watch Later…';
+                } else if (state === 'saved') {
+                    icon = ICONS.check();
+                    label = 'Saved to Watch Later';
+                    title = 'Saved to Watch Later';
+                    resetDelay = 1800;
+                } else if (state === 'error') {
+                    icon = ICONS.close();
+                    label = 'Could not save to Watch Later';
+                    title = 'Could not save to Watch Later';
+                    resetDelay = 2200;
+                } else {
+                    icon = this._createWatchLaterIcon();
+                    label = 'Save to Watch Later';
+                    title = 'Save to Watch Later';
+                }
+
+                icon.setAttribute('aria-hidden', 'true');
+                btn.appendChild(icon);
+                btn.setAttribute('aria-label', label);
+                btn.title = title;
+
+                if (resetDelay) {
+                    btn._ytkitResetTimer = setTimeout(() => {
+                        btn._ytkitResetTimer = null;
+                        if (btn.isConnected) this._setButtonState(btn, 'idle');
+                    }, resetDelay);
+                }
+            },
+            _findWatchLaterMenuItem() {
+                const candidates = Array.from(document.querySelectorAll('ytd-menu-service-item-renderer tp-yt-paper-item, ytd-menu-service-item-renderer'));
+                return candidates.find((candidate) => {
+                    const text = [
+                        candidate.getAttribute?.('aria-label'),
+                        candidate.getAttribute?.('title'),
+                        candidate.textContent,
+                        candidate.querySelector?.('yt-formatted-string')?.getAttribute?.('title')
+                    ].filter(Boolean).join(' ').toLowerCase();
+                    return text.includes('watch later');
+                }) || null;
+            },
 
             _scheduleAddButtons(delay = 1500) {
                 if (this._addButtonsTimer) clearTimeout(this._addButtonsTimer);
@@ -14032,44 +15610,51 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const thumb = item.querySelector('ytd-thumbnail, #thumbnail');
                     if (!thumb) return;
 
-                    // Get video ID from the link
-                    const link = item.querySelector('a#thumbnail, a.yt-simple-endpoint[href*="/watch"]');
+                    const link = item.querySelector('a#thumbnail, a.yt-simple-endpoint[href*="/watch"], a.yt-simple-endpoint[href*="/shorts/"], a.yt-simple-endpoint[href*="/live/"]');
                     const href = link?.href;
                     if (!href) return;
-                    const match = href.match(/[?&]v=([^&]+)/);
-                    if (!match) return;
+                    const videoId = getVideoId(href);
+                    if (!videoId) return;
 
                     const container = thumb.querySelector('#overlays') || thumb;
+                    thumb.classList.add('ytkit-thumb-action-host');
                     const btn = document.createElement('button');
+                    btn.type = 'button';
                     btn.className = 'ytkit-wl-btn';
-                    btn.title = 'Add to Watch Later';
-                    btn.style.cssText = 'position:absolute;top:4px;right:4px;z-index:50;background:rgba(0,0,0,0.7);border:none;border-radius:4px;color:#fff;cursor:pointer;padding:4px 6px;font-size:16px;opacity:0;transition:opacity 0.2s;line-height:1;';
-                    btn.textContent = '\u23F0'; // timer emoji
-
-                    // Show on hover
-                    thumb.style.position = 'relative';
-                    thumb.addEventListener('mouseenter', () => btn.style.opacity = '1');
-                    thumb.addEventListener('mouseleave', () => btn.style.opacity = '0');
+                    btn.setAttribute('translate', 'no');
+                    this._setButtonState(btn, 'idle');
 
                     btn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        // Click YouTube's native "Save" menu to add to Watch Later
+                        if (btn.disabled) return;
+                        this._setButtonState(btn, 'saving');
+
                         const menuBtn = item.querySelector('ytd-menu-renderer yt-icon-button, #menu button, ytd-menu-renderer button');
-                        if (menuBtn) {
-                            menuBtn.click();
-                            setTimeout(() => {
-                                const wlItem = document.querySelector('ytd-menu-service-item-renderer tp-yt-paper-item[aria-label*="Watch later"], ytd-menu-service-item-renderer:has(yt-formatted-string[title*="Watch later"])');
-                                if (wlItem) {
-                                    wlItem.click();
-                                    btn.textContent = '\u2705';
-                                    setTimeout(() => btn.textContent = '\u23F0', 2000);
-                                } else {
-                                    // Close menu if Watch Later not found
-                                    document.body.click();
-                                }
-                            }, 300);
+                        if (!menuBtn) {
+                            this._setButtonState(btn, 'error');
+                            showToast('Open More actions on this card to save it manually.', '#f59e0b', {
+                                duration: 4,
+                                tone: 'warning'
+                            });
+                            return;
                         }
+
+                        menuBtn.click();
+                        setTimeout(() => {
+                            const wlItem = this._findWatchLaterMenuItem();
+                            if (wlItem) {
+                                wlItem.click();
+                                this._setButtonState(btn, 'saved');
+                            } else {
+                                document.body.click();
+                                this._setButtonState(btn, 'error');
+                                showToast('Couldn’t find Watch Later in this menu. Try the native Save action on this card.', '#f59e0b', {
+                                    duration: 4,
+                                    tone: 'warning'
+                                });
+                            }
+                        }, 300);
                     });
 
                     container.appendChild(btn);
@@ -14085,17 +15670,148 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (this._addButtonsTimer) { clearTimeout(this._addButtonsTimer); this._addButtonsTimer = null; }
                 removeNavigateRule('watchLaterQuickAdd');
                 removeMutationRule('watchLaterQuickAdd');
+                document.querySelectorAll('.ytkit-wl-btn').forEach((b) => {
+                    if (b._ytkitResetTimer) {
+                        clearTimeout(b._ytkitResetTimer);
+                        b._ytkitResetTimer = null;
+                    }
+                });
                 document.querySelectorAll('.ytkit-wl-btn').forEach(b => b.remove());
             }
         },
         {
             id: 'playlistEnhancer',
             name: 'Playlist Enhancer',
-            description: 'Adds shuffle and remove-duplicates buttons to playlist panels',
+            description: 'Adds shuffle, copy, and hide-duplicate tools to playlist panels',
             group: 'Watch Page',
             icon: 'shuffle',
             _btns: null,
             _createTimer: null,
+            _syncTimer: null,
+            _copyTimer: null,
+            _hideDuplicates: false,
+            _statusEl: null,
+            _duplicateBtn: null,
+            _copyBtn: null,
+            _playlistStyleEl: null,
+            _copyText(text) {
+                return (async () => {
+                    if (!text) return false;
+                    if (navigator.clipboard?.writeText) {
+                        try {
+                            await navigator.clipboard.writeText(text);
+                            return true;
+                        } catch (_) {
+                            // Fall back to the legacy copy path below.
+                        }
+                    }
+
+                    const textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    textarea.setAttribute('readonly', 'true');
+                    textarea.setAttribute('aria-hidden', 'true');
+                    textarea.style.position = 'fixed';
+                    textarea.style.top = '0';
+                    textarea.style.left = '-9999px';
+                    textarea.style.opacity = '0';
+                    textarea.style.pointerEvents = 'none';
+                    document.body.appendChild(textarea);
+                    textarea.focus({ preventScroll: true });
+                    textarea.select();
+                    textarea.setSelectionRange(0, textarea.value.length);
+
+                    let copied = false;
+                    try {
+                        copied = typeof document.execCommand === 'function' && document.execCommand('copy');
+                    } catch (_) {
+                        copied = false;
+                    }
+
+                    textarea.remove();
+                    return copied;
+                })();
+            },
+            _getPlaylistEntries() {
+                return Array.from(document.querySelectorAll('ytd-playlist-panel-video-renderer')).map((item) => {
+                    const link = item.querySelector('a#wc-endpoint, a[href*="/watch"], a[href*="/shorts/"], a[href*="/live/"]');
+                    const href = link?.href || '';
+                    const videoId = getVideoId(href);
+                    return { item, link, href, videoId };
+                }).filter((entry) => entry.link && entry.href);
+            },
+            _getDuplicateState() {
+                const seen = new Set();
+                let total = 0;
+                let hidden = 0;
+
+                this._getPlaylistEntries().forEach((entry) => {
+                    total += 1;
+                    const key = entry.videoId || entry.href;
+                    const isDuplicate = seen.has(key);
+                    const isActive = entry.item.hasAttribute('selected')
+                        || entry.item.getAttribute('aria-selected') === 'true'
+                        || !!entry.item.querySelector('[selected], [aria-current="true"]');
+                    entry.item.classList.toggle('ytkit-playlist-duplicate-hidden', this._hideDuplicates && isDuplicate && !isActive);
+                    if (!isDuplicate) seen.add(key);
+                    if (this._hideDuplicates && isDuplicate && !isActive) hidden += 1;
+                });
+
+                return {
+                    total,
+                    unique: seen.size,
+                    hidden,
+                    duplicates: Math.max(0, total - seen.size)
+                };
+            },
+            _updateStatus() {
+                if (!this._statusEl || !this._duplicateBtn || !this._copyBtn) return;
+                const state = this._getDuplicateState();
+
+                if (state.duplicates > 0) {
+                    this._statusEl.textContent = this._hideDuplicates
+                        ? `${state.hidden} hidden`
+                        : `${state.duplicates} duplicates`;
+                } else {
+                    this._statusEl.textContent = `${state.total} videos`;
+                }
+
+                this._duplicateBtn.disabled = state.duplicates === 0;
+                this._duplicateBtn.dataset.state = this._hideDuplicates ? 'active' : 'idle';
+                this._duplicateBtn.setAttribute('aria-pressed', this._hideDuplicates ? 'true' : 'false');
+                this._duplicateBtn.textContent = this._hideDuplicates ? 'Show Duplicates' : 'Hide Duplicates';
+                this._duplicateBtn.title = this._hideDuplicates
+                    ? 'Show repeated videos in this playlist panel'
+                    : 'Hide repeated videos in this playlist panel';
+
+                this._copyBtn.title = this._hideDuplicates
+                    ? 'Copy the visible playlist video URLs'
+                    : 'Copy all playlist video URLs';
+            },
+            _scheduleSync(delay = 300) {
+                if (this._syncTimer) clearTimeout(this._syncTimer);
+                this._syncTimer = setTimeout(() => {
+                    this._syncTimer = null;
+                    this._updateStatus();
+                }, delay);
+            },
+            _setCopyButtonState(text, state = 'idle', delay = 2000) {
+                if (!this._copyBtn) return;
+                if (this._copyTimer) {
+                    clearTimeout(this._copyTimer);
+                    this._copyTimer = null;
+                }
+                this._copyBtn.textContent = text;
+                this._copyBtn.dataset.state = state;
+                if (delay > 0 && text !== 'Copy URLs') {
+                    this._copyTimer = setTimeout(() => {
+                        this._copyTimer = null;
+                        if (!this._copyBtn) return;
+                        this._copyBtn.textContent = 'Copy URLs';
+                        this._copyBtn.dataset.state = 'idle';
+                        this._updateStatus();
+                    }, delay);
+                }
+            },
             _scheduleCreate(delay = 2000) {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = setTimeout(() => {
@@ -14110,59 +15826,131 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (!playlistHeader) return;
                 if (playlistHeader.querySelector('.ytkit-playlist-enhance')) return;
 
+                if (!this._playlistStyleEl) {
+                    this._playlistStyleEl = injectStyle(`
+                        .ytkit-playlist-duplicate-hidden {
+                            display: none !important;
+                        }
+                    `, `${this.id}-dup-hide`, true);
+                }
+
                 const container = document.createElement('div');
                 container.className = 'ytkit-playlist-enhance';
 
-                // Shuffle button
+                const heading = document.createElement('div');
+                heading.className = 'ytkit-playlist-enhance__heading';
+
+                const title = document.createElement('span');
+                title.className = 'ytkit-playlist-enhance__title';
+                title.textContent = 'Playlist Tools';
+
+                const status = document.createElement('span');
+                status.className = 'ytkit-playlist-enhance__status';
+                status.setAttribute('aria-live', 'polite');
+                status.textContent = 'Playlist';
+
+                heading.appendChild(title);
+                heading.appendChild(status);
+
+                const actions = document.createElement('div');
+                actions.className = 'ytkit-playlist-enhance__actions';
+
                 const shuffleBtn = document.createElement('button');
                 shuffleBtn.type = 'button';
                 shuffleBtn.className = 'ytkit-playlist-action';
                 shuffleBtn.textContent = 'Shuffle';
+                shuffleBtn.title = 'Play a random visible video from this playlist panel';
                 shuffleBtn.addEventListener('click', () => {
-                    const items = document.querySelectorAll('ytd-playlist-panel-video-renderer');
-                    if (items.length < 2) return;
-                    // Pick a random video from the playlist
-                    const randomIdx = Math.floor(Math.random() * items.length);
-                    const link = items[randomIdx]?.querySelector('a#wc-endpoint');
+                    const entries = this._getPlaylistEntries().filter(({ item }) => !item.classList.contains('ytkit-playlist-duplicate-hidden'));
+                    if (entries.length < 2) {
+                        showToast('Need at least 2 playlist items to shuffle.', '#f59e0b', { duration: 4, tone: 'warning' });
+                        return;
+                    }
+                    const randomIdx = Math.floor(Math.random() * entries.length);
+                    const link = entries[randomIdx]?.link;
                     if (link) link.click();
                 });
 
-                // Copy playlist URLs
                 const copyBtn = document.createElement('button');
                 copyBtn.type = 'button';
                 copyBtn.className = 'ytkit-playlist-action';
-                copyBtn.textContent = 'Copy All URLs';
+                copyBtn.textContent = 'Copy URLs';
+                copyBtn.title = 'Copy all playlist video URLs';
                 copyBtn.addEventListener('click', async () => {
-                    const items = document.querySelectorAll('ytd-playlist-panel-video-renderer a#wc-endpoint');
-                    const urls = Array.from(items).map(a => a.href).filter(Boolean);
-                    if (urls.length > 0) {
-                        try {
-                            await navigator.clipboard.writeText(urls.join('\n'));
-                            copyBtn.textContent = 'Copied';
-                            setTimeout(() => copyBtn.textContent = 'Copy All URLs', 2000);
-                        } catch(e) {}
+                    const entries = this._getPlaylistEntries().filter(({ item }) => !this._hideDuplicates || !item.classList.contains('ytkit-playlist-duplicate-hidden'));
+                    const urls = entries.map(({ href }) => href).filter(Boolean);
+                    if (urls.length === 0) {
+                        this._setCopyButtonState('No URLs', 'error');
+                        showToast('No playlist URLs are ready to copy yet.', '#f59e0b', { duration: 4, tone: 'warning' });
+                        return;
+                    }
+
+                    this._setCopyButtonState('Copying…', 'busy', 0);
+                    const copied = await this._copyText(urls.join('\n'));
+                    if (copied) {
+                        this._setCopyButtonState('Copied', 'success');
+                    } else {
+                        this._setCopyButtonState('Retry', 'error');
+                        showToast('Clipboard access was blocked. Try again or use the browser copy shortcut.', '#ef4444', { duration: 5 });
                     }
                 });
 
-                container.appendChild(shuffleBtn);
-                container.appendChild(copyBtn);
+                const duplicateBtn = document.createElement('button');
+                duplicateBtn.type = 'button';
+                duplicateBtn.className = 'ytkit-playlist-action';
+                duplicateBtn.textContent = 'Hide Duplicates';
+                duplicateBtn.title = 'Hide repeated videos in this playlist panel';
+                duplicateBtn.setAttribute('aria-pressed', 'false');
+                duplicateBtn.addEventListener('click', () => {
+                    this._hideDuplicates = !this._hideDuplicates;
+                    this._updateStatus();
+                });
+
+                actions.appendChild(shuffleBtn);
+                actions.appendChild(copyBtn);
+                actions.appendChild(duplicateBtn);
+                container.appendChild(heading);
+                container.appendChild(actions);
                 playlistHeader.appendChild(container);
                 this._btns = container;
+                this._statusEl = status;
+                this._duplicateBtn = duplicateBtn;
+                this._copyBtn = copyBtn;
+                this._updateStatus();
             },
 
             init() {
                 addNavigateRule('playlistEnhancer', () => {
                     this._btns?.remove(); this._btns = null;
+                    this._statusEl = null;
+                    this._duplicateBtn = null;
+                    this._copyBtn = null;
                     this._scheduleCreate(2000);
+                });
+                addMutationRule('playlistEnhancer', () => {
+                    if (location.pathname === '/watch') {
+                        if (!document.querySelector('.ytkit-playlist-enhance')) this._scheduleCreate(400);
+                        else this._scheduleSync(250);
+                    }
                 });
                 this._scheduleCreate(2000);
             },
             destroy() {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = null;
+                if (this._syncTimer) clearTimeout(this._syncTimer);
+                this._syncTimer = null;
+                if (this._copyTimer) clearTimeout(this._copyTimer);
+                this._copyTimer = null;
                 removeNavigateRule('playlistEnhancer');
+                removeMutationRule('playlistEnhancer');
                 this._btns?.remove(); this._btns = null;
+                this._statusEl = null;
+                this._duplicateBtn = null;
+                this._copyBtn = null;
+                this._playlistStyleEl?.remove(); this._playlistStyleEl = null;
                 document.querySelectorAll('.ytkit-playlist-enhance').forEach(b => b.remove());
+                document.querySelectorAll('.ytkit-playlist-duplicate-hidden').forEach((item) => item.classList.remove('ytkit-playlist-duplicate-hidden'));
             }
         },
         {
@@ -14172,13 +15960,121 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             group: 'Comments',
             icon: 'search',
             _bar: null,
+            _input: null,
+            _countEl: null,
+            _summaryEl: null,
+            _hintEl: null,
+            _clearBtn: null,
+            _emptyEl: null,
             _createTimer: null,
+            _applyTimer: null,
+            _textCache: null,
+            _lastThreadCount: 0,
             _scheduleCreate(delay = 3000) {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = setTimeout(() => {
                     this._createTimer = null;
                     this._create();
                 }, delay);
+            },
+            _scheduleApply(delay = 140) {
+                if (this._applyTimer) clearTimeout(this._applyTimer);
+                this._applyTimer = setTimeout(() => {
+                    this._applyTimer = null;
+                    this._applyFilter();
+                }, delay);
+            },
+            _formatCount(value) {
+                return new Intl.NumberFormat().format(Math.max(0, Math.floor(Number(value) || 0)));
+            },
+            _getThreads() {
+                const comments = document.querySelector('ytd-comments#comments');
+                return comments ? Array.from(comments.querySelectorAll('ytd-comment-thread-renderer')) : [];
+            },
+            _getDisplayQuery() {
+                return (this._input?.value || '').trim().replace(/\s+/g, ' ');
+            },
+            _getThreadText(thread) {
+                if (!this._textCache) this._textCache = new WeakMap();
+                let cached = this._textCache.get(thread);
+                if (!cached) {
+                    cached = (thread.textContent || '').toLowerCase();
+                    this._textCache.set(thread, cached);
+                }
+                return cached;
+            },
+            _clearSearch({ focusInput = false } = {}) {
+                if (!this._input) return;
+                if (this._input.value) this._input.value = '';
+                this._applyFilter();
+                if (focusInput) this._input.focus();
+            },
+            _updatePresentation({ query, visible, total }) {
+                if (!this._bar || !this._countEl || !this._summaryEl || !this._hintEl || !this._clearBtn || !this._emptyEl) return;
+
+                const formattedVisible = this._formatCount(visible);
+                const formattedTotal = this._formatCount(total);
+                const hasQuery = Boolean(query);
+                const hasThreads = total > 0;
+                const hasMatches = visible > 0;
+
+                this._bar.dataset.searchActive = hasQuery ? '1' : '0';
+                this._bar.dataset.searchEmpty = hasQuery && hasThreads && !hasMatches ? '1' : '0';
+
+                this._countEl.textContent = !hasQuery
+                    ? `${formattedTotal} Thread${total === 1 ? '' : 's'}`
+                    : hasMatches
+                        ? `${formattedVisible} Match${visible === 1 ? '' : 'es'}`
+                        : 'No Matches';
+
+                if (!hasQuery && !hasThreads) {
+                    this._summaryEl.textContent = 'Waiting for comments to load…';
+                    this._hintEl.textContent = 'The search bar will stay in sync as more comments arrive.';
+                } else if (!hasQuery) {
+                    this._summaryEl.textContent = `${formattedTotal} comment thread${total === 1 ? ' is' : 's are'} ready to scan. Search creators, phrases, or topics.`;
+                    this._hintEl.textContent = 'Press Esc to clear anytime. New comments stay counted automatically.';
+                } else if (hasMatches) {
+                    this._summaryEl.textContent = `Showing ${formattedVisible} of ${formattedTotal} comment threads for “${query}”.`;
+                    this._hintEl.textContent = 'Use Next or Previous in Comment Navigator to jump between matches.';
+                } else if (!hasThreads) {
+                    this._summaryEl.textContent = `Waiting for comments to load for “${query}”…`;
+                    this._hintEl.textContent = 'Your search stays active while YouTube loads the comment list.';
+                } else {
+                    this._summaryEl.textContent = `No comment threads match “${query}”.`;
+                    this._hintEl.textContent = 'Try a shorter phrase, a creator name, or clear the filter.';
+                }
+
+                this._clearBtn.disabled = !hasQuery;
+                this._clearBtn.hidden = !hasQuery;
+                this._emptyEl.hidden = !(hasQuery && hasThreads && !hasMatches);
+            },
+            _applyFilter() {
+                if (!this._input) return;
+
+                const query = this._getDisplayQuery();
+                const loweredQuery = query.toLowerCase();
+                const threads = this._getThreads();
+                let visible = 0;
+
+                threads.forEach(thread => {
+                    if (!(thread instanceof HTMLElement)) return;
+                    const matches = !loweredQuery || this._getThreadText(thread).includes(loweredQuery);
+                    thread.style.display = matches ? '' : 'none';
+                    if (matches) visible++;
+                });
+
+                this._lastThreadCount = threads.length;
+                this._updatePresentation({ query, visible, total: threads.length });
+
+                document.dispatchEvent(new CustomEvent('ytkit-comment-filter', {
+                    detail: {
+                        query,
+                        visible,
+                        total: threads.length,
+                        hasMatches: visible > 0,
+                        isPending: threads.length === 0
+                    }
+                }));
             },
 
             _create() {
@@ -14191,6 +16087,25 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 bar.className = 'ytkit-comment-search';
                 bar.setAttribute('role', 'search');
 
+                const head = document.createElement('div');
+                head.className = 'ytkit-comment-search-head';
+
+                const copy = document.createElement('div');
+                copy.className = 'ytkit-comment-search-copy';
+
+                const eyebrow = document.createElement('span');
+                eyebrow.className = 'ytkit-comment-search-eyebrow';
+                eyebrow.textContent = 'Find in Comments';
+
+                const summary = document.createElement('p');
+                summary.className = 'ytkit-comment-search-summary';
+                summary.textContent = 'Waiting for comments to load…';
+                summary.setAttribute('aria-live', 'polite');
+                summary.setAttribute('aria-atomic', 'true');
+
+                copy.appendChild(eyebrow);
+                copy.appendChild(summary);
+
                 const field = document.createElement('div');
                 field.className = 'ytkit-comment-search-field';
                 const icon = ICONS.search();
@@ -14200,71 +16115,82 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 input.type = 'search';
                 input.className = 'ytkit-comment-search-input';
                 input.name = 'commentSearch';
-                input.placeholder = 'Search comments…';
+                input.placeholder = 'Search creators, phrases, or topics…';
                 input.autocomplete = 'off';
+                input.inputMode = 'search';
                 input.spellcheck = false;
                 input.setAttribute('aria-label', 'Search comments');
 
                 const countEl = document.createElement('span');
                 countEl.className = 'ytkit-search-count';
-                countEl.textContent = 'All';
+                countEl.textContent = '0 Threads';
                 countEl.setAttribute('aria-live', 'polite');
                 countEl.setAttribute('aria-atomic', 'true');
 
-                // Cache textContent per thread to avoid re-reading on every keystroke
-                const _textCache = new WeakMap();
-                const _getThreadText = (thread) => {
-                    let cached = _textCache.get(thread);
-                    if (!cached) {
-                        cached = (thread.textContent || '').toLowerCase();
-                        _textCache.set(thread, cached);
-                    }
-                    return cached;
-                };
-                const applyFilter = () => {
-                    const query = input.value.toLowerCase().trim();
-                    const threads = Array.from(document.querySelectorAll('ytd-comment-thread-renderer'));
-                    threads.forEach(thread => {
-                        if (!query) {
-                            thread.style.display = '';
-                            return;
-                        }
-                        const text = _getThreadText(thread);
-                        thread.style.display = text.includes(query) ? '' : 'none';
-                    });
+                const clearBtn = document.createElement('button');
+                clearBtn.type = 'button';
+                clearBtn.className = 'ytkit-comment-search-clear';
+                clearBtn.setAttribute('aria-label', 'Clear comment search');
+                clearBtn.title = 'Clear search';
+                clearBtn.hidden = true;
+                clearBtn.disabled = true;
+                const clearIcon = ICONS.close();
+                clearIcon.setAttribute('aria-hidden', 'true');
+                clearBtn.appendChild(clearIcon);
 
-                    const visible = query
-                        ? document.querySelectorAll('ytd-comment-thread-renderer:not([style*="display: none"])').length
-                        : threads.length;
-
-                    countEl.textContent = query
-                        ? `${visible} match${visible !== 1 ? 'es' : ''}`
-                        : 'All';
-
-                    document.dispatchEvent(new CustomEvent('ytkit-comment-filter', {
-                        detail: { query, visible, total: threads.length }
-                    }));
-                };
-
-                let filterTimeout;
                 input.addEventListener('input', () => {
-                    clearTimeout(filterTimeout);
-                    filterTimeout = setTimeout(applyFilter, 300);
+                    this._scheduleApply(180);
                 });
 
                 input.addEventListener('keydown', (e) => {
                     if (e.key === 'Escape' && input.value) {
                         e.stopPropagation();
-                        clearTimeout(filterTimeout);
-                        input.value = '';
-                        applyFilter();
+                        this._clearSearch({ focusInput: true });
                     }
                 });
 
+                clearBtn.addEventListener('click', () => {
+                    this._clearSearch({ focusInput: true });
+                });
+
+                const hint = document.createElement('div');
+                hint.className = 'ytkit-comment-search-hint';
+                hint.textContent = 'The search bar will stay in sync as more comments arrive.';
+
+                const empty = document.createElement('div');
+                empty.className = 'ytkit-comment-search-empty';
+                empty.hidden = true;
+                empty.setAttribute('role', 'status');
+
+                const emptyTitle = document.createElement('div');
+                emptyTitle.className = 'ytkit-comment-search-empty-title';
+                emptyTitle.textContent = 'No Matching Comments';
+
+                const emptyCopy = document.createElement('div');
+                emptyCopy.className = 'ytkit-comment-search-empty-copy';
+                emptyCopy.textContent = 'Try a shorter phrase, a creator name, or clear the filter to bring every thread back.';
+
+                const emptyClear = document.createElement('button');
+                emptyClear.type = 'button';
+                emptyClear.className = 'ytkit-comment-search-empty-btn';
+                emptyClear.textContent = 'Clear Search';
+                emptyClear.addEventListener('click', () => {
+                    this._clearSearch({ focusInput: true });
+                });
+
+                empty.appendChild(emptyTitle);
+                empty.appendChild(emptyCopy);
+                empty.appendChild(emptyClear);
+
+                head.appendChild(copy);
+                head.appendChild(countEl);
                 field.appendChild(icon);
                 field.appendChild(input);
-                field.appendChild(countEl);
+                field.appendChild(clearBtn);
+                bar.appendChild(head);
                 bar.appendChild(field);
+                bar.appendChild(hint);
+                bar.appendChild(empty);
                 const header = comments.querySelector('#header, ytd-comments-header-renderer');
                 if (header) {
                     header.parentElement.insertBefore(bar, header.nextSibling);
@@ -14272,24 +16198,49 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     comments.insertBefore(bar, comments.firstChild);
                 }
                 this._bar = bar;
-                applyFilter();
+                this._input = input;
+                this._countEl = countEl;
+                this._summaryEl = summary;
+                this._hintEl = hint;
+                this._clearBtn = clearBtn;
+                this._emptyEl = empty;
+                this._textCache = new WeakMap();
+                this._lastThreadCount = 0;
+                this._applyFilter();
             },
 
             init() {
                 addNavigateRule('commentSearch', () => {
                     this._bar?.remove(); this._bar = null;
+                    this._input = null;
+                    this._countEl = null;
+                    this._summaryEl = null;
+                    this._hintEl = null;
+                    this._clearBtn = null;
+                    this._emptyEl = null;
+                    this._textCache = null;
+                    this._lastThreadCount = 0;
                     this._scheduleCreate(3000);
                 });
                 addMutationRule('commentSearch', () => {
-                    if (location.pathname === '/watch' && !document.querySelector('.ytkit-comment-search')) {
+                    if (location.pathname !== '/watch') return;
+                    if (!document.querySelector('.ytkit-comment-search') || !this._bar || !document.body.contains(this._bar)) {
                         this._create();
+                        return;
+                    }
+                    const threadCount = this._getThreads().length;
+                    if (threadCount !== this._lastThreadCount || this._getDisplayQuery()) {
+                        this._textCache = new WeakMap();
+                        this._scheduleApply(160);
                     }
                 });
                 this._scheduleCreate(3000);
             },
             destroy() {
                 if (this._createTimer) clearTimeout(this._createTimer);
+                if (this._applyTimer) clearTimeout(this._applyTimer);
                 this._createTimer = null;
+                this._applyTimer = null;
                 removeNavigateRule('commentSearch');
                 removeMutationRule('commentSearch');
                 // Reset any hidden comments
@@ -14299,6 +16250,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     detail: { query: '', visible: total, total }
                 }));
                 this._bar?.remove(); this._bar = null;
+                this._input = null;
+                this._countEl = null;
+                this._summaryEl = null;
+                this._hintEl = null;
+                this._clearBtn = null;
+                this._emptyEl = null;
+                this._textCache = null;
+                this._lastThreadCount = 0;
                 document.querySelectorAll('.ytkit-comment-search').forEach(b => b.remove());
             }
         },
@@ -14536,6 +16495,49 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             group: 'Content',
             icon: 'monitor',
             _addBadgesTimer: null,
+            _normalizeText(value) {
+                return String(value || '').replace(/\u00A0/g, ' ').trim().toUpperCase();
+            },
+            _getResolutionData(item) {
+                const values = new Set();
+                const selectors = [
+                    'ytd-badge-supported-renderer .badge-style-type-simple',
+                    'span.ytd-badge-supported-renderer',
+                    '[overlay-style="RICH_METADATA"]',
+                    '[overlay-style="RICH_METADATA"] #text',
+                    '#video-title',
+                    '#video-title-link',
+                    '#meta',
+                    '#metadata-line',
+                    'ytd-video-meta-block'
+                ];
+
+                item.querySelectorAll(selectors.join(', ')).forEach((node) => {
+                    values.add(this._normalizeText(node.textContent));
+                    values.add(this._normalizeText(node.getAttribute?.('aria-label')));
+                    values.add(this._normalizeText(node.getAttribute?.('title')));
+                });
+
+                const content = Array.from(values).filter(Boolean).join(' ');
+                if (!content) return null;
+
+                if (/\b(?:8K|4320P?)\b/.test(content)) {
+                    return { label: '8K', tier: '8k', description: '8K video quality' };
+                }
+                if (/\b(?:4K|UHD|2160P?)\b/.test(content)) {
+                    return { label: '4K', tier: '4k', description: '4K video quality' };
+                }
+                if (/\b(?:QHD|2K|1440P?)\b/.test(content)) {
+                    return { label: 'QHD', tier: 'qhd', description: 'Quad HD video quality' };
+                }
+                if (/\b(?:FHD|HD|1080P?|720P?)\b/.test(content)) {
+                    return { label: 'HD', tier: 'hd', description: 'HD video quality' };
+                }
+                if (/\b(?:SD|480P?|360P?|240P?|144P?)\b/.test(content)) {
+                    return { label: 'SD', tier: 'sd', description: 'Standard definition video quality' };
+                }
+                return null;
+            },
 
             _scheduleAddBadges(delay = 1500) {
                 if (this._addBadgesTimer) clearTimeout(this._addBadgesTimer);
@@ -14548,48 +16550,27 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _addBadges() {
                 const thumbnails = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer');
                 thumbnails.forEach(item => {
-                    if (item.querySelector('.ytkit-res-badge')) return;
                     const thumb = item.querySelector('ytd-thumbnail, #thumbnail');
                     if (!thumb) return;
+                    const quality = this._getResolutionData(item);
+                    const existingBadge = item.querySelector('.ytkit-res-badge');
 
-                    // Try to detect quality from metadata
-                    const qualityBadges = item.querySelectorAll('ytd-badge-supported-renderer .badge-style-type-simple, span.ytd-badge-supported-renderer');
-                    let has4k = false;
-                    let hasHd = false;
-                    qualityBadges.forEach(b => {
-                        const text = b.textContent?.trim()?.toUpperCase() || '';
-                        if (text.includes('4K') || text.includes('2160')) has4k = true;
-                        if (text.includes('HD') || text.includes('1080') || text.includes('720')) hasHd = true;
-                    });
-
-                    // Also check for quality overlays YouTube adds
-                    const overlayBadge = item.querySelector('[overlay-style="RICH_METADATA"], ytd-thumbnail-overlay-time-status-renderer');
-                    const metaLine = item.querySelector('#video-title, #meta');
-                    if (metaLine) {
-                        const aria = metaLine.getAttribute('aria-label') || '';
-                        if (aria.includes('4K') || aria.includes('2160p')) has4k = true;
-                        else if (aria.includes('1080p') || aria.includes('720p')) hasHd = true;
+                    if (!quality) {
+                        existingBadge?.remove();
+                        thumb.classList.remove('ytkit-res-host');
+                        return;
                     }
 
-                    // Only add badge if we detected something
-                    if (!has4k && !hasHd) return;
-
-                    const badge = document.createElement('span');
+                    const badge = existingBadge || document.createElement('span');
                     badge.className = 'ytkit-res-badge';
-                    badge.style.cssText = `position:absolute;bottom:4px;left:4px;z-index:50;font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;line-height:1.4;letter-spacing:0.5px;`;
+                    badge.dataset.tier = quality.tier;
+                    badge.textContent = quality.label;
+                    badge.setAttribute('translate', 'no');
+                    badge.title = quality.description;
+                    badge.setAttribute('aria-label', quality.description);
 
-                    if (has4k) {
-                        badge.textContent = '4K';
-                        badge.style.background = 'rgba(168,85,247,0.9)';
-                        badge.style.color = '#fff';
-                    } else {
-                        badge.textContent = 'HD';
-                        badge.style.background = 'rgba(59,130,246,0.85)';
-                        badge.style.color = '#fff';
-                    }
-
-                    thumb.style.position = 'relative';
-                    thumb.appendChild(badge);
+                    thumb.classList.add('ytkit-res-host');
+                    if (!existingBadge) thumb.appendChild(badge);
                 });
             },
 
@@ -14603,6 +16584,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 removeNavigateRule('videoResolutionBadge');
                 removeMutationRule('videoResolutionBadge');
                 document.querySelectorAll('.ytkit-res-badge').forEach(b => b.remove());
+                document.querySelectorAll('.ytkit-res-host').forEach((thumb) => thumb.classList.remove('ytkit-res-host'));
             }
         },
         {
@@ -14613,6 +16595,79 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             icon: 'percent',
             _el: null,
             _calculateTimer: null,
+            _formatCount(value) {
+                return new Intl.NumberFormat().format(Math.max(0, Math.floor(Number(value) || 0)));
+            },
+            _parseCompactCount(rawValue) {
+                const raw = String(rawValue || '').replace(/\u00A0/g, ' ').trim();
+                if (!raw) return 0;
+
+                const lower = raw.toLowerCase();
+                let multiplier = 1;
+                if (lower.includes('b')) multiplier = 1000000000;
+                else if (lower.includes('m')) multiplier = 1000000;
+                else if (lower.includes('k')) multiplier = 1000;
+
+                let numeric = lower.replace(/[^0-9,.\s]/g, '').replace(/\s+/g, '');
+                if (!numeric) return 0;
+
+                if (multiplier > 1) {
+                    if (numeric.includes(',') && !numeric.includes('.')) numeric = numeric.replace(',', '.');
+                    else numeric = numeric.replace(/,/g, '');
+                } else {
+                    numeric = numeric.replace(/(\d),(?=\d{3}\b)/g, '$1').replace(/\s+/g, '');
+                    if (numeric.includes(',') && !numeric.includes('.')) numeric = numeric.replace(',', '.');
+                    else numeric = numeric.replace(/,/g, '');
+                }
+
+                const parsed = Number.parseFloat(numeric);
+                return Number.isFinite(parsed) ? parsed * multiplier : 0;
+            },
+            _extractLargestCount(text) {
+                const matches = String(text || '').match(/[\d][\d\s,.\u00A0]*\s*[kmb]?/gi) || [];
+                let max = 0;
+                matches.forEach((match) => {
+                    max = Math.max(max, this._parseCompactCount(match));
+                });
+                return max;
+            },
+            _getViewElement() {
+                const candidates = Array.from(document.querySelectorAll('#info-container yt-formatted-string.bold, ytd-watch-metadata #info yt-formatted-string, #info-text #count .view-count, #info-text yt-formatted-string'));
+                return candidates.find((el) => /(views?|watching)/i.test(el.textContent || ''))
+                    || candidates[0]
+                    || null;
+            },
+            _getLikeButton() {
+                return document.querySelector('like-button-view-model button, ytd-toggle-button-renderer:first-child button[aria-label*="like" i]:not([aria-label*="dislike" i]), segmented-like-dislike-button-view-model button:first-child');
+            },
+            _getLikeCount(button) {
+                if (!button) return 0;
+
+                const candidates = [
+                    button.getAttribute('aria-label'),
+                    button.getAttribute('title'),
+                    button.textContent,
+                    button.querySelector('.yt-spec-button-shape-next__button-text-content, yt-formatted-string, #text')?.textContent
+                ];
+
+                let max = 0;
+                candidates.forEach((candidate) => {
+                    max = Math.max(max, this._extractLargestCount(candidate));
+                });
+                return max;
+            },
+            _formatRatio(value) {
+                return new Intl.NumberFormat(undefined, {
+                    minimumFractionDigits: value < 10 ? 1 : 0,
+                    maximumFractionDigits: value < 10 ? 1 : 0
+                }).format(value);
+            },
+            _getTone(ratio) {
+                if (ratio >= 8) return 'excellent';
+                if (ratio >= 4) return 'strong';
+                if (ratio >= 2) return 'steady';
+                return 'quiet';
+            },
             _scheduleCalculate(delay = 3000) {
                 if (this._calculateTimer) clearTimeout(this._calculateTimer);
                 this._calculateTimer = setTimeout(() => {
@@ -14623,31 +16678,39 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _calculate() {
                 if (location.pathname !== '/watch') return;
-                document.querySelector('.ytkit-lv-ratio')?.remove();
+                this._el?.remove();
+                this._el = null;
 
-                // Get view count
-                const viewEl = document.querySelector('#info-container yt-formatted-string.bold, ytd-watch-metadata #info yt-formatted-string, #info-text #count .view-count');
+                const viewEl = this._getViewElement();
                 if (!viewEl) return;
-                const viewText = viewEl.textContent?.replace(/[^0-9]/g, '');
-                const views = parseInt(viewText);
-                if (!views || isNaN(views)) return;
+                const views = this._extractLargestCount(viewEl.textContent || viewEl.getAttribute('aria-label') || '');
+                if (!views) return;
 
-                // Get like count from YouTube's current button label
-                const likeBtn = document.querySelector('like-button-view-model button, ytd-toggle-button-renderer:first-child button[aria-label*="like" i]:not([aria-label*="dislike" i]), segmented-like-dislike-button-view-model button:first-child');
-                if (!likeBtn) return;
-                const likeAria = likeBtn.getAttribute('aria-label') || '';
-                const likeMatch = likeAria.match(/[\d,]+/);
-                if (!likeMatch) return;
-                const likes = parseInt(likeMatch[0].replace(/,/g, ''));
-                if (!likes || isNaN(likes)) return;
+                const likeBtn = this._getLikeButton();
+                const likes = this._getLikeCount(likeBtn);
+                if (!likes) return;
 
-                const ratio = ((likes / views) * 100).toFixed(2);
+                const ratio = (likes / views) * 100;
+                if (!Number.isFinite(ratio) || ratio <= 0) return;
 
                 const badge = document.createElement('span');
                 badge.className = 'ytkit-lv-ratio';
-                badge.style.cssText = 'color:#aaa;font-size:12px;margin-left:8px;background:rgba(255,255,255,0.08);padding:2px 8px;border-radius:12px;';
-                badge.title = `${likes.toLocaleString()} likes / ${views.toLocaleString()} views`;
-                badge.textContent = `${ratio}% liked`;
+                badge.dataset.state = this._getTone(ratio);
+                badge.setAttribute('translate', 'no');
+                const ratioValue = this._formatRatio(ratio);
+                badge.title = `${this._formatCount(likes)} likes from ${this._formatCount(views)} views`;
+                badge.setAttribute('aria-label', `Like rate ${ratioValue}% based on ${this._formatCount(likes)} likes and ${this._formatCount(views)} views`);
+
+                const value = document.createElement('span');
+                value.className = 'ytkit-meta-chip__value';
+                value.textContent = `${ratioValue}%`;
+
+                const label = document.createElement('span');
+                label.className = 'ytkit-meta-chip__label';
+                label.textContent = 'Like Rate';
+
+                badge.appendChild(value);
+                badge.appendChild(label);
 
                 const container = viewEl.parentElement;
                 if (container) container.appendChild(badge);
@@ -14659,12 +16722,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._el?.remove(); this._el = null;
                     this._scheduleCalculate(3000);
                 });
+                addMutationRule('likeViewRatio', () => {
+                    if (location.pathname === '/watch') this._scheduleCalculate(500);
+                });
                 this._scheduleCalculate(3000);
             },
             destroy() {
                 if (this._calculateTimer) clearTimeout(this._calculateTimer);
                 this._calculateTimer = null;
                 removeNavigateRule('likeViewRatio');
+                removeMutationRule('likeViewRatio');
                 this._el?.remove(); this._el = null;
                 document.querySelector('.ytkit-lv-ratio')?.remove();
             }
@@ -14678,6 +16745,21 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _btn: null,
             _createTimer: null,
             _feedbackTimer: null,
+            _sanitizeFilename(name) {
+                return String(name || '')
+                    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+                    .replace(/\s+/g, '_')
+                    .replace(/^\.+/, '')
+                    .substring(0, 120)
+                    || 'thumbnail';
+            },
+            _getVideoTitle() {
+                return document.querySelector('h1.ytd-watch-metadata yt-formatted-string, h1 yt-formatted-string, h1.ytd-watch-metadata, #title h1')?.textContent?.trim() || '';
+            },
+            _getFilename(videoId) {
+                const title = this._sanitizeFilename(this._getVideoTitle() || videoId);
+                return `${title}_thumbnail.jpg`;
+            },
             _scheduleCreate(delay = 2000) {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = setTimeout(() => {
@@ -14686,14 +16768,37 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }, delay);
             },
 
-            _setButtonFeedback(labelEl, btn, text) {
+            _setButtonFeedback(labelEl, btn, text, state = 'idle') {
                 labelEl.textContent = text;
-                btn.setAttribute('aria-label', text === 'Thumbnail' ? 'Download thumbnail' : text);
+                btn.dataset.state = state;
+                const labelMap = {
+                    idle: {
+                        aria: 'Download thumbnail',
+                        title: 'Download thumbnail'
+                    },
+                    busy: {
+                        aria: text,
+                        title: text
+                    },
+                    success: {
+                        aria: 'Thumbnail downloaded',
+                        title: 'Thumbnail downloaded'
+                    },
+                    error: {
+                        aria: 'Thumbnail download failed. Retry download',
+                        title: 'Thumbnail download failed. Retry'
+                    }
+                };
+                const meta = labelMap[state] || labelMap.idle;
+                btn.setAttribute('aria-label', meta.aria);
+                btn.title = meta.title;
                 if (this._feedbackTimer) clearTimeout(this._feedbackTimer);
                 if (text !== 'Thumbnail') {
                     this._feedbackTimer = setTimeout(() => {
                         labelEl.textContent = 'Thumbnail';
+                        btn.dataset.state = 'idle';
                         btn.setAttribute('aria-label', 'Download thumbnail');
+                        btn.title = 'Download thumbnail';
                         this._feedbackTimer = null;
                     }, 2000);
                 } else {
@@ -14729,17 +16834,18 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (location.pathname !== '/watch') return;
                 if (document.querySelector('.ytkit-dl-thumb-btn')) return;
 
-                const url = new URL(location.href);
-                const videoId = url.searchParams.get('v');
+                const videoId = getVideoId();
                 if (!videoId) return;
 
                 const actions = document.querySelector('#actions, ytd-watch-metadata #actions, #top-level-buttons-computed');
                 if (!actions) return;
 
                 const btn = document.createElement('button');
+                btn.type = 'button';
                 btn.className = 'ytkit-watch-action-btn ytkit-dl-thumb-btn';
-                btn.title = 'Download Thumbnail';
+                btn.title = 'Download thumbnail';
                 btn.setAttribute('aria-label', 'Download thumbnail');
+                btn.dataset.state = 'idle';
 
                 const icon = document.createElement('span');
                 icon.className = 'ytkit-watch-action-btn__icon';
@@ -14765,14 +16871,14 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     if (btn.disabled) return;
                     btn.disabled = true;
                     try {
-                        this._setButtonFeedback(label, btn, 'Checking…');
+                        this._setButtonFeedback(label, btn, 'Checking…', 'busy');
                         const thumbUrl = await this._resolveThumbnailUrl(videoId);
-                        this._setButtonFeedback(label, btn, 'Downloading…');
-                        await triggerDownload(thumbUrl, `${videoId}_thumbnail.jpg`);
-                        this._setButtonFeedback(label, btn, 'Downloaded');
+                        this._setButtonFeedback(label, btn, 'Downloading…', 'busy');
+                        await triggerDownload(thumbUrl, this._getFilename(videoId));
+                        this._setButtonFeedback(label, btn, 'Downloaded', 'success');
                     } catch (e) {
-                        this._setButtonFeedback(label, btn, 'Retry');
-                        showToast('Thumbnail download failed', '#ef4444', { duration: 4 });
+                        this._setButtonFeedback(label, btn, 'Retry', 'error');
+                        showToast('Thumbnail download failed. Check the browser download prompt and try again.', '#ef4444', { duration: 4 });
                     } finally {
                         btn.disabled = false;
                     }
@@ -14787,12 +16893,18 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._btn = null;
                     this._scheduleCreate(2000);
                 });
+                addMutationRule('downloadThumbnail', () => {
+                    if (location.pathname === '/watch' && !document.querySelector('.ytkit-dl-thumb-btn')) {
+                        this._scheduleCreate(400);
+                    }
+                });
                 this._scheduleCreate(2000);
             },
             destroy() {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = null;
                 removeNavigateRule('downloadThumbnail');
+                removeMutationRule('downloadThumbnail');
                 if (this._feedbackTimer) clearTimeout(this._feedbackTimer);
                 this._feedbackTimer = null;
                 document.querySelectorAll('.ytkit-dl-thumb-btn').forEach(b => b.remove());
@@ -14879,7 +16991,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _show() {
                 if (location.pathname !== '/watch') return;
-                document.querySelector('.ytkit-sub-count-badge')?.remove();
+                this._el?.remove();
+                this._el = null;
 
                 const ownerEl = document.querySelector('#owner #channel-name a, ytd-watch-metadata #owner ytd-channel-name a');
                 if (!ownerEl) return;
@@ -14891,7 +17004,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const badge = document.createElement('span');
                 badge.className = 'ytkit-sub-count-badge';
-                badge.style.cssText = 'display:inline-block;color:#aaa;font-size:11px;background:rgba(255,255,255,0.08);padding:2px 8px;border-radius:10px;margin-left:8px;vertical-align:middle;';
+                badge.setAttribute('translate', 'no');
+                badge.title = `Channel subscribers: ${count}`;
+                badge.setAttribute('aria-label', badge.title);
                 badge.textContent = count;
 
                 const nameContainer = ownerEl.closest('#channel-name, ytd-channel-name');
@@ -14904,12 +17019,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._el?.remove(); this._el = null;
                     this._scheduleShow(2500);
                 });
+                addMutationRule('channelSubCount', () => {
+                    if (location.pathname === '/watch') this._scheduleShow(500);
+                });
                 this._scheduleShow(2500);
             },
             destroy() {
                 if (this._showTimer) clearTimeout(this._showTimer);
                 this._showTimer = null;
                 removeNavigateRule('channelSubCount');
+                removeMutationRule('channelSubCount');
                 this._el?.remove(); this._el = null;
                 document.querySelector('.ytkit-sub-count-badge')?.remove();
             }
@@ -14921,15 +17040,58 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             group: 'Video Player',
             icon: 'fast-forward',
             _container: null,
+            _statusEl: null,
             _video: null,
             _rateHandler: null,
             _createTimer: null,
+            _syncTimer: null,
             _scheduleCreate(delay = 2000) {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = setTimeout(() => {
                     this._createTimer = null;
                     this._create();
                 }, delay);
+            },
+            _bindVideo(video) {
+                if (this._video === video) return;
+                if (this._video && this._rateHandler) {
+                    this._video.removeEventListener('ratechange', this._rateHandler);
+                }
+                this._video = video || null;
+                if (this._video && this._rateHandler) {
+                    this._video.addEventListener('ratechange', this._rateHandler);
+                }
+            },
+            _scheduleSync(delay = 200) {
+                if (this._syncTimer) clearTimeout(this._syncTimer);
+                this._syncTimer = setTimeout(() => {
+                    this._syncTimer = null;
+                    this._syncState();
+                }, delay);
+            },
+            _syncState() {
+                if (!this._container) return;
+
+                const video = getMainVideoElement() || document.querySelector('video');
+                this._bindVideo(video);
+
+                const rate = video?.playbackRate || 1;
+                this._container.querySelectorAll('.ytkit-speed-btn').forEach((button) => {
+                    const buttonSpeed = parseFloat(button.dataset.speed || '1');
+                    const active = !!video && Math.abs(rate - buttonSpeed) < 0.01;
+                    button.classList.toggle('ytkit-speed-btn-active', active);
+                    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+                });
+
+                if (this._statusEl) {
+                    const label = `${new Intl.NumberFormat(undefined, {
+                        minimumFractionDigits: Number.isInteger(rate) ? 0 : 2,
+                        maximumFractionDigits: 2
+                    }).format(rate)}x`;
+                    this._statusEl.textContent = label;
+                    this._statusEl.dataset.state = Math.abs(rate - 1) < 0.01 ? 'default' : 'active';
+                    this._statusEl.setAttribute('aria-label', `Current playback speed ${label}`);
+                }
             },
 
             _create() {
@@ -14941,58 +17103,85 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const container = document.createElement('div');
                 container.className = 'ytkit-speed-presets';
+                container.setAttribute('role', 'group');
+                container.setAttribute('aria-label', 'Playback speed presets');
+
+                const header = document.createElement('div');
+                header.className = 'ytkit-speed-presets__header';
+
+                const title = document.createElement('span');
+                title.className = 'ytkit-speed-presets__title';
+                title.textContent = 'Speed Presets';
+
+                const status = document.createElement('span');
+                status.className = 'ytkit-speed-presets__status';
+                status.textContent = '1x';
+                status.setAttribute('translate', 'no');
+                status.setAttribute('aria-live', 'polite');
+
+                header.appendChild(title);
+                header.appendChild(status);
+
+                const actions = document.createElement('div');
+                actions.className = 'ytkit-speed-presets__actions';
 
                 const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
-                const syncState = () => {
-                    const video = document.querySelector('video');
-                    container.querySelectorAll('.ytkit-speed-btn').forEach((button) => {
-                        const buttonSpeed = parseFloat(button.dataset.speed || '1');
-                        const active = !!video && Math.abs(video.playbackRate - buttonSpeed) < 0.01;
-                        button.classList.toggle('ytkit-speed-btn-active', active);
-                    });
-                };
                 speeds.forEach(speed => {
                     const btn = document.createElement('button');
                     btn.type = 'button';
                     btn.className = 'ytkit-speed-btn';
                     btn.dataset.speed = String(speed);
                     btn.textContent = `${speed}x`;
+                    btn.setAttribute('translate', 'no');
+                    btn.setAttribute('aria-pressed', 'false');
+                    btn.title = `Set playback speed to ${speed}x`;
                     btn.addEventListener('click', () => {
-                        const video = document.querySelector('video');
+                        const video = getMainVideoElement() || document.querySelector('video');
                         if (video) {
                             video.playbackRate = speed;
-                            syncState();
+                            this._syncState();
                         }
                     });
 
-                    container.appendChild(btn);
+                    actions.appendChild(btn);
                 });
 
+                container.appendChild(header);
+                container.appendChild(actions);
                 below.insertBefore(container, below.firstChild);
                 this._container = container;
-                this._video = document.querySelector('video') || null;
-                this._rateHandler = syncState;
-                this._video?.addEventListener('ratechange', syncState);
-                syncState();
+                this._statusEl = status;
+                this._rateHandler = () => this._syncState();
+                this._syncState();
             },
 
             init() {
                 addNavigateRule('customSpeedButtons', () => {
-                    this._video?.removeEventListener('ratechange', this._rateHandler);
-                    this._video = null;
+                    if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
+                    this._bindVideo(null);
                     this._rateHandler = null;
+                    this._statusEl = null;
                     this._container?.remove(); this._container = null;
                     this._scheduleCreate(2000);
+                });
+                addMutationRule('customSpeedButtons', () => {
+                    if (location.pathname === '/watch') {
+                        if (!document.querySelector('.ytkit-speed-presets')) this._scheduleCreate(400);
+                        else this._scheduleSync(200);
+                    }
                 });
                 this._scheduleCreate(2000);
             },
             destroy() {
                 if (this._createTimer) clearTimeout(this._createTimer);
                 this._createTimer = null;
+                if (this._syncTimer) clearTimeout(this._syncTimer);
+                this._syncTimer = null;
                 removeNavigateRule('customSpeedButtons');
-                this._video?.removeEventListener('ratechange', this._rateHandler);
-                this._video = null;
+                removeMutationRule('customSpeedButtons');
+                this._bindVideo(null);
                 this._rateHandler = null;
+                this._statusEl = null;
                 this._container?.remove(); this._container = null;
                 document.querySelectorAll('.ytkit-speed-presets').forEach(c => c.remove());
             }
@@ -15289,12 +17478,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _styleEl: null,
             _countEl: null,
             _statusEl: null,
+            _filterBadgeEl: null,
             _prevBtn: null,
             _nextBtn: null,
             _filterHandler: null,
             _currentIndex: -1,
             _filterState: null,
             _refreshTimer: null,
+            _formatCount(value) {
+                return new Intl.NumberFormat().format(Math.max(0, Math.floor(Number(value) || 0)));
+            },
             _ensureNav() {
                 if (this._container || !window.location.pathname.startsWith('/watch')) return;
                 const comments = document.querySelector('ytd-comments#comments');
@@ -15304,6 +17497,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 nav.id = 'ytkit-comment-nav';
                 nav.setAttribute('role', 'navigation');
                 nav.setAttribute('aria-label', 'Comment thread navigator');
+                nav.dataset.filtered = '0';
 
                 const header = document.createElement('div');
                 header.className = 'ytkit-comment-nav-head';
@@ -15311,9 +17505,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const meta = document.createElement('div');
                 meta.className = 'ytkit-comment-nav-meta';
 
+                const topLine = document.createElement('div');
+                topLine.className = 'ytkit-comment-nav-topline';
+
                 const label = document.createElement('span');
                 label.className = 'ytkit-comment-nav-label';
-                label.textContent = 'Comments';
+                label.textContent = 'Thread Navigator';
+
+                const filterBadge = document.createElement('span');
+                filterBadge.className = 'ytkit-comment-nav-filter';
+                filterBadge.hidden = true;
+                filterBadge.setAttribute('aria-live', 'polite');
 
                 const count = document.createElement('strong');
                 count.className = 'ytkit-comment-nav-count';
@@ -15323,9 +17525,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const status = document.createElement('span');
                 status.className = 'ytkit-comment-nav-status';
-                status.textContent = 'Waiting for comments';
+                status.textContent = 'Waiting for comments to load…';
 
-                meta.appendChild(label);
+                topLine.appendChild(label);
+                topLine.appendChild(filterBadge);
+                meta.appendChild(topLine);
                 meta.appendChild(count);
                 meta.appendChild(status);
 
@@ -15353,7 +17557,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     return btn;
                 };
 
-                const prevBtn = makeBtn('Jump to previous visible comment thread', '\u2191', 'Prev', -1);
+                const prevBtn = makeBtn('Jump to previous visible comment thread', '\u2191', 'Previous', -1);
                 const nextBtn = makeBtn('Jump to next visible comment thread', '\u2193', 'Next', 1);
                 controls.appendChild(prevBtn);
                 controls.appendChild(nextBtn);
@@ -15366,6 +17570,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._container = nav;
                 this._countEl = count;
                 this._statusEl = status;
+                this._filterBadgeEl = filterBadge;
                 this._prevBtn = prevBtn;
                 this._nextBtn = nextBtn;
             },
@@ -15404,7 +17609,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 return fallbackIndex;
             },
             _updateState() {
-                if (!this._container || !this._countEl || !this._statusEl) return;
+                if (!this._container || !this._countEl || !this._statusEl || !this._filterBadgeEl) return;
 
                 const threads = this._getThreads();
                 const activeThread = document.querySelector('ytd-comment-thread-renderer[data-ytkit-comment-current="1"]');
@@ -15414,19 +17619,31 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (threads.length === 0) this._currentIndex = -1;
                 else if (this._currentIndex >= threads.length) this._currentIndex = threads.length - 1;
 
+                const query = (this._filterState?.query || '').trim().replace(/\s+/g, ' ');
+                const queryPreview = query.length > 22 ? `${query.slice(0, 21)}…` : query;
                 const totalCount = Math.max(this._filterState?.total || 0, threads.length);
-                this._countEl.textContent = this._filterState?.query
-                    ? `${threads.length}/${totalCount}`
-                    : `${threads.length}`;
+                this._countEl.textContent = query
+                    ? `${this._formatCount(threads.length)}/${this._formatCount(totalCount)}`
+                    : `${this._formatCount(threads.length)}`;
+
+                this._container.dataset.filtered = query ? '1' : '0';
+                this._filterBadgeEl.hidden = !query;
+                this._filterBadgeEl.textContent = query ? `“${queryPreview}”` : '';
+                if (query) this._filterBadgeEl.title = `Search filter: ${query}`;
+                else this._filterBadgeEl.removeAttribute('title');
 
                 if (!threads.length) {
-                    this._statusEl.textContent = 'Waiting for comments';
+                    this._statusEl.textContent = query && !this._filterState?.isPending
+                        ? 'No matching threads'
+                        : 'Waiting for comments to load…';
                 } else if (this._currentIndex >= 0) {
-                    this._statusEl.textContent = `Thread ${this._currentIndex + 1} of ${threads.length}`;
-                } else if (this._filterState?.query) {
-                    this._statusEl.textContent = 'Matching threads';
+                    this._statusEl.textContent = query
+                        ? `Match ${this._formatCount(this._currentIndex + 1)} of ${this._formatCount(threads.length)}`
+                        : `Thread ${this._formatCount(this._currentIndex + 1)} of ${this._formatCount(threads.length)}`;
+                } else if (query) {
+                    this._statusEl.textContent = `${this._formatCount(threads.length)} of ${this._formatCount(totalCount)} threads ready`;
                 } else {
-                    this._statusEl.textContent = 'Visible threads';
+                    this._statusEl.textContent = 'Visible threads ready';
                 }
 
                 const canPrev = threads.length > 0 && (this._currentIndex > 0 || this._currentIndex === -1);
@@ -15440,66 +17657,100 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         position: fixed;
                         right: 18px;
                         bottom: 20px;
-                        width: min(248px, calc(100vw - 24px));
-                        padding: 10px;
-                        border-radius: 16px;
+                        width: min(286px, calc(100vw - 24px));
+                        padding: 12px;
+                        border-radius: 20px;
                         border: 1px solid rgba(255, 255, 255, 0.08);
                         background:
-                            radial-gradient(circle at top right, rgba(var(--ytkit-accent-rgb), 0.12), transparent 40%),
-                            linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+                            radial-gradient(circle at top right, rgba(var(--ytkit-accent-rgb), 0.14), transparent 42%),
+                            linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012)),
                             rgba(8, 11, 18, 0.94);
-                        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.22);
+                        box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+                        backdrop-filter: blur(14px);
                         z-index: 10020;
                     }
 
+                    #ytkit-comment-nav[data-filtered="1"] {
+                        border-color: rgba(var(--ytkit-accent-rgb), 0.2);
+                        box-shadow: 0 20px 46px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(var(--ytkit-accent-rgb), 0.08);
+                    }
+
                     #ytkit-comment-nav .ytkit-comment-nav-head {
+                        display: flex;
+                        align-items: flex-start;
+                        justify-content: space-between;
+                        gap: 12px;
+                    }
+
+                    #ytkit-comment-nav .ytkit-comment-nav-meta {
+                        display: grid;
+                        gap: 6px;
+                        min-width: 0;
+                    }
+
+                    #ytkit-comment-nav .ytkit-comment-nav-topline {
                         display: flex;
                         align-items: center;
                         justify-content: space-between;
                         gap: 10px;
                     }
 
-                    #ytkit-comment-nav .ytkit-comment-nav-meta {
-                        display: grid;
-                        gap: 2px;
-                        min-width: 0;
-                    }
-
                     #ytkit-comment-nav .ytkit-comment-nav-label {
-                        font-size: 9px;
-                        font-weight: 700;
+                        font-size: 10px;
+                        font-weight: 800;
                         letter-spacing: 0.12em;
                         text-transform: uppercase;
                         color: rgba(255, 255, 255, 0.46);
                     }
 
+                    #ytkit-comment-nav .ytkit-comment-nav-filter {
+                        display: inline-flex;
+                        align-items: center;
+                        max-width: 132px;
+                        min-width: 0;
+                        padding: 5px 10px;
+                        border-radius: 999px;
+                        border: 1px solid rgba(var(--ytkit-accent-rgb), 0.18);
+                        background: rgba(var(--ytkit-accent-rgb), 0.1);
+                        color: rgba(255, 255, 255, 0.9);
+                        font-size: 10px;
+                        font-weight: 700;
+                        line-height: 1;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }
+
                     #ytkit-comment-nav .ytkit-comment-nav-count {
                         color: rgba(255, 255, 255, 0.96);
-                        font-size: 22px;
+                        font-size: 28px;
                         line-height: 1;
                         letter-spacing: -0.04em;
+                        font-variant-numeric: tabular-nums;
                     }
 
                     #ytkit-comment-nav .ytkit-comment-nav-status {
-                        color: rgba(255, 255, 255, 0.62);
-                        font-size: 11px;
+                        color: rgba(255, 255, 255, 0.68);
+                        font-size: 12px;
                         font-weight: 600;
+                        line-height: 1.4;
+                        text-wrap: pretty;
                     }
 
                     #ytkit-comment-nav .ytkit-comment-nav-controls {
                         display: flex;
                         align-items: center;
-                        gap: 6px;
+                        gap: 8px;
                         flex-shrink: 0;
                     }
 
                     #ytkit-comment-nav .ytkit-comment-nav-btn {
-                        min-width: 72px;
-                        min-height: 34px;
-                        padding: 0 12px;
+                        min-width: 92px;
+                        min-height: 38px;
+                        padding: 0 14px;
                         border-radius: 999px;
                         border: 1px solid rgba(255, 255, 255, 0.08);
-                        background: rgba(255, 255, 255, 0.045);
+                        background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.03));
                         color: rgba(255, 255, 255, 0.84);
                         display: inline-flex;
                         align-items: center;
@@ -15508,13 +17759,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         font-size: 11px;
                         font-weight: 700;
                         cursor: pointer;
-                        transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+                        touch-action: manipulation;
+                        transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
                     }
 
                     #ytkit-comment-nav .ytkit-comment-nav-btn:hover:not(:disabled) {
                         border-color: rgba(var(--ytkit-accent-rgb), 0.18);
                         background: rgba(var(--ytkit-accent-rgb), 0.12);
                         color: rgba(255, 255, 255, 0.96);
+                        transform: translateY(-1px);
                     }
 
                     #ytkit-comment-nav .ytkit-comment-nav-btn:focus-visible {
@@ -15530,6 +17783,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     #ytkit-comment-nav .ytkit-comment-nav-arrow {
                         font-size: 13px;
                         opacity: 0.86;
+                    }
+
+                    #comments ytd-comment-thread-renderer[data-ytkit-comment-current="1"] {
+                        scroll-margin-top: 88px !important;
                     }
 
                     #comments ytd-comment-thread-renderer[data-ytkit-comment-current="1"] ytd-comment-view-model,
@@ -15549,10 +17806,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         right: 12px;
                         bottom: 12px;
                         left: auto;
-                        width: clamp(170px, calc(var(--ytkit-split-right-width, 320px) - 18px), 248px);
-                        padding: 9px;
-                        border-radius: 14px;
-                        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+                        width: clamp(196px, calc(var(--ytkit-split-right-width, 320px) - 18px), 272px);
+                        padding: 10px;
+                        border-radius: 16px;
+                        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
                     }
 
                     html.ytkit-split-open #ytkit-comment-nav .ytkit-comment-nav-head {
@@ -15562,7 +17819,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     }
 
                     html.ytkit-split-open #ytkit-comment-nav .ytkit-comment-nav-count {
-                        font-size: 19px;
+                        font-size: 22px;
                     }
 
                     html.ytkit-split-open #ytkit-comment-nav .ytkit-comment-nav-status {
@@ -15576,7 +17833,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     html.ytkit-split-open #ytkit-comment-nav .ytkit-comment-nav-btn {
                         flex: 1 1 0;
                         min-width: 0;
-                        min-height: 32px;
+                        min-height: 34px;
                         padding: 0 10px;
                     }
 
@@ -15598,6 +17855,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         #ytkit-comment-nav .ytkit-comment-nav-head {
                             flex-direction: column;
                             align-items: stretch;
+                        }
+
+                        #ytkit-comment-nav .ytkit-comment-nav-topline {
+                            flex-wrap: wrap;
                         }
 
                         #ytkit-comment-nav .ytkit-comment-nav-controls {
@@ -15636,6 +17897,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     this._container = null;
                     this._countEl = null;
                     this._statusEl = null;
+                    this._filterBadgeEl = null;
                     this._prevBtn = null;
                     this._nextBtn = null;
                     this._filterState = null;
@@ -15676,6 +17938,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._container?.remove(); this._container = null;
                 this._countEl = null;
                 this._statusEl = null;
+                this._filterBadgeEl = null;
                 this._prevBtn = null;
                 this._nextBtn = null;
                 this._filterState = null;
@@ -16977,8 +19240,27 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _overlayKeyHandler: null,
             _sessionStart: 0,
             _persistTimer: null,
+            _capDismissKey: 'ytkit_dw_cap_dismissed_date',
 
-            _todayKey() { return new Date().toISOString().slice(0, 10); },
+            _todayKey() {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            },
+
+            _formatMinutes(value) {
+                return new Intl.NumberFormat().format(Math.max(0, Math.floor(value)));
+            },
+
+            _getCapDismissDate() {
+                return StorageManager.get(this._capDismissKey, '') || '';
+            },
+
+            _setCapDismissDate(value = '') {
+                StorageManager.set(this._capDismissKey, value);
+            },
 
             _todayCache: null,
             _loadToday() {
@@ -16997,7 +19279,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }
             },
 
-            _showOverlay(kind, message, onDismiss) {
+            _showOverlay(kind, options = {}) {
                 if (this._overlay) {
                     this._overlay.remove();
                     this._overlay = null;
@@ -17008,37 +19290,64 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }
                 const video = document.querySelector('video');
                 if (video && !video.paused) video.pause();
+                const titleText = options.title || (kind === 'break' ? 'Take a Break' : 'Daily Limit Reached');
+                const messageText = options.message || '';
+                const badgeText = options.badge || (kind === 'break' ? 'Break Reminder' : 'Daily Watch Limit');
+                const eyebrowText = options.eyebrow || 'Digital Wellbeing';
+                const buttonText = options.buttonText || (kind === 'break' ? 'Resume Video' : 'Dismiss Until Tomorrow');
+                const hintText = options.hint || (kind === 'break'
+                    ? 'Playback is paused until you are ready to continue.'
+                    : 'This reminder will stay quiet until your next local day starts.');
                 const o = document.createElement('div');
                 o.className = 'ytkit-wellbeing-overlay';
+                o.dataset.kind = kind;
                 o.setAttribute('role', 'dialog');
                 o.setAttribute('aria-modal', 'true');
 
                 const card = document.createElement('div');
                 card.className = 'ytkit-wellbeing-card';
+                card.dataset.kind = kind;
 
+                const topRow = document.createElement('div');
+                topRow.className = 'ytkit-wellbeing-topline';
+                const eyebrow = document.createElement('span');
+                eyebrow.className = 'ytkit-wellbeing-eyebrow';
+                eyebrow.textContent = eyebrowText;
+                const badge = document.createElement('span');
+                badge.className = 'ytkit-wellbeing-badge';
+                badge.textContent = badgeText;
+                topRow.append(eyebrow, badge);
+
+                const iconWrap = document.createElement('div');
+                iconWrap.className = 'ytkit-wellbeing-icon-wrap';
                 const icon = document.createElement('div');
                 icon.className = 'ytkit-wellbeing-icon';
                 icon.textContent = kind === 'break' ? '☕' : '⏰';
                 icon.setAttribute('aria-hidden', 'true');
+                iconWrap.appendChild(icon);
 
                 const title = document.createElement('h2');
                 title.className = 'ytkit-wellbeing-title';
                 title.id = `ytkit-wellbeing-title-${kind}`;
-                title.textContent = kind === 'break' ? 'Take a break' : 'Daily limit reached';
+                title.textContent = titleText;
 
                 const body = document.createElement('p');
                 body.className = 'ytkit-wellbeing-msg';
                 body.id = `ytkit-wellbeing-msg-${kind}`;
-                body.textContent = message;
+                body.textContent = messageText;
+
+                const hint = document.createElement('p');
+                hint.className = 'ytkit-wellbeing-hint';
+                hint.textContent = hintText;
 
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'ytkit-wellbeing-btn';
-                button.textContent = kind === 'break' ? 'Continue watching' : 'Dismiss until tomorrow';
+                button.textContent = buttonText;
 
                 o.setAttribute('aria-labelledby', title.id);
                 o.setAttribute('aria-describedby', body.id);
-                card.append(icon, title, body, button);
+                card.append(topRow, iconWrap, title, body, hint, button);
                 o.appendChild(card);
                 document.body.appendChild(o);
                 this._overlay = o;
@@ -17050,7 +19359,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     }
                     o.remove();
                     if (this._overlay === o) this._overlay = null;
-                    if (onDismiss) onDismiss();
+                    options.onDismiss?.();
                 };
 
                 this._overlayKeyHandler = (event) => {
@@ -17065,6 +19374,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 };
                 document.addEventListener('keydown', this._overlayKeyHandler, true);
                 button.addEventListener('click', dismissOverlay);
+                o.addEventListener('click', (event) => {
+                    if (event.target === o) dismissOverlay();
+                });
                 requestAnimationFrame(() => button.focus({ preventScroll: true }));
             },
 
@@ -17080,16 +19392,29 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const sessionElapsed = today.seconds - this._sessionStart;
                 const breakEvery = (parseInt(appState.settings.dwBreakIntervalMin) || 0) * 60;
                 const dailyCap   = (parseInt(appState.settings.dwDailyCapMin) || 0) * 60;
-                if (dailyCap > 0 && today.seconds >= dailyCap && !this._overlay) {
-                    this._showOverlay('cap',
-                        `You've watched ${Math.floor(today.seconds/60)} minutes today. Take the rest of the day off.`,
-                        () => { /* dismiss just hides; timer keeps ticking and will re-fire on next minute tick */ });
-                    return;
+                const todayKey = this._todayKey();
+                const capDismissedDate = this._getCapDismissDate();
+                if (dailyCap > 0 && today.seconds >= dailyCap) {
+                    if (!this._overlay && capDismissedDate !== todayKey) {
+                        this._showOverlay('cap', {
+                            title: 'Daily Limit Reached',
+                            badge: `${this._formatMinutes(today.seconds / 60)} Min Today`,
+                            message: `You have watched ${this._formatMinutes(today.seconds / 60)} minutes today. Take the rest of the day off, or come back tomorrow with a fresh reset.`,
+                            hint: 'Dismissing this reminder will keep it quiet until your next local day starts.',
+                            buttonText: 'Dismiss Until Tomorrow',
+                            onDismiss: () => this._setCapDismissDate(todayKey)
+                        });
+                        return;
+                    }
                 }
                 if (breakEvery > 0 && sessionElapsed >= breakEvery && !this._overlay) {
                     this._sessionStart = today.seconds;
-                    this._showOverlay('break',
-                        `You've been watching for ${Math.floor(breakEvery/60)} minutes. Rest your eyes.`);
+                    this._showOverlay('break', {
+                        title: 'Take a Break',
+                        badge: `${this._formatMinutes(breakEvery / 60)} Min Session`,
+                        message: `You have been watching for ${this._formatMinutes(breakEvery / 60)} minutes. Rest your eyes, stretch, or look away from the screen for a moment before continuing.`,
+                        hint: 'Playback is paused until you choose to resume.'
+                    });
                 }
             },
 
@@ -17097,27 +19422,142 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._styleEl = injectStyle(`
                     .ytkit-wellbeing-overlay {
                         position: fixed; inset: 0; z-index: 2147483600;
-                        background: rgba(10, 10, 14, 0.88); backdrop-filter: blur(8px);
+                        padding: max(24px, env(safe-area-inset-top, 0px)) max(18px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(18px, env(safe-area-inset-left, 0px));
+                        background:
+                            radial-gradient(circle at top, rgba(99,102,241,0.12), transparent 28%),
+                            rgba(8, 11, 16, 0.86);
+                        backdrop-filter: blur(10px);
                         display: flex; align-items: center; justify-content: center;
+                        overscroll-behavior: contain;
                         animation: ytkit-wb-fade 220ms ease-out;
                     }
                     @keyframes ytkit-wb-fade { from { opacity: 0; } to { opacity: 1; } }
                     .ytkit-wellbeing-card {
-                        background: linear-gradient(145deg, #1e1e2e, #181825);
-                        color: #cdd6f4; border: 1px solid rgba(137, 180, 250, 0.28);
-                        border-radius: 16px; padding: 32px 40px; max-width: 440px;
-                        box-shadow: 0 20px 60px rgba(0,0,0,0.6); text-align: center;
+                        width: min(480px, calc(100vw - 24px));
+                        display: grid;
+                        gap: 14px;
+                        padding: 22px 22px 20px;
+                        border-radius: 24px;
+                        border: 1px solid rgba(137, 180, 250, 0.2);
+                        background:
+                            radial-gradient(circle at top right, rgba(137,180,250,0.16), transparent 36%),
+                            linear-gradient(180deg, rgba(23,30,42,0.98), rgba(10,14,21,0.98));
+                        color: #e2e8f0;
+                        box-shadow: 0 26px 64px rgba(0,0,0,0.46);
+                        text-align: left;
                     }
-                    .ytkit-wellbeing-icon { font-size: 48px; margin-bottom: 12px; }
-                    .ytkit-wellbeing-title { margin: 0 0 12px; font: 700 22px/1.2 'Roboto', system-ui, sans-serif; }
-                    .ytkit-wellbeing-msg { margin: 0 0 24px; font-size: 15px; color: #a6adc8; }
+                    .ytkit-wellbeing-card[data-kind="cap"] {
+                        border-color: rgba(251,191,36,0.24);
+                        background:
+                            radial-gradient(circle at top right, rgba(251,191,36,0.16), transparent 38%),
+                            linear-gradient(180deg, rgba(30,24,16,0.98), rgba(15,11,8,0.98));
+                    }
+                    .ytkit-wellbeing-topline {
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        gap: 10px;
+                        flex-wrap: wrap;
+                    }
+                    .ytkit-wellbeing-eyebrow,
+                    .ytkit-wellbeing-badge {
+                        display: inline-flex;
+                        align-items: center;
+                        min-height: 26px;
+                        padding: 0 10px;
+                        border-radius: 999px;
+                        border: 1px solid rgba(255,255,255,0.08);
+                        background: rgba(255,255,255,0.05);
+                        font-size: 10px;
+                        font-weight: 800;
+                        letter-spacing: 0.08em;
+                        text-transform: uppercase;
+                        white-space: nowrap;
+                    }
+                    .ytkit-wellbeing-eyebrow {
+                        color: rgba(226,232,240,0.72);
+                    }
+                    .ytkit-wellbeing-badge {
+                        color: rgba(255,255,255,0.92);
+                    }
+                    .ytkit-wellbeing-icon-wrap {
+                        display: grid;
+                        place-items: center;
+                        width: 64px;
+                        height: 64px;
+                        border-radius: 20px;
+                        border: 1px solid rgba(255,255,255,0.08);
+                        background:
+                            linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)),
+                            rgba(255,255,255,0.03);
+                    }
+                    .ytkit-wellbeing-icon { font-size: 34px; line-height: 1; }
+                    .ytkit-wellbeing-title {
+                        margin: 0;
+                        color: rgba(248,250,252,0.96);
+                        font: 700 27px/1.12 'Roboto', system-ui, sans-serif;
+                        letter-spacing: -0.04em;
+                        text-wrap: balance;
+                    }
+                    .ytkit-wellbeing-msg {
+                        margin: 0;
+                        font-size: 15px;
+                        line-height: 1.65;
+                        color: rgba(226,232,240,0.74);
+                        text-wrap: pretty;
+                    }
+                    .ytkit-wellbeing-hint {
+                        margin: -4px 0 0;
+                        color: rgba(226,232,240,0.48);
+                        font-size: 12px;
+                        line-height: 1.55;
+                        text-wrap: pretty;
+                    }
                     .ytkit-wellbeing-btn {
+                        appearance: none;
+                        -webkit-appearance: none;
+                        justify-self: start;
+                        min-height: 42px;
+                        padding: 0 18px;
+                        border-radius: 999px;
+                        border: 1px solid rgba(137,180,250,0.18);
                         background: linear-gradient(135deg, #89b4fa, #b4befe);
-                        color: #1e1e2e; border: none; border-radius: 999px;
-                        padding: 10px 22px; font: 600 14px 'Roboto', system-ui, sans-serif;
-                        cursor: pointer; transition: transform 120ms ease;
+                        color: #141a26;
+                        font: 700 14px 'Roboto', system-ui, sans-serif;
+                        letter-spacing: 0.01em;
+                        cursor: pointer;
+                        touch-action: manipulation;
+                        transition: transform 120ms ease, box-shadow 160ms ease, filter 160ms ease;
                     }
-                    .ytkit-wellbeing-btn:hover { transform: translateY(-1px); }
+                    .ytkit-wellbeing-card[data-kind="cap"] .ytkit-wellbeing-btn {
+                        border-color: rgba(251,191,36,0.18);
+                        background: linear-gradient(135deg, #fbbf24, #fde68a);
+                        color: #1f140f;
+                    }
+                    .ytkit-wellbeing-btn:hover {
+                        transform: translateY(-1px);
+                        filter: brightness(1.03);
+                    }
+                    .ytkit-wellbeing-btn:focus-visible {
+                        box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(137,180,250,0.2);
+                    }
+                    .ytkit-wellbeing-card[data-kind="cap"] .ytkit-wellbeing-btn:focus-visible {
+                        box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(251,191,36,0.22);
+                    }
+                    @media (max-width: 560px) {
+                        .ytkit-wellbeing-card {
+                            padding: 18px 18px 16px;
+                            border-radius: 20px;
+                        }
+                        .ytkit-wellbeing-title {
+                            font-size: 24px;
+                        }
+                        .ytkit-wellbeing-btn {
+                            width: 100%;
+                            justify-self: stretch;
+                            justify-content: center;
+                        }
+                    }
                     @media (prefers-reduced-motion: reduce) {
                         .ytkit-wellbeing-overlay { animation: none; }
                         .ytkit-wellbeing-btn { transition: none; }
@@ -19291,6 +21731,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         //  Video Hider Custom Pane
         function buildVideoHiderPane(config) {
             const videoHiderFeature = getFeatureById('hideVideosFromHome');
+            const countLabel = (count, singular, plural = `${singular}s`) => `${count} ${count === 1 ? singular : plural}`;
 
             const pane = document.createElement('section');
             pane.id = 'ytkit-pane-Video-Hider';
@@ -19301,9 +21742,29 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             paneHeader.className = 'ytkit-pane-header';
             const paneTitle = document.createElement('div');
             paneTitle.className = 'ytkit-pane-title';
+            const paneEyebrow = document.createElement('span');
+            paneEyebrow.className = 'ytkit-pane-eyebrow';
+            paneEyebrow.textContent = 'Content Controls';
             const paneTitleH2 = document.createElement('h2');
             paneTitleH2.textContent = 'Video Hider';
+            const paneDescription = document.createElement('p');
+            paneDescription.className = 'ytkit-pane-description';
+            paneDescription.textContent = 'Review hidden videos, manage blocked channels, and tune automatic filters without leaving the page.';
+            const paneMeta = document.createElement('div');
+            paneMeta.className = 'ytkit-pane-meta';
+            const paneStateChip = document.createElement('span');
+            paneStateChip.className = 'ytkit-pane-chip ytkit-vh-status-chip';
+            const paneHiddenChip = document.createElement('span');
+            paneHiddenChip.className = 'ytkit-pane-chip';
+            const paneChannelsChip = document.createElement('span');
+            paneChannelsChip.className = 'ytkit-pane-chip';
+            paneTitle.appendChild(paneEyebrow);
             paneTitle.appendChild(paneTitleH2);
+            paneTitle.appendChild(paneDescription);
+            paneMeta.appendChild(paneStateChip);
+            paneMeta.appendChild(paneHiddenChip);
+            paneMeta.appendChild(paneChannelsChip);
+            paneTitle.appendChild(paneMeta);
 
             // Enable toggle
             const toggleLabel = document.createElement('label');
@@ -19316,6 +21777,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             const toggleInput = document.createElement('input');
             toggleInput.type = 'checkbox';
             toggleInput.id = 'ytkit-toggle-hideVideosFromHome';
+            toggleInput.name = 'hideVideosFromHome';
+            toggleInput.setAttribute('aria-label', 'Enable Video Hider');
             toggleInput.checked = appState.settings.hideVideosFromHome;
             toggleInput.onchange = async () => {
                 appState.settings.hideVideosFromHome = toggleInput.checked;
@@ -19323,6 +21786,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 settingsManager.save(appState.settings);
                 if (toggleInput.checked) videoHiderFeature?.init?.();
                 else videoHiderFeature?.destroy?.();
+                updateVideoHiderMeta();
                 updateAllToggleStates();
             };
             const toggleTrack = document.createElement('span');
@@ -19342,99 +21806,265 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             const tabNav = document.createElement('div');
             tabNav.className = 'ytkit-vh-tabs';
             tabNav.style.setProperty('--ytkit-vh-accent', config.color);
-            const tabs = ['Videos', 'Channels', 'Keywords', 'Settings'];
-            tabs.forEach((tabName, i) => {
+            tabNav.setAttribute('role', 'tablist');
+            tabNav.setAttribute('aria-label', 'Video Hider Sections');
+            const tabContent = document.createElement('div');
+            tabContent.id = 'ytkit-vh-content';
+            tabContent.setAttribute('role', 'tabpanel');
+            tabContent.setAttribute('aria-live', 'polite');
+            tabContent.tabIndex = -1;
+            const tabs = [
+                { id: 'videos', label: 'Hidden Videos' },
+                { id: 'channels', label: 'Blocked Channels' },
+                { id: 'keywords', label: 'Keyword Rules' },
+                { id: 'settings', label: 'Filters & Limits' }
+            ];
+            const tabButtons = new Map();
+
+            function getVideoCount() {
+                return videoHiderFeature?._getHiddenVideos()?.length || 0;
+            }
+
+            function getChannelCount() {
+                return videoHiderFeature?._getBlockedChannels()?.length || 0;
+            }
+
+            function getKeywordStatus() {
+                return (appState.settings.hideVideosKeywordFilter || '').trim() ? 'Live' : 'Empty';
+            }
+
+            function getSettingsStatus() {
+                return (appState.settings.hideVideosDurationFilter || 0) > 0 || appState.settings.hideVideosSubsLoadLimit === false
+                    ? 'Custom'
+                    : 'Ready';
+            }
+
+            function updateVideoHiderMeta() {
+                const isEnabled = !!appState.settings.hideVideosFromHome;
+                pane.dataset.state = isEnabled ? 'active' : 'paused';
+                paneStateChip.dataset.state = isEnabled ? 'active' : 'paused';
+                paneStateChip.textContent = isEnabled ? 'Feature On' : 'Feature Off';
+                paneHiddenChip.textContent = `${countLabel(getVideoCount(), 'Video')} Hidden`;
+                paneChannelsChip.textContent = `${countLabel(getChannelCount(), 'Channel')} Blocked`;
+
+                const videoBadge = tabButtons.get('videos')?.querySelector('.ytkit-vh-tab__badge');
+                const channelBadge = tabButtons.get('channels')?.querySelector('.ytkit-vh-tab__badge');
+                const keywordBadge = tabButtons.get('keywords')?.querySelector('.ytkit-vh-tab__badge');
+                const settingsBadge = tabButtons.get('settings')?.querySelector('.ytkit-vh-tab__badge');
+                if (videoBadge) videoBadge.textContent = String(getVideoCount());
+                if (channelBadge) channelBadge.textContent = String(getChannelCount());
+                if (keywordBadge) keywordBadge.textContent = getKeywordStatus();
+                if (settingsBadge) settingsBadge.textContent = getSettingsStatus();
+            }
+
+            function createVideoHiderLead(eyebrow, title, copy, empty = false) {
+                const lead = document.createElement('section');
+                lead.className = 'ytkit-vh-hero' + (empty ? ' is-empty' : '');
+                const leadEyebrow = document.createElement('span');
+                leadEyebrow.className = 'ytkit-vh-hero__eyebrow';
+                leadEyebrow.textContent = eyebrow;
+                const leadTitle = document.createElement('h3');
+                leadTitle.className = 'ytkit-vh-hero__title';
+                leadTitle.textContent = title;
+                const leadCopy = document.createElement('p');
+                leadCopy.className = 'ytkit-vh-hero__copy';
+                leadCopy.textContent = copy;
+                lead.appendChild(leadEyebrow);
+                lead.appendChild(leadTitle);
+                lead.appendChild(leadCopy);
+                return lead;
+            }
+
+            function createVideoHiderSection(title, copy) {
+                const section = document.createElement('section');
+                section.className = 'ytkit-vh-section';
+                const sectionHeader = document.createElement('div');
+                sectionHeader.className = 'ytkit-vh-section-header';
+                const sectionTitle = document.createElement('h3');
+                sectionTitle.className = 'ytkit-vh-section-title';
+                sectionTitle.textContent = title;
+                const sectionCopy = document.createElement('p');
+                sectionCopy.className = 'ytkit-vh-section-copy';
+                sectionCopy.textContent = copy;
+                sectionHeader.appendChild(sectionTitle);
+                sectionHeader.appendChild(sectionCopy);
+                section.appendChild(sectionHeader);
+                return section;
+            }
+
+            function setActiveTab(nextTabId) {
+                tabButtons.forEach((button, tabId) => {
+                    const isActive = tabId === nextTabId;
+                    button.classList.toggle('active', isActive);
+                    button.setAttribute('aria-selected', String(isActive));
+                    button.tabIndex = isActive ? 0 : -1;
+                });
+                renderTabContent(nextTabId);
+            }
+
+            function focusRelativeTab(currentTabId, offset) {
+                const currentIndex = tabs.findIndex(tab => tab.id === currentTabId);
+                const nextIndex = (currentIndex + offset + tabs.length) % tabs.length;
+                const nextTabId = tabs[nextIndex]?.id;
+                if (!nextTabId) return;
+                tabButtons.get(nextTabId)?.focus();
+                setActiveTab(nextTabId);
+            }
+
+            tabs.forEach((tabInfo, i) => {
                 const tab = document.createElement('button');
                 tab.type = 'button';
                 tab.className = 'ytkit-vh-tab' + (i === 0 ? ' active' : '');
-                tab.dataset.tab = tabName.toLowerCase();
-                tab.textContent = tabName;
+                tab.dataset.tab = tabInfo.id;
+                tab.id = `ytkit-vh-tab-${tabInfo.id}`;
+                tab.setAttribute('role', 'tab');
+                tab.setAttribute('aria-controls', 'ytkit-vh-content');
+                tab.setAttribute('aria-selected', String(i === 0));
+                tab.tabIndex = i === 0 ? 0 : -1;
+                const tabLabel = document.createElement('span');
+                tabLabel.className = 'ytkit-vh-tab__label';
+                tabLabel.textContent = tabInfo.label;
+                const tabBadge = document.createElement('span');
+                tabBadge.className = 'ytkit-vh-tab__badge';
+                tab.appendChild(tabLabel);
+                tab.appendChild(tabBadge);
                 tab.onclick = () => {
-                    tabNav.querySelectorAll('.ytkit-vh-tab').forEach(t => {
-                        t.classList.remove('active');
-                    });
-                    tab.classList.add('active');
-                    renderTabContent(tabName.toLowerCase());
+                    setActiveTab(tabInfo.id);
                 };
+                tab.addEventListener('keydown', (event) => {
+                    if (event.key === 'ArrowRight') {
+                        event.preventDefault();
+                        focusRelativeTab(tabInfo.id, 1);
+                    } else if (event.key === 'ArrowLeft') {
+                        event.preventDefault();
+                        focusRelativeTab(tabInfo.id, -1);
+                    } else if (event.key === 'Home') {
+                        event.preventDefault();
+                        const firstTabId = tabs[0]?.id;
+                        if (!firstTabId) return;
+                        tabButtons.get(firstTabId)?.focus();
+                        setActiveTab(firstTabId);
+                    } else if (event.key === 'End') {
+                        event.preventDefault();
+                        const lastTabId = tabs[tabs.length - 1]?.id;
+                        if (!lastTabId) return;
+                        tabButtons.get(lastTabId)?.focus();
+                        setActiveTab(lastTabId);
+                    }
+                });
+                tabButtons.set(tabInfo.id, tab);
                 tabNav.appendChild(tab);
             });
             pane.appendChild(tabNav);
 
-            const tabContent = document.createElement('div');
-            tabContent.id = 'ytkit-vh-content';
             pane.appendChild(tabContent);
 
             function renderTabContent(tab) {
-                while (tabContent.firstChild) tabContent.removeChild(tabContent.firstChild);
+                tabContent.textContent = '';
+                tabContent.setAttribute('aria-labelledby', `ytkit-vh-tab-${tab}`);
+                updateVideoHiderMeta();
 
                 if (tab === 'videos') {
                     const videos = videoHiderFeature?._getHiddenVideos() || [];
                     if (videos.length === 0) {
-                        const empty = document.createElement('div');
-                        empty.style.cssText = 'text-align:center;padding:40px 16px;color:var(--ytkit-text-muted);';
-                        const emptyTitle = document.createElement('div');
-                        emptyTitle.style.cssText = 'font-size:14px;margin-bottom:6px;';
-                        emptyTitle.textContent = 'No hidden videos yet';
-                        const emptyDesc = document.createElement('div');
-                        emptyDesc.style.cssText = 'font-size:12px;opacity:0.7;';
-                        emptyDesc.textContent = 'Click the X button on video thumbnails to hide them';
-                        empty.appendChild(emptyTitle);
-                        empty.appendChild(emptyDesc);
-                        tabContent.appendChild(empty);
+                        tabContent.appendChild(createVideoHiderLead(
+                            'Nothing Hidden',
+                            'No hidden videos yet',
+                            'Use the X button on video thumbnails to hide items you do not want to see. Hidden videos will appear here so you can restore them any time.',
+                            true
+                        ));
                     } else {
                         const grid = document.createElement('div');
-                        grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;';
+                        grid.className = 'ytkit-vh-grid';
+                        tabContent.appendChild(createVideoHiderLead(
+                            'Restore & Review',
+                            `${countLabel(videos.length, 'Hidden Video')} Ready to Review`,
+                            'Restore one item at a time, or reset the whole list if you want YouTube recommendations to start fresh again.'
+                        ));
                         videos.forEach(vid => {
-                            const item = document.createElement('div');
-                            item.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px;background:var(--ytkit-bg-surface);border-radius:6px;border:1px solid var(--ytkit-border);';
+                            const item = document.createElement('article');
+                            item.className = 'ytkit-vh-card ytkit-vh-card--video';
+                            const thumbLink = document.createElement('a');
+                            thumbLink.className = 'ytkit-vh-thumb-link';
+                            thumbLink.href = `https://youtube.com/watch?v=${vid}`;
+                            thumbLink.target = '_blank';
+                            thumbLink.rel = 'noopener noreferrer';
+                            thumbLink.setAttribute('aria-label', `Open hidden video ${vid} on YouTube`);
                             const thumb = document.createElement('img');
+                            thumb.className = 'ytkit-vh-thumb';
                             thumb.src = `https://i.ytimg.com/vi/${vid}/mqdefault.jpg`;
-                            thumb.style.cssText = 'width:88px;height:50px;object-fit:cover;border-radius:4px;flex-shrink:0;';
-                            thumb.onerror = () => { thumb.style.background = 'var(--ytkit-bg-elevated)'; };
+                            thumb.width = 176;
+                            thumb.height = 100;
+                            thumb.loading = 'lazy';
+                            thumb.decoding = 'async';
+                            thumb.alt = `Preview thumbnail for hidden video ${vid}`;
+                            thumb.onerror = () => {
+                                thumb.remove();
+                                thumbLink.classList.add('is-fallback');
+                                const fallback = document.createElement('span');
+                                fallback.className = 'ytkit-vh-thumb-fallback';
+                                fallback.textContent = 'Preview unavailable';
+                                thumbLink.appendChild(fallback);
+                            };
+                            thumbLink.appendChild(thumb);
                             const info = document.createElement('div');
-                            info.style.cssText = 'flex:1;min-width:0;';
+                            info.className = 'ytkit-vh-item-main';
+                            const vidLabel = document.createElement('div');
+                            vidLabel.className = 'ytkit-vh-item-label';
+                            vidLabel.textContent = 'Video ID';
                             const vidId = document.createElement('div');
-                            vidId.style.cssText = 'font-size:11px;color:var(--ytkit-text-secondary);font-family:monospace;margin-bottom:2px;';
+                            vidId.className = 'ytkit-vh-item-title ytkit-vh-item-title--code';
+                            vidId.setAttribute('translate', 'no');
                             vidId.textContent = vid;
+                            const summary = document.createElement('div');
+                            summary.className = 'ytkit-vh-item-meta';
+                            summary.textContent = 'Hidden from recommendations until you restore it.';
+                            const actions = document.createElement('div');
+                            actions.className = 'ytkit-vh-item-actions';
                             const link = document.createElement('a');
+                            link.className = 'ytkit-vh-link';
                             link.href = `https://youtube.com/watch?v=${vid}`;
                             link.target = '_blank';
-                            link.style.cssText = 'font-size:11px;color:var(--ytkit-accent);text-decoration:none;';
-                            link.textContent = 'View on YouTube';
-                            info.appendChild(vidId);
-                            info.appendChild(link);
+                            link.rel = 'noopener noreferrer';
+                            link.textContent = 'Open on YouTube';
                             const removeBtn = document.createElement('button');
                             removeBtn.type = 'button';
-                            removeBtn.className = 'ytkit-vh-list-btn ytkit-vh-list-btn--danger';
-                            removeBtn.textContent = 'Unhide';
+                            removeBtn.className = 'ytkit-vh-list-btn';
+                            removeBtn.textContent = 'Restore';
+                            removeBtn.setAttribute('aria-label', `Restore hidden video ${vid}`);
                             removeBtn.onclick = () => {
                                 const h = videoHiderFeature._getHiddenVideos();
                                 const idx = h.indexOf(vid);
                                 if (idx > -1) { h.splice(idx, 1); videoHiderFeature._setHiddenVideos(h); }
-                                item.remove();
                                 videoHiderFeature._processAllVideos();
-                                if (videoHiderFeature._getHiddenVideos().length === 0) renderTabContent('videos');
+                                renderTabContent('videos');
                             };
-                            item.appendChild(thumb);
+                            actions.appendChild(link);
+                            actions.appendChild(removeBtn);
+                            info.appendChild(vidLabel);
+                            info.appendChild(vidId);
+                            info.appendChild(summary);
+                            info.appendChild(actions);
+                            item.appendChild(thumbLink);
                             item.appendChild(info);
-                            item.appendChild(removeBtn);
                             grid.appendChild(item);
                         });
                         tabContent.appendChild(grid);
                         const clearBtn = document.createElement('button');
                         clearBtn.type = 'button';
-                        clearBtn.className = 'ytkit-vh-clear-btn ytkit-vh-clear-btn--danger';
-                        clearBtn.textContent = `Clear All Hidden Videos (${videos.length})`;
+                        clearBtn.className = 'ytkit-vh-clear-btn';
+                        clearBtn.textContent = `Restore All Hidden Videos (${videos.length})`;
                         clearBtn.onclick = () => {
                             const backup = [...videoHiderFeature._getHiddenVideos()];
                             videoHiderFeature._setHiddenVideos([]);
                             videoHiderFeature._processAllVideos();
                             renderTabContent('videos');
-                            showToast(`Cleared ${backup.length} hidden videos`, '#dc2626', { duration: 5, action: { text: 'Undo', onClick: () => {
+                            showToast(`Restored ${backup.length} hidden videos`, '#6b7280', { duration: 5, tone: 'neutral', action: { text: 'Undo', onClick: () => {
                                 videoHiderFeature._setHiddenVideos(backup);
                                 videoHiderFeature._processAllVideos();
                                 renderTabContent('videos');
-                                showToast('Videos restored', '#22c55e');
+                                updateVideoHiderMeta();
+                                showToast('Hidden videos restored', '#22c55e');
                             }}});
                         };
                         tabContent.appendChild(clearBtn);
@@ -19442,202 +22072,302 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 } else if (tab === 'channels') {
                     const channels = videoHiderFeature?._getBlockedChannels() || [];
                     if (channels.length === 0) {
-                        const empty = document.createElement('div');
-                        empty.style.cssText = 'text-align:center;padding:40px 16px;color:var(--ytkit-text-muted);';
-                        const emptyTitle = document.createElement('div');
-                        emptyTitle.style.cssText = 'font-size:14px;margin-bottom:6px;';
-                        emptyTitle.textContent = 'No blocked channels yet';
-                        const emptyDesc = document.createElement('div');
-                        emptyDesc.style.cssText = 'font-size:12px;opacity:0.7;';
-                        emptyDesc.textContent = 'Right-click the X button on thumbnails to block channels';
-                        empty.appendChild(emptyTitle);
-                        empty.appendChild(emptyDesc);
-                        tabContent.appendChild(empty);
+                        tabContent.appendChild(createVideoHiderLead(
+                            'Channel Blocks',
+                            'No blocked channels yet',
+                            'Right-click the thumbnail X button when you want to block a channel everywhere that Video Hider runs.',
+                            true
+                        ));
                     } else {
                         const list = document.createElement('div');
-                        list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+                        list.className = 'ytkit-vh-stack';
+                        tabContent.appendChild(createVideoHiderLead(
+                            'Blocklist',
+                            `${countLabel(channels.length, 'Blocked Channel')} in Your List`,
+                            'Blocked channels stay hidden across supported feeds until you remove them here.'
+                        ));
                         channels.forEach(ch => {
-                            const item = document.createElement('div');
-                            item.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px;background:var(--ytkit-bg-surface);border-radius:6px;border:1px solid var(--ytkit-border);';
+                            const item = document.createElement('article');
+                            item.className = 'ytkit-vh-card ytkit-vh-card--channel';
                             const icon = document.createElement('div');
-                            icon.style.cssText = 'width:32px;height:32px;border-radius:50%;background:var(--ytkit-bg-elevated);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--ytkit-text-muted);';
+                            icon.className = 'ytkit-vh-avatar';
+                            icon.setAttribute('aria-hidden', 'true');
                             icon.textContent = (ch.name || ch.id || '?')[0].toUpperCase();
                             const info = document.createElement('div');
-                            info.style.cssText = 'flex:1;';
+                            info.className = 'ytkit-vh-item-main';
+                            const label = document.createElement('div');
+                            label.className = 'ytkit-vh-item-label';
+                            label.textContent = 'Blocked Channel';
                             const name = document.createElement('div');
-                            name.style.cssText = 'font-size:13px;color:var(--ytkit-text-primary);font-weight:500;';
+                            name.className = 'ytkit-vh-item-title';
                             name.textContent = ch.name || ch.id;
                             const handle = document.createElement('div');
-                            handle.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
+                            handle.className = 'ytkit-vh-item-meta';
+                            handle.setAttribute('translate', 'no');
                             handle.textContent = ch.id;
-                            info.appendChild(name);
-                            info.appendChild(handle);
+                            const actions = document.createElement('div');
+                            actions.className = 'ytkit-vh-item-actions';
+                            const channelUrl = ch.id?.startsWith('@')
+                                ? `https://www.youtube.com/${ch.id}`
+                                : /^UC[a-zA-Z0-9_-]+$/.test(ch.id || '')
+                                    ? `https://www.youtube.com/channel/${ch.id}`
+                                    : '';
+                            if (channelUrl) {
+                                const link = document.createElement('a');
+                                link.className = 'ytkit-vh-link';
+                                link.href = channelUrl;
+                                link.target = '_blank';
+                                link.rel = 'noopener noreferrer';
+                                link.textContent = 'Open Channel';
+                                actions.appendChild(link);
+                            }
                             const removeBtn = document.createElement('button');
                             removeBtn.type = 'button';
-                            removeBtn.className = 'ytkit-vh-list-btn ytkit-vh-list-btn--success';
+                            removeBtn.className = 'ytkit-vh-list-btn';
                             removeBtn.textContent = 'Unblock';
+                            removeBtn.setAttribute('aria-label', `Unblock channel ${ch.name || ch.id}`);
                             removeBtn.onclick = () => {
                                 const c = videoHiderFeature._getBlockedChannels();
                                 const idx = c.findIndex(x => x.id === ch.id);
                                 if (idx > -1) { c.splice(idx, 1); videoHiderFeature._setBlockedChannels(c); }
-                                item.remove();
                                 videoHiderFeature._processAllVideos();
-                                if (videoHiderFeature._getBlockedChannels().length === 0) renderTabContent('channels');
+                                renderTabContent('channels');
                             };
+                            info.appendChild(label);
+                            info.appendChild(name);
+                            info.appendChild(handle);
+                            actions.appendChild(removeBtn);
+                            info.appendChild(actions);
                             item.appendChild(icon);
                             item.appendChild(info);
-                            item.appendChild(removeBtn);
                             list.appendChild(item);
                         });
                         tabContent.appendChild(list);
                         const clearBtn = document.createElement('button');
                         clearBtn.type = 'button';
-                        clearBtn.className = 'ytkit-vh-clear-btn ytkit-vh-clear-btn--danger';
+                        clearBtn.className = 'ytkit-vh-clear-btn';
                         clearBtn.textContent = `Unblock All Channels (${channels.length})`;
                         clearBtn.onclick = () => {
                             const backup = [...videoHiderFeature._getBlockedChannels()];
                             videoHiderFeature._setBlockedChannels([]);
                             videoHiderFeature._processAllVideos();
                             renderTabContent('channels');
-                            showToast(`Unblocked ${backup.length} channels`, '#dc2626', { duration: 5, action: { text: 'Undo', onClick: () => {
+                            showToast(`Unblocked ${backup.length} channels`, '#6b7280', { duration: 5, tone: 'neutral', action: { text: 'Undo', onClick: () => {
                                 videoHiderFeature._setBlockedChannels(backup);
                                 videoHiderFeature._processAllVideos();
                                 renderTabContent('channels');
+                                updateVideoHiderMeta();
                                 showToast('Channels restored', '#22c55e');
                             }}});
                         };
                         tabContent.appendChild(clearBtn);
                     }
                 } else if (tab === 'keywords') {
-                    const container = document.createElement('div');
-                    const desc = document.createElement('div');
-                    desc.style.cssText = 'color:var(--ytkit-text-muted);font-size:12px;margin-bottom:12px;line-height:1.4;';
-                    desc.textContent = 'Videos with titles containing these keywords will be automatically hidden. Separate multiple keywords with commas. Prefix with ! to whitelist. Start with / for regex.';
-                    container.appendChild(desc);
+                    const container = createVideoHiderSection(
+                        'Keyword Rules',
+                        'Hide videos by title or channel text. Add comma-separated keywords, use ! to always allow a match, or start with / for regex.'
+                    );
+                    const field = document.createElement('label');
+                    field.className = 'ytkit-vh-field';
+                    field.htmlFor = 'ytkit-vh-keywords';
+                    const fieldLabel = document.createElement('span');
+                    fieldLabel.className = 'ytkit-vh-field-label';
+                    fieldLabel.textContent = 'Keywords & Rules';
+                    const fieldCopy = document.createElement('span');
+                    fieldCopy.className = 'ytkit-vh-field-copy';
+                    fieldCopy.id = 'ytkit-vh-keywords-copy';
+                    fieldCopy.textContent = 'Separate entries with commas. Rules apply immediately after you update this field.';
+                    field.appendChild(fieldLabel);
+                    field.appendChild(fieldCopy);
                     const textarea = document.createElement('textarea');
-                    textarea.style.cssText = 'width:100%;min-height:100px;padding:8px;background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:6px;color:var(--ytkit-text-primary);font-size:12px;resize:vertical;font-family:inherit;';
-                    textarea.placeholder = 'e.g., reaction, unboxing, prank, shorts';
+                    textarea.id = 'ytkit-vh-keywords';
+                    textarea.name = 'hideVideosKeywordFilter';
+                    textarea.className = 'ytkit-vh-textarea';
+                    textarea.spellcheck = false;
+                    textarea.autocomplete = 'off';
+                    textarea.setAttribute('aria-describedby', 'ytkit-vh-keywords-copy');
+                    textarea.placeholder = 'reaction, unboxing, prank, shorts…';
                     textarea.value = appState.settings.hideVideosKeywordFilter || '';
                     textarea.onchange = async () => {
                         appState.settings.hideVideosKeywordFilter = textarea.value;
                         settingsManager.save(appState.settings);
                         videoHiderFeature?._processAllVideos();
+                        updateVideoHiderMeta();
                     };
-                    container.appendChild(textarea);
-                    const hint = document.createElement('div');
-                    hint.style.cssText = 'color:var(--ytkit-text-muted);font-size:10px;margin-top:6px;';
-                    hint.textContent = 'Changes apply immediately. Keywords are case-insensitive.';
-                    container.appendChild(hint);
+                    field.appendChild(textarea);
+                    container.appendChild(field);
+                    const hintPills = document.createElement('div');
+                    hintPills.className = 'ytkit-vh-pill-list';
+                    ['keyword hides matches', '!keyword always allows matches', '/pattern/i runs a regex rule'].forEach(copy => {
+                        const pill = document.createElement('span');
+                        pill.className = 'ytkit-vh-pill';
+                        pill.textContent = copy;
+                        hintPills.appendChild(pill);
+                    });
+                    container.appendChild(hintPills);
                     tabContent.appendChild(container);
                 } else if (tab === 'settings') {
                     const container = document.createElement('div');
-                    container.style.cssText = 'display:flex;flex-direction:column;gap:16px;';
+                    container.className = 'ytkit-vh-settings';
 
                     // Duration filter
-                    const durSection = document.createElement('div');
-                    durSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:8px;padding:14px;';
-                    const durTitle = document.createElement('div');
-                    durTitle.style.cssText = 'font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:6px;';
-                    durTitle.textContent = 'Duration Filter';
-                    durSection.appendChild(durTitle);
-                    const durDesc = document.createElement('div');
-                    durDesc.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);margin-bottom:8px;';
-                    durDesc.textContent = 'Automatically hide videos shorter than the specified duration.';
-                    durSection.appendChild(durDesc);
+                    const durSection = createVideoHiderSection(
+                        'Duration Filter',
+                        'Automatically hide videos shorter than your chosen minimum length.'
+                    );
+                    const durField = document.createElement('label');
+                    durField.className = 'ytkit-vh-field';
+                    durField.htmlFor = 'ytkit-vh-duration';
+                    const durLabel = document.createElement('span');
+                    durLabel.className = 'ytkit-vh-field-label';
+                    durLabel.textContent = 'Minimum Duration';
+                    const durHelper = document.createElement('span');
+                    durHelper.className = 'ytkit-vh-field-copy';
+                    durHelper.id = 'ytkit-vh-duration-copy';
+                    durHelper.textContent = 'Use 0 to disable this rule.';
                     const durRow = document.createElement('div');
-                    durRow.style.cssText = 'display:flex;align-items:center;gap:12px;';
+                    durRow.className = 'ytkit-vh-input-row';
                     const durInput = document.createElement('input');
-                    durInput.type = 'number'; durInput.min = '0'; durInput.max = '60';
+                    durInput.type = 'number';
+                    durInput.id = 'ytkit-vh-duration';
+                    durInput.name = 'hideVideosDurationFilter';
+                    durInput.className = 'ytkit-vh-number';
+                    durInput.inputMode = 'numeric';
+                    durInput.autocomplete = 'off';
+                    durInput.min = '0';
+                    durInput.max = '60';
+                    durInput.step = '1';
                     durInput.value = appState.settings.hideVideosDurationFilter || 0;
-                    durInput.style.cssText = 'width:70px;padding:6px 10px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:5px;color:var(--ytkit-text-primary);font-size:13px;';
+                    durInput.setAttribute('aria-describedby', 'ytkit-vh-duration-copy');
                     durInput.onchange = async () => {
-                        appState.settings.hideVideosDurationFilter = parseInt(durInput.value) || 0;
+                        appState.settings.hideVideosDurationFilter = Math.max(0, Math.min(60, parseInt(durInput.value, 10) || 0));
+                        durInput.value = appState.settings.hideVideosDurationFilter;
                         settingsManager.save(appState.settings);
                         videoHiderFeature?._processAllVideos();
+                        updateVideoHiderMeta();
                     };
-                    const durLabel = document.createElement('span');
-                    durLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:12px;';
-                    durLabel.textContent = 'minutes (0 = disabled)';
-                    durRow.appendChild(durInput); durRow.appendChild(durLabel);
-                    durSection.appendChild(durRow);
+                    const durSuffix = document.createElement('span');
+                    durSuffix.className = 'ytkit-vh-inline-note';
+                    durSuffix.textContent = 'minutes';
+                    durRow.appendChild(durInput);
+                    durRow.appendChild(durSuffix);
+                    durField.appendChild(durLabel);
+                    durField.appendChild(durHelper);
+                    durField.appendChild(durRow);
+                    durSection.appendChild(durField);
                     container.appendChild(durSection);
 
                     // Subscription Load Limiter
-                    const limiterSection = document.createElement('div');
-                    limiterSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:8px;padding:14px;';
-                    const limiterTitle = document.createElement('div');
-                    limiterTitle.style.cssText = 'font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:6px;';
-                    limiterTitle.textContent = 'Subscription Page Load Limiter';
-                    limiterSection.appendChild(limiterTitle);
-                    const limiterDesc = document.createElement('div');
-                    limiterDesc.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);margin-bottom:10px;line-height:1.4;';
-                    limiterDesc.textContent = "Prevents infinite scrolling when many consecutive videos are hidden.";
-                    limiterSection.appendChild(limiterDesc);
+                    const limiterSection = createVideoHiderSection(
+                        'Subscription Load Limiter',
+                        'Stop endless loading on Subscriptions when too many consecutive batches are fully hidden.'
+                    );
                     const limiterToggleRow = document.createElement('div');
-                    limiterToggleRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:8px;background:var(--ytkit-bg-elevated);border-radius:6px;';
-                    const limiterToggleLabel = document.createElement('span');
-                    limiterToggleLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:12px;';
-                    limiterToggleLabel.textContent = 'Enable load limiter';
+                    limiterToggleRow.className = 'ytkit-vh-toggle-row';
+                    const limiterToggleCopy = document.createElement('div');
+                    limiterToggleCopy.className = 'ytkit-vh-toggle-copy';
+                    const limiterToggleLabel = document.createElement('div');
+                    limiterToggleLabel.className = 'ytkit-vh-toggle-title';
+                    limiterToggleLabel.textContent = 'Enable Load Limiter';
+                    const limiterToggleDesc = document.createElement('div');
+                    limiterToggleDesc.className = 'ytkit-vh-toggle-desc';
+                    limiterToggleDesc.textContent = 'Recommended if you hide a lot of subscription feed content.';
                     const limiterSwitch = document.createElement('div');
                     limiterSwitch.className = 'ytkit-switch' + (appState.settings.hideVideosSubsLoadLimit !== false ? ' active' : '');
                     limiterSwitch.style.cssText = 'cursor:pointer;';
                     const limiterInput = document.createElement('input');
                     limiterInput.type = 'checkbox';
+                    limiterInput.name = 'hideVideosSubsLoadLimit';
+                    limiterInput.setAttribute('aria-label', 'Enable subscription load limiter');
                     limiterInput.checked = appState.settings.hideVideosSubsLoadLimit !== false;
-                    limiterInput.onchange = async () => {
-                        appState.settings.hideVideosSubsLoadLimit = limiterInput.checked;
-                        limiterSwitch.classList.toggle('active', limiterInput.checked);
-                        settingsManager.save(appState.settings);
-                    };
                     const limiterTrack = document.createElement('span');
                     limiterTrack.className = 'ytkit-switch-track';
+                    const limiterThumb = document.createElement('span');
+                    limiterThumb.className = 'ytkit-switch-thumb';
+                    limiterTrack.appendChild(limiterThumb);
                     limiterSwitch.appendChild(limiterInput);
                     limiterSwitch.appendChild(limiterTrack);
-                    limiterToggleRow.appendChild(limiterToggleLabel);
+                    limiterToggleCopy.appendChild(limiterToggleLabel);
+                    limiterToggleCopy.appendChild(limiterToggleDesc);
+                    limiterToggleRow.appendChild(limiterToggleCopy);
                     limiterToggleRow.appendChild(limiterSwitch);
                     limiterSection.appendChild(limiterToggleRow);
-                    const thresholdRow = document.createElement('div');
-                    thresholdRow.style.cssText = 'display:flex;align-items:center;gap:12px;';
+                    const thresholdRow = document.createElement('label');
+                    thresholdRow.className = 'ytkit-vh-field';
+                    thresholdRow.htmlFor = 'ytkit-vh-threshold';
                     const thresholdLabel = document.createElement('span');
-                    thresholdLabel.style.cssText = 'color:var(--ytkit-text-secondary);font-size:12px;flex:1;';
-                    thresholdLabel.textContent = 'Stop after consecutive hidden batches:';
+                    thresholdLabel.className = 'ytkit-vh-field-label';
+                    thresholdLabel.textContent = 'Consecutive Hidden Batches';
+                    const thresholdCopy = document.createElement('span');
+                    thresholdCopy.className = 'ytkit-vh-field-copy';
+                    thresholdCopy.id = 'ytkit-vh-threshold-copy';
+                    thresholdCopy.textContent = 'Lower values stop faster. Higher values allow more loading before the limiter steps in.';
+                    const thresholdInputRow = document.createElement('div');
+                    thresholdInputRow.className = 'ytkit-vh-input-row';
                     const thresholdInput = document.createElement('input');
-                    thresholdInput.type = 'number'; thresholdInput.min = '1'; thresholdInput.max = '20';
+                    thresholdInput.type = 'number';
+                    thresholdInput.id = 'ytkit-vh-threshold';
+                    thresholdInput.name = 'hideVideosSubsLoadThreshold';
+                    thresholdInput.className = 'ytkit-vh-number';
+                    thresholdInput.inputMode = 'numeric';
+                    thresholdInput.autocomplete = 'off';
+                    thresholdInput.min = '1';
+                    thresholdInput.max = '20';
+                    thresholdInput.step = '1';
                     thresholdInput.value = appState.settings.hideVideosSubsLoadThreshold || 3;
-                    thresholdInput.style.cssText = 'width:60px;padding:6px 10px;background:var(--ytkit-bg-elevated);border:1px solid var(--ytkit-border);border-radius:5px;color:var(--ytkit-text-primary);font-size:13px;text-align:center;';
+                    thresholdInput.setAttribute('aria-describedby', 'ytkit-vh-threshold-copy');
+                    const thresholdNote = document.createElement('span');
+                    thresholdNote.className = 'ytkit-vh-inline-note';
+                    thresholdNote.textContent = 'batches';
+
+                    const syncLimiterState = () => {
+                        const isEnabled = limiterInput.checked;
+                        limiterSwitch.classList.toggle('active', limiterInput.checked);
+                        limiterToggleRow.classList.toggle('is-disabled', !isEnabled);
+                        thresholdRow.classList.toggle('is-disabled', !isEnabled);
+                        thresholdInput.disabled = !isEnabled;
+                    };
+
+                    limiterInput.onchange = async () => {
+                        appState.settings.hideVideosSubsLoadLimit = limiterInput.checked;
+                        syncLimiterState();
+                        settingsManager.save(appState.settings);
+                        if (!limiterInput.checked) videoHiderFeature?._removeLoadBlocker?.();
+                        else videoHiderFeature?._resetSubsLoadState?.();
+                        updateVideoHiderMeta();
+                    };
                     thresholdInput.onchange = async () => {
-                        appState.settings.hideVideosSubsLoadThreshold = Math.max(1, Math.min(20, parseInt(thresholdInput.value) || 3));
+                        appState.settings.hideVideosSubsLoadThreshold = Math.max(1, Math.min(20, parseInt(thresholdInput.value, 10) || 3));
                         thresholdInput.value = appState.settings.hideVideosSubsLoadThreshold;
                         settingsManager.save(appState.settings);
+                        updateVideoHiderMeta();
                     };
+                    thresholdInputRow.appendChild(thresholdInput);
+                    thresholdInputRow.appendChild(thresholdNote);
                     thresholdRow.appendChild(thresholdLabel);
-                    thresholdRow.appendChild(thresholdInput);
+                    thresholdRow.appendChild(thresholdCopy);
+                    thresholdRow.appendChild(thresholdInputRow);
                     limiterSection.appendChild(thresholdRow);
-                    const thresholdHint = document.createElement('div');
-                    thresholdHint.style.cssText = 'color:var(--ytkit-text-muted);font-size:10px;margin-top:6px;';
-                    thresholdHint.textContent = 'Lower = stops faster, Higher = loads more before stopping (1-20)';
-                    limiterSection.appendChild(thresholdHint);
+                    syncLimiterState();
                     container.appendChild(limiterSection);
 
                     // Stats
-                    const statsSection = document.createElement('div');
-                    statsSection.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:8px;padding:14px;';
-                    const statsTitle = document.createElement('div');
-                    statsTitle.style.cssText = 'font-size:13px;font-weight:600;color:var(--ytkit-text-primary);margin-bottom:8px;';
-                    statsTitle.textContent = 'Statistics';
-                    statsSection.appendChild(statsTitle);
+                    const statsSection = createVideoHiderSection(
+                        'At-a-Glance Status',
+                        'A quick snapshot of what Video Hider is currently managing for you.'
+                    );
                     const statsGrid = document.createElement('div');
-                    statsGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;';
+                    statsGrid.className = 'ytkit-vh-stat-grid';
                     const videoCount = videoHiderFeature?._getHiddenVideos()?.length || 0;
                     const channelCount = videoHiderFeature?._getBlockedChannels()?.length || 0;
                     [{ label: 'Hidden Videos', value: videoCount }, { label: 'Blocked Channels', value: channelCount }].forEach(stat => {
                         const statEl = document.createElement('div');
-                        statEl.style.cssText = 'padding:10px;background:var(--ytkit-bg-elevated);border-radius:6px;text-align:center;';
+                        statEl.className = 'ytkit-vh-stat-card';
                         const val = document.createElement('div');
-                        val.style.cssText = 'font-size:20px;font-weight:700;color:var(--ytkit-text-primary);margin-bottom:2px;';
+                        val.className = 'ytkit-vh-stat-value';
                         val.textContent = stat.value;
                         const lbl = document.createElement('div');
-                        lbl.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);';
+                        lbl.className = 'ytkit-vh-stat-label';
                         lbl.textContent = stat.label;
                         statEl.appendChild(val); statEl.appendChild(lbl);
                         statsGrid.appendChild(statEl);
@@ -19648,6 +22378,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }
             }
 
+            updateVideoHiderMeta();
             renderTabContent('videos');
             return pane;
         }
@@ -23799,13 +26530,56 @@ body.ytkit-panel-open #ytkit-settings-panel {
         }
 
         .ytkit-speed-presets {
+            display: grid;
+            gap: 10px;
+            margin: 0 0 8px;
+            padding: 10px 0 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .ytkit-speed-presets__header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .ytkit-speed-presets__title {
+            color: rgba(255,255,255,0.9);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .ytkit-speed-presets__status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 0 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.62);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .ytkit-speed-presets__status[data-state="active"] {
+            color: #eefbf1;
+            border-color: rgba(34,197,94,0.24);
+            background: rgba(22,163,74,0.14);
+        }
+
+        .ytkit-speed-presets__actions {
             display: flex;
             flex-wrap: wrap;
-            gap: 5px;
+            gap: 6px;
             align-items: center;
-            padding: 2px 0 8px;
-            margin: 0 0 6px;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
         }
 
         .ytkit-speed-btn {
@@ -23824,7 +26598,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
             letter-spacing: 0;
             text-transform: none;
             cursor: pointer;
-            transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+            touch-action: manipulation;
+            transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
         }
 
         .ytkit-speed-btn:hover {
@@ -23833,11 +26608,25 @@ body.ytkit-panel-open #ytkit-settings-panel {
             background: rgba(255,255,255,0.08);
         }
 
+        .ytkit-speed-btn:active {
+            transform: scale(0.985);
+        }
+
         .ytkit-speed-btn-active {
             border-color: rgba(var(--ytkit-accent-rgb),0.26);
             background: rgba(var(--ytkit-accent-rgb),0.16);
             color: #fff;
             box-shadow: none;
+        }
+
+        @media (max-width: 720px) {
+            .ytkit-speed-presets {
+                gap: 8px;
+            }
+
+            .ytkit-speed-presets__actions {
+                gap: 5px;
+            }
         }
 
         .ytkit-watch-action-btn {
@@ -23869,6 +26658,24 @@ body.ytkit-panel-open #ytkit-settings-panel {
             box-shadow: none !important;
         }
 
+        .ytkit-watch-action-btn[data-state="busy"] {
+            color: rgba(226,241,255,0.96) !important;
+            border-color: rgba(var(--ytkit-accent-rgb),0.28) !important;
+            background: rgba(var(--ytkit-accent-rgb),0.12) !important;
+        }
+
+        .ytkit-watch-action-btn[data-state="success"] {
+            color: #f4fff7 !important;
+            border-color: rgba(34,197,94,0.28) !important;
+            background: rgba(16,92,46,0.2) !important;
+        }
+
+        .ytkit-watch-action-btn[data-state="error"] {
+            color: #fff5f5 !important;
+            border-color: rgba(239,68,68,0.28) !important;
+            background: rgba(127,29,29,0.2) !important;
+        }
+
         .ytkit-watch-action-btn__icon {
             width: 14px;
             height: 14px;
@@ -23887,6 +26694,20 @@ body.ytkit-panel-open #ytkit-settings-panel {
         .ytkit-watch-action-btn__label {
             line-height: 1;
             white-space: nowrap;
+        }
+
+        .ytkit-watch-action-btn[data-state="busy"] .ytkit-watch-action-btn__icon svg,
+        .ytkit-copy-title-btn[data-state="copying"] .ytkit-copy-title-btn__icon svg {
+            animation: ytkit-spin 0.8s linear infinite;
+            transform-box: fill-box;
+            transform-origin: center;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .ytkit-watch-action-btn[data-state="busy"] .ytkit-watch-action-btn__icon svg,
+            .ytkit-copy-title-btn[data-state="copying"] .ytkit-copy-title-btn__icon svg {
+                animation: none;
+            }
         }
 
         .ytkit-local-dl-btn {
@@ -24396,7 +27217,6 @@ body.ytkit-panel-open #ytkit-settings-panel {
         #ytkit-comment-nav .ytkit-comment-nav-btn,
         .ytkit-vh-tab,
         #ytkit-vh-content button,
-        #ytkit-hide-toast button,
         #ytkit-subs-load-banner button,
         #ytkit-mediadl-install-prompt button,
         #ytkit-mediadl-banner-actions button,
@@ -24423,7 +27243,6 @@ body.ytkit-panel-open #ytkit-settings-panel {
         #ytkit-comment-nav .ytkit-comment-nav-btn:focus-visible,
         .ytkit-vh-tab:focus-visible,
         #ytkit-vh-content button:focus-visible,
-        #ytkit-hide-toast button:focus-visible,
         #ytkit-subs-load-banner button:focus-visible,
         #ytkit-mediadl-install-prompt button:focus-visible,
         #ytkit-mediadl-banner-actions button:focus-visible,
@@ -24448,7 +27267,6 @@ body.ytkit-panel-open #ytkit-settings-panel {
         #ytkit-comment-nav .ytkit-comment-nav-btn:active:not(:disabled),
         .ytkit-vh-tab:active:not(:disabled),
         #ytkit-vh-content button:active:not(:disabled),
-        #ytkit-hide-toast button:active:not(:disabled),
         #ytkit-subs-load-banner button:active:not(:disabled),
         #ytkit-mediadl-install-prompt button:active:not(:disabled),
         #ytkit-mediadl-banner-actions button:active:not(:disabled),
@@ -24472,7 +27290,6 @@ body.ytkit-panel-open #ytkit-settings-panel {
         #ytkit-comment-nav .ytkit-comment-nav-btn:disabled,
         .ytkit-vh-tab:disabled,
         #ytkit-vh-content button:disabled,
-        #ytkit-hide-toast button:disabled,
         #ytkit-subs-load-banner button:disabled,
         #ytkit-mediadl-install-prompt button:disabled,
         #ytkit-mediadl-banner-actions button:disabled,
@@ -24557,6 +27374,108 @@ body.ytkit-panel-open #ytkit-settings-panel {
             transform: none !important;
         }
 
+        .ytkit-thumb-action-host {
+            position: relative !important;
+        }
+
+        .ytkit-res-host {
+            position: relative !important;
+        }
+
+        .ytkit-res-badge {
+            position: absolute !important;
+            left: 6px !important;
+            bottom: 6px !important;
+            z-index: 46 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            min-height: 22px !important;
+            min-width: 34px !important;
+            padding: 0 8px !important;
+            border-radius: 999px !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            background: rgba(12,17,26,0.78) !important;
+            color: rgba(255,255,255,0.94) !important;
+            box-shadow: 0 12px 24px rgba(0,0,0,0.26) !important;
+            font-size: 10px !important;
+            font-weight: 800 !important;
+            letter-spacing: 0.08em !important;
+            line-height: 1 !important;
+            text-transform: uppercase !important;
+            font-variant-numeric: tabular-nums !important;
+            pointer-events: none !important;
+            user-select: none !important;
+        }
+
+        .ytkit-res-badge[data-tier="8k"] {
+            color: #fef7ff !important;
+            border-color: rgba(192,132,252,0.34) !important;
+            background: rgba(107,33,168,0.82) !important;
+        }
+
+        .ytkit-res-badge[data-tier="4k"] {
+            color: #f8f4ff !important;
+            border-color: rgba(168,85,247,0.32) !important;
+            background: rgba(109,40,217,0.78) !important;
+        }
+
+        .ytkit-res-badge[data-tier="qhd"] {
+            color: #f3f8ff !important;
+            border-color: rgba(96,165,250,0.3) !important;
+            background: rgba(30,64,175,0.78) !important;
+        }
+
+        .ytkit-res-badge[data-tier="hd"] {
+            color: #eff8ff !important;
+            border-color: rgba(59,130,246,0.28) !important;
+            background: rgba(29,78,216,0.74) !important;
+        }
+
+        .ytkit-res-badge[data-tier="sd"] {
+            color: #fefce8 !important;
+            border-color: rgba(250,204,21,0.28) !important;
+            background: rgba(133,77,14,0.78) !important;
+        }
+
+        @media (pointer: coarse) {
+            .ytkit-res-badge {
+                bottom: 8px !important;
+                left: 8px !important;
+            }
+        }
+
+        .ytkit-wl-btn {
+            position: absolute !important;
+            top: 6px !important;
+            right: 6px !important;
+            z-index: 50 !important;
+            opacity: 0 !important;
+            transform: translateY(-2px) !important;
+            touch-action: manipulation !important;
+        }
+
+        .ytkit-wl-btn[data-state="saving"] {
+            opacity: 1 !important;
+            background: rgba(var(--ytkit-accent-rgb),0.16) !important;
+            border-color: rgba(var(--ytkit-accent-rgb),0.26) !important;
+            color: #fff !important;
+        }
+
+        .ytkit-wl-btn[data-state="saved"] {
+            opacity: 1 !important;
+            background: rgba(34,197,94,0.18) !important;
+            border-color: rgba(34,197,94,0.3) !important;
+            color: #f4fff7 !important;
+        }
+
+        .ytkit-wl-btn[data-state="error"] {
+            opacity: 1 !important;
+            background: rgba(239,68,68,0.18) !important;
+            border-color: rgba(239,68,68,0.3) !important;
+            color: #fff !important;
+        }
+
         .ytkit-video-hide-btn svg,
         .ytkit-not-interested-btn svg,
         .ytkit-wl-btn svg {
@@ -24564,6 +27483,15 @@ body.ytkit-panel-open #ytkit-settings-panel {
             height: 14px !important;
             fill: currentColor !important;
             pointer-events: none !important;
+        }
+
+        .ytkit-wl-btn svg {
+            fill: none !important;
+            stroke: currentColor !important;
+        }
+
+        .ytkit-wl-spin {
+            animation: ytkit-spin 0.8s linear infinite;
         }
 
         ytd-rich-item-renderer:hover .ytkit-video-hide-btn,
@@ -24579,10 +27507,37 @@ body.ytkit-panel-open #ytkit-settings-panel {
         ytd-grid-video-renderer:hover .ytkit-wl-btn,
         ytd-compact-video-renderer:hover .ytkit-wl-btn {
             opacity: 1 !important;
+            transform: translateY(0) !important;
+        }
+
+        .ytkit-thumb-action-host:focus-within .ytkit-wl-btn,
+        .ytkit-wl-btn:focus-visible,
+        .ytkit-wl-btn[data-state="saving"],
+        .ytkit-wl-btn[data-state="saved"],
+        .ytkit-wl-btn[data-state="error"] {
+            opacity: 1 !important;
+            transform: translateY(0) !important;
+        }
+
+        @media (pointer: coarse) {
+            .ytkit-wl-btn {
+                opacity: 1 !important;
+                transform: translateY(0) !important;
+            }
         }
 
         .ytkit-dl-thumb-btn {
             margin-left: 8px !important;
+        }
+
+        @keyframes ytkit-slide-in {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes ytkit-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
 
         #ytkit-mediadl-install-prompt {
@@ -24600,6 +27555,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
             box-shadow: 0 28px 60px rgba(0,0,0,0.42);
             z-index: 2147483647;
             animation: ytkit-slide-in 0.28s ease-out;
+            overscroll-behavior: contain;
         }
 
         .ytkit-install-prompt__header {
@@ -24610,11 +27566,34 @@ body.ytkit-panel-open #ytkit-settings-panel {
             margin-bottom: 10px;
         }
 
+        .ytkit-install-prompt__heading {
+            min-width: 0;
+            display: grid;
+            gap: 4px;
+        }
+
+        .ytkit-install-prompt__eyebrow {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            min-height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.62);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
         .ytkit-install-prompt__title {
             font-size: 14px;
             font-weight: 700;
             letter-spacing: -0.01em;
             color: rgba(226,255,236,0.96);
+            text-wrap: balance;
         }
 
         .ytkit-install-prompt__close {
@@ -24649,6 +27628,32 @@ body.ytkit-panel-open #ytkit-settings-panel {
             line-height: 1.6;
         }
 
+        .ytkit-install-prompt__note {
+            margin: 0 0 12px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.78);
+            font-size: 11px;
+            line-height: 1.55;
+        }
+
+        .ytkit-install-prompt__steps {
+            margin: 0 0 14px;
+            padding-left: 18px;
+            display: grid;
+            gap: 8px;
+            color: rgba(255,255,255,0.6);
+            font-size: 11px;
+            line-height: 1.55;
+        }
+
+        .ytkit-install-prompt__step::marker {
+            color: rgba(var(--ytkit-accent-rgb),0.92);
+            font-weight: 700;
+        }
+
         .ytkit-install-prompt__actions {
             display: grid;
             gap: 8px;
@@ -24659,13 +27664,13 @@ body.ytkit-panel-open #ytkit-settings-panel {
             -webkit-appearance: none;
             width: 100%;
             min-height: 38px;
-            padding: 0 14px;
+            padding: 10px 14px;
             border-radius: 12px;
             border: 1px solid rgba(255,255,255,0.08);
             background: rgba(255,255,255,0.05);
             color: rgba(255,255,255,0.9);
             display: inline-flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: flex-start;
             text-align: left;
             font-family: var(--ytkit-font);
@@ -24675,6 +27680,24 @@ body.ytkit-panel-open #ytkit-settings-panel {
             cursor: pointer;
             transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
             outline: none;
+        }
+
+        .ytkit-install-prompt__btn-copy {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+        }
+
+        .ytkit-install-prompt__btn-label {
+            color: inherit;
+        }
+
+        .ytkit-install-prompt__btn-meta {
+            color: rgba(255,255,255,0.58);
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0;
+            line-height: 1.45;
         }
 
         .ytkit-install-prompt__btn:hover {
@@ -24727,12 +27750,18 @@ body.ytkit-panel-open #ytkit-settings-panel {
             color: rgba(255,255,255,0.46);
             background: transparent;
             border-color: transparent;
+            align-items: center;
+            text-align: center;
         }
 
         .ytkit-install-prompt__btn--quiet:hover {
             background: rgba(255,255,255,0.04);
             border-color: rgba(255,255,255,0.08);
             color: rgba(255,255,255,0.72);
+        }
+
+        .ytkit-install-prompt__btn--quiet .ytkit-install-prompt__btn-meta {
+            display: none;
         }
 
         .ytkit-install-prompt__btn.is-success {
@@ -24762,6 +27791,24 @@ body.ytkit-panel-open #ytkit-settings-panel {
             box-shadow: 0 28px 56px rgba(0,0,0,0.38);
             z-index: 2147483647;
             animation: ytkit-slide-in 0.28s ease-out;
+        }
+
+        .ytkit-dl-progress[data-state="pending"] {
+            background:
+                radial-gradient(circle at top right, rgba(59,130,246,0.12), transparent 38%),
+                linear-gradient(180deg, rgba(18,24,34,0.98), rgba(9,12,18,0.98));
+        }
+
+        .ytkit-dl-progress[data-state="error"] {
+            background:
+                radial-gradient(circle at top right, rgba(239,68,68,0.14), transparent 38%),
+                linear-gradient(180deg, rgba(25,18,24,0.98), rgba(14,9,12,0.98));
+        }
+
+        .ytkit-dl-progress[data-state="success"] {
+            background:
+                radial-gradient(circle at top right, rgba(34,197,94,0.14), transparent 38%),
+                linear-gradient(180deg, rgba(16,24,20,0.98), rgba(8,12,10,0.98));
         }
 
         .ytkit-dl-progress__header {
@@ -24817,9 +27864,39 @@ body.ytkit-panel-open #ytkit-settings-panel {
             color: rgba(255,255,255,0.94);
             font-size: 13px;
             font-weight: 700;
-            white-space: nowrap;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
             overflow: hidden;
-            text-overflow: ellipsis;
+            text-wrap: pretty;
+        }
+
+        .ytkit-dl-progress__status {
+            display: grid;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+
+        .ytkit-dl-progress__state {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            min-height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.76);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        .ytkit-dl-progress__status-copy {
+            color: rgba(255,255,255,0.62);
+            font-size: 11px;
+            line-height: 1.55;
         }
 
         .ytkit-dl-progress__bar {
@@ -24848,77 +27925,172 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
         .ytkit-dl-progress__meta {
             display: flex;
-            justify-content: space-between;
+            flex-wrap: wrap;
             gap: 8px;
         }
 
         .ytkit-dl-progress__stat {
-            color: rgba(255,255,255,0.56);
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.62);
             font-size: 11px;
             font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .ytkit-dl-progress__actions {
+            display: flex;
+            margin-top: 12px;
+        }
+
+        .ytkit-dl-progress__action {
+            appearance: none;
+            -webkit-appearance: none;
+            min-height: 34px;
+            padding: 0 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(239,68,68,0.22);
+            background: rgba(239,68,68,0.14);
+            color: #fff;
+            font-family: var(--ytkit-font);
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+        }
+
+        .ytkit-dl-progress__action:hover {
+            background: rgba(239,68,68,0.2);
+            border-color: rgba(239,68,68,0.3);
+        }
+
+        .ytkit-dl-progress__action:focus-visible {
+            box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(239,68,68,0.22);
         }
 
         #ytkit-subs-load-banner {
             position: fixed;
             left: 50%;
-            bottom: 20px;
+            bottom: calc(18px + env(safe-area-inset-bottom, 0px));
             transform: translateX(-50%);
-            width: min(640px, calc(100vw - 24px));
-            padding: 14px 16px;
-            border-radius: 16px;
+            width: min(720px, calc(100vw - 24px));
+            padding: 16px;
+            border-radius: 20px;
             border: 1px solid rgba(255,255,255,0.08);
             background:
-                radial-gradient(circle at top right, rgba(245,158,11,0.12), transparent 34%),
+                radial-gradient(circle at top right, rgba(245,158,11,0.14), transparent 34%),
                 linear-gradient(180deg, rgba(19,26,36,0.98), rgba(10,14,21,0.98));
-            display: flex;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto;
             align-items: center;
-            gap: 14px;
+            gap: 16px;
             z-index: var(--ytkit-banner-z, 2147483644);
-            box-shadow: 0 26px 52px rgba(0,0,0,0.36);
+            box-shadow: 0 28px 60px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.04);
+            backdrop-filter: blur(14px);
+            overscroll-behavior: contain;
         }
 
         .ytkit-subs-load-banner__icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 14px;
-            border: 1px solid rgba(245,158,11,0.14);
+            width: 46px;
+            height: 46px;
+            border-radius: 16px;
+            border: 1px solid rgba(245,158,11,0.16);
             background: rgba(245,158,11,0.08);
             display: grid;
             place-items: center;
             flex-shrink: 0;
         }
 
-        .ytkit-subs-load-banner__copy {
-            flex: 1;
+        .ytkit-subs-load-banner__body {
             min-width: 0;
             display: grid;
-            gap: 3px;
+            gap: 10px;
+        }
+
+        .ytkit-subs-load-banner__copy {
+            min-width: 0;
+            display: grid;
+            gap: 4px;
+        }
+
+        .ytkit-subs-load-banner__eyebrow {
+            color: rgba(255,255,255,0.5);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
         }
 
         .ytkit-subs-load-banner__title {
-            color: rgba(255,255,255,0.96);
-            font-size: 13px;
+            color: rgba(255,255,255,0.97);
+            font-size: 15px;
             font-weight: 700;
-            letter-spacing: -0.01em;
+            letter-spacing: -0.02em;
+            text-wrap: balance;
         }
 
         .ytkit-subs-load-banner__subtitle {
-            color: rgba(255,255,255,0.58);
-            font-size: 12px;
+            color: rgba(255,255,255,0.64);
+            font-size: 12.5px;
             line-height: 1.5;
+            text-wrap: pretty;
+        }
+
+        .ytkit-subs-load-banner__stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .ytkit-subs-load-banner__stat {
+            display: grid;
+            gap: 3px;
+            min-width: 88px;
+            padding: 8px 10px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.035);
+        }
+
+        .ytkit-subs-load-banner__stat-label {
+            color: rgba(255,255,255,0.52);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .ytkit-subs-load-banner__stat-value {
+            color: rgba(255,255,255,0.95);
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
         }
 
         .ytkit-subs-load-banner__actions {
             display: flex;
             align-items: center;
             gap: 8px;
-            flex-shrink: 0;
+            flex-wrap: wrap;
+            justify-content: flex-end;
         }
 
-        .ytkit-subs-load-banner__btn {
+        .ytkit-subs-load-banner__btn,
+        .ytkit-subs-load-chip__main,
+        .ytkit-subs-load-chip__resume {
             appearance: none;
             -webkit-appearance: none;
-            min-height: 36px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 38px;
             padding: 0 14px;
             border-radius: 12px;
             border: 1px solid rgba(255,255,255,0.08);
@@ -24928,69 +28100,591 @@ body.ytkit-panel-open #ytkit-settings-panel {
             font-size: 12px;
             font-weight: 700;
             cursor: pointer;
+            touch-action: manipulation;
             transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
             outline: none;
         }
 
-        .ytkit-subs-load-banner__btn:hover {
+        .ytkit-subs-load-banner__btn:hover,
+        .ytkit-subs-load-chip__main:hover,
+        .ytkit-subs-load-chip__resume:hover {
             background: rgba(255,255,255,0.08);
             border-color: rgba(255,255,255,0.14);
             color: #fff;
         }
 
-        .ytkit-subs-load-banner__btn:active {
+        .ytkit-subs-load-banner__btn:active,
+        .ytkit-subs-load-chip__main:active,
+        .ytkit-subs-load-chip__resume:active {
             transform: scale(0.985);
         }
 
-        .ytkit-subs-load-banner__btn:focus-visible {
+        .ytkit-subs-load-banner__btn:focus-visible,
+        .ytkit-subs-load-chip__main:focus-visible,
+        .ytkit-subs-load-chip__resume:focus-visible {
             box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(59,130,246,0.2);
         }
 
-        .ytkit-subs-load-banner__btn--primary {
+        .ytkit-subs-load-banner__btn--primary,
+        .ytkit-subs-load-chip__resume {
             background: rgba(59,130,246,0.18);
             border-color: rgba(59,130,246,0.28);
             color: #fff;
         }
 
-        .ytkit-subs-load-banner__btn--primary:hover {
+        .ytkit-subs-load-banner__btn--primary:hover,
+        .ytkit-subs-load-chip__resume:hover {
             background: rgba(59,130,246,0.24);
             border-color: rgba(59,130,246,0.36);
         }
 
+        .ytkit-subs-load-banner__btn--quiet {
+            color: rgba(255,255,255,0.64);
+            background: transparent;
+            border-color: transparent;
+        }
+
+        .ytkit-subs-load-banner__btn--quiet:hover {
+            background: rgba(255,255,255,0.04);
+            border-color: rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.84);
+        }
+
+        #ytkit-subs-load-chip {
+            position: fixed;
+            right: 18px;
+            bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+            display: flex;
+            align-items: stretch;
+            gap: 8px;
+            width: min(360px, calc(100vw - 24px));
+            padding: 10px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background:
+                radial-gradient(circle at top right, rgba(245,158,11,0.12), transparent 34%),
+                linear-gradient(180deg, rgba(19,26,36,0.98), rgba(10,14,21,0.98));
+            z-index: var(--ytkit-banner-z, 2147483644);
+            box-shadow: 0 24px 52px rgba(0,0,0,0.34);
+            backdrop-filter: blur(14px);
+        }
+
+        .ytkit-subs-load-chip__main {
+            flex: 1;
+            min-width: 0;
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            text-align: left;
+        }
+
+        .ytkit-subs-load-chip__copy {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .ytkit-subs-load-chip__title {
+            color: rgba(255,255,255,0.96);
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .ytkit-subs-load-chip__meta {
+            color: rgba(255,255,255,0.56);
+            font-size: 10.5px;
+            font-weight: 600;
+            line-height: 1.2;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         .ytkit-vh-tabs {
             display: flex;
+            flex-wrap: wrap;
             gap: 4px;
             padding: 4px;
             margin-bottom: 12px;
-            border: 1px solid var(--ytkit-border);
-            border-radius: 12px;
-            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018)),
+                rgba(11,15,21,0.9);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+        }
+
+        #ytkit-vh-content {
+            display: grid;
+            gap: 14px;
+        }
+
+        .ytkit-vh-status-chip[data-state="active"] {
+            color: #ecfdf5;
+            background: rgba(34,197,94,0.14);
+            border-color: rgba(34,197,94,0.24);
+        }
+
+        .ytkit-vh-status-chip[data-state="paused"] {
+            color: #fef3c7;
+            background: rgba(245,158,11,0.14);
+            border-color: rgba(245,158,11,0.24);
         }
 
         .ytkit-vh-tab {
             flex: 1;
-            min-height: 32px;
-            padding: 0 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            min-height: 36px;
+            padding: 0 12px;
             border: 1px solid transparent;
-            border-radius: 10px;
+            border-radius: 11px;
             background: transparent;
             color: var(--ytkit-text-muted);
             font-size: 11px;
             font-weight: 700;
             letter-spacing: 0;
             cursor: pointer;
-            transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+            transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
         }
 
         .ytkit-vh-tab:hover {
             color: var(--ytkit-text-secondary);
-            background: rgba(255,255,255,0.04);
+            background: rgba(255,255,255,0.05);
         }
 
         .ytkit-vh-tab.active {
             color: var(--ytkit-vh-accent, var(--ytkit-accent));
-            border-color: rgba(255,255,255,0.08);
-            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.1);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018)),
+                rgba(255,255,255,0.055);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+        }
+
+        .ytkit-vh-tab__label {
+            min-width: 0;
+            text-align: left;
+            line-height: 1.2;
+            text-wrap: balance;
+        }
+
+        .ytkit-vh-tab__badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            min-height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.6);
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .ytkit-vh-tab.active .ytkit-vh-tab__badge {
+            color: #fff;
+            border-color: rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.08);
+        }
+
+        .ytkit-vh-hero,
+        .ytkit-vh-section {
+            display: grid;
+            gap: 10px;
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.02)),
+                rgba(11,15,21,0.9);
+            box-shadow: 0 18px 36px rgba(0,0,0,0.18);
+        }
+
+        .ytkit-vh-hero.is-empty {
+            border-color: rgba(255,173,117,0.22);
+            background:
+                linear-gradient(180deg, rgba(255,173,117,0.08), rgba(255,255,255,0.018)),
+                rgba(11,15,21,0.92);
+        }
+
+        .ytkit-vh-hero__eyebrow {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            min-height: 24px;
+            padding: 0 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.68);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .ytkit-vh-hero__title,
+        .ytkit-vh-section-title {
+            margin: 0;
+            color: rgba(255,255,255,0.94);
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            text-wrap: balance;
+        }
+
+        .ytkit-vh-hero__copy,
+        .ytkit-vh-section-copy {
+            margin: 0;
+            color: rgba(255,255,255,0.62);
+            font-size: 12px;
+            line-height: 1.6;
+            text-wrap: pretty;
+        }
+
+        .ytkit-vh-settings {
+            display: grid;
+            gap: 14px;
+        }
+
+        .ytkit-vh-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
+            gap: 10px;
+        }
+
+        .ytkit-vh-stack {
+            display: grid;
+            gap: 8px;
+        }
+
+        .ytkit-vh-card {
+            display: grid;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.016)),
+                rgba(12,16,22,0.88);
+        }
+
+        .ytkit-vh-card--video {
+            grid-template-columns: 96px minmax(0, 1fr);
+            align-items: start;
+        }
+
+        .ytkit-vh-card--channel {
+            grid-template-columns: auto minmax(0, 1fr);
+            align-items: center;
+        }
+
+        .ytkit-vh-thumb-link {
+            position: relative;
+            display: block;
+            min-height: 54px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.06);
+            transition: border-color 160ms ease, box-shadow 160ms ease, transform 120ms ease;
+        }
+
+        .ytkit-vh-thumb-link:hover {
+            border-color: rgba(var(--ytkit-accent-rgb),0.22);
+        }
+
+        .ytkit-vh-thumb-link:focus-visible {
+            box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(var(--ytkit-accent-rgb),0.22);
+        }
+
+        .ytkit-vh-thumb-link.is-fallback {
+            display: grid;
+            place-items: center;
+            padding: 10px;
+            text-decoration: none;
+        }
+
+        .ytkit-vh-thumb {
+            width: 100%;
+            height: auto;
+            aspect-ratio: 16 / 9;
+            object-fit: cover;
+            vertical-align: middle;
+        }
+
+        .ytkit-vh-thumb-fallback {
+            color: rgba(255,255,255,0.56);
+            font-size: 11px;
+            line-height: 1.45;
+            text-align: center;
+            text-wrap: balance;
+        }
+
+        .ytkit-vh-avatar {
+            display: grid;
+            place-items: center;
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.08);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)),
+                rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.78);
+            font-size: 14px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+
+        .ytkit-vh-item-main {
+            min-width: 0;
+            display: grid;
+            gap: 5px;
+        }
+
+        .ytkit-vh-item-label {
+            color: rgba(255,255,255,0.46);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .ytkit-vh-item-title {
+            color: rgba(255,255,255,0.94);
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
+            text-wrap: pretty;
+        }
+
+        .ytkit-vh-item-title--code {
+            font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+            font-size: 13px;
+            letter-spacing: -0.02em;
+        }
+
+        .ytkit-vh-item-meta {
+            color: rgba(255,255,255,0.56);
+            font-size: 11px;
+            line-height: 1.55;
+            overflow-wrap: anywhere;
+        }
+
+        .ytkit-vh-item-actions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 2px;
+        }
+
+        .ytkit-vh-link {
+            display: inline-flex;
+            align-items: center;
+            min-height: 32px;
+            padding: 0 12px;
+            border-radius: 999px;
+            border: 1px solid rgba(var(--ytkit-accent-rgb),0.24);
+            background: rgba(var(--ytkit-accent-rgb),0.12);
+            color: rgba(255,255,255,0.94);
+            font-size: 11px;
+            font-weight: 700;
+            text-decoration: none;
+            touch-action: manipulation;
+            transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
+        }
+
+        .ytkit-vh-link:hover {
+            background: rgba(var(--ytkit-accent-rgb),0.18);
+            border-color: rgba(var(--ytkit-accent-rgb),0.3);
+            color: #fff;
+        }
+
+        .ytkit-vh-link:focus-visible {
+            box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(var(--ytkit-accent-rgb),0.22);
+        }
+
+        .ytkit-vh-field {
+            display: grid;
+            gap: 6px;
+        }
+
+        .ytkit-vh-field.is-disabled,
+        .ytkit-vh-toggle-row.is-disabled {
+            opacity: 0.6;
+        }
+
+        .ytkit-vh-field-label {
+            color: rgba(255,255,255,0.88);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .ytkit-vh-field-copy {
+            color: rgba(255,255,255,0.56);
+            font-size: 11px;
+            line-height: 1.55;
+        }
+
+        .ytkit-vh-textarea,
+        .ytkit-vh-number {
+            border: 1px solid rgba(255,255,255,0.08);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.012)),
+                rgba(6,9,14,0.92);
+            color: rgba(255,255,255,0.92);
+            font-family: var(--ytkit-font);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+        }
+
+        .ytkit-vh-textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 11px 12px;
+            border-radius: 14px;
+            font-size: 12px;
+            line-height: 1.6;
+            resize: vertical;
+        }
+
+        .ytkit-vh-number {
+            width: 76px;
+            min-height: 38px;
+            padding: 0 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 700;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .ytkit-vh-number:disabled {
+            cursor: not-allowed;
+            opacity: 0.58;
+        }
+
+        .ytkit-vh-input-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .ytkit-vh-inline-note {
+            color: rgba(255,255,255,0.52);
+            font-size: 11px;
+            line-height: 1.45;
+        }
+
+        .ytkit-vh-toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 12px 13px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.04);
+        }
+
+        .ytkit-vh-toggle-copy {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+        }
+
+        .ytkit-vh-toggle-title {
+            color: rgba(255,255,255,0.9);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .ytkit-vh-toggle-desc {
+            color: rgba(255,255,255,0.56);
+            font-size: 11px;
+            line-height: 1.5;
+            text-wrap: pretty;
+        }
+
+        .ytkit-vh-pill-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .ytkit-vh-pill {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.68);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+
+        .ytkit-vh-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px;
+        }
+
+        .ytkit-vh-stat-card {
+            display: grid;
+            gap: 4px;
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.04);
+            text-align: left;
+        }
+
+        .ytkit-vh-stat-value {
+            color: rgba(255,255,255,0.94);
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .ytkit-vh-stat-label {
+            color: rgba(255,255,255,0.58);
+            font-size: 11px;
+            line-height: 1.45;
+        }
+
+        @media (max-width: 760px) {
+            .ytkit-vh-tab {
+                flex: 1 1 calc(50% - 4px);
+            }
+
+            .ytkit-vh-card--video {
+                grid-template-columns: 88px minmax(0, 1fr);
+            }
+
+            .ytkit-vh-toggle-row {
+                align-items: flex-start;
+            }
         }
 
         .ytkit-vh-list-btn,
@@ -25049,18 +28743,10 @@ body.ytkit-panel-open #ytkit-settings-panel {
             box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(var(--ytkit-accent-rgb),0.2);
         }
 
-        .ytkit-vh-list-btn--danger:hover,
-        .ytkit-vh-clear-btn--danger:hover,
         .ytkit-hide-all-btn:hover {
             background: rgba(239,68,68,0.18) !important;
             border-color: rgba(239,68,68,0.3) !important;
             color: #fff !important;
-        }
-
-        .ytkit-vh-list-btn--success:hover {
-            background: rgba(34,197,94,0.18);
-            border-color: rgba(34,197,94,0.3);
-            color: #fff;
         }
 
         .ytkit-vh-clear-btn {
@@ -25091,75 +28777,241 @@ body.ytkit-panel-open #ytkit-settings-panel {
             border-color: rgba(249,115,22,0.32);
         }
 
-        .ytkit-bookmark-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 8px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background-color 160ms ease;
-        }
-
-        .ytkit-bookmark-row:hover {
-            background: rgba(255,255,255,0.06);
-        }
-
         .ytkit-bookmarks-container {
             margin-bottom: 12px;
             overflow: hidden;
-            border-radius: 14px;
+            border-radius: 18px;
             border: 1px solid rgba(255,255,255,0.08);
-            background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.028));
-            box-shadow: 0 16px 32px rgba(0,0,0,0.18);
+            background:
+                radial-gradient(circle at top right, rgba(62,166,255,0.12), transparent 34%),
+                linear-gradient(180deg, rgba(21,27,36,0.96), rgba(10,13,19,0.98));
+            box-shadow: 0 18px 38px rgba(0,0,0,0.22);
         }
 
         .ytkit-bookmarks-header {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: space-between;
             gap: 12px;
-            padding: 10px 12px;
+            padding: 14px 16px 12px;
             border-bottom: 1px solid rgba(255,255,255,0.07);
         }
 
+        .ytkit-bookmarks-header-main {
+            min-width: 0;
+            display: grid;
+            gap: 4px;
+        }
+
+        .ytkit-bookmarks-eyebrow {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            min-height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.62);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
         .ytkit-bookmarks-title {
-            color: rgba(255,255,255,0.78);
+            color: rgba(255,255,255,0.92);
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            text-wrap: balance;
+        }
+
+        .ytkit-bookmarks-status {
+            margin: 0;
+            color: rgba(255,255,255,0.58);
+            font-size: 11px;
+            line-height: 1.55;
+            text-wrap: pretty;
+        }
+
+        .ytkit-bookmarks-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .ytkit-bookmarks-count {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.76);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .ytkit-bookmarks-body {
+            max-height: 280px;
+            overflow-y: auto;
+            padding: 10px 12px 12px;
+            overscroll-behavior: contain;
+        }
+
+        .ytkit-bookmarks-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .ytkit-bookmarks-empty {
+            display: grid;
+            gap: 6px;
+            padding: 16px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+            text-align: left;
+        }
+
+        .ytkit-bookmarks-empty-title {
+            color: rgba(255,255,255,0.9);
             font-size: 13px;
             font-weight: 700;
             letter-spacing: -0.01em;
         }
 
-        .ytkit-bookmarks-body {
-            max-height: 220px;
-            overflow-y: auto;
-            padding: 4px 0;
+        .ytkit-bookmarks-empty-copy {
+            color: rgba(255,255,255,0.5);
+            font-size: 12px;
+            line-height: 1.55;
+            text-wrap: pretty;
         }
 
-        .ytkit-bookmarks-empty {
-            padding: 14px 12px;
-            color: rgba(255,255,255,0.42);
+        .ytkit-bookmark-row {
+            display: grid;
+            grid-template-columns: minmax(0, 172px) minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018)),
+                rgba(255,255,255,0.02);
+        }
+
+        .ytkit-bookmark-jump {
+            appearance: none;
+            -webkit-appearance: none;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            align-items: center;
+            gap: 10px;
+            min-height: 54px;
+            padding: 0 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.04);
+            color: #fff;
+            font-family: var(--ytkit-font);
+            text-align: left;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: border-color 160ms ease, background-color 160ms ease, transform 120ms ease;
+            outline: none;
+        }
+
+        .ytkit-bookmark-jump:hover {
+            background: rgba(255,255,255,0.08);
+            border-color: rgba(62,166,255,0.26);
+        }
+
+        .ytkit-bookmark-jump:active {
+            transform: scale(0.988);
+        }
+
+        .ytkit-bookmark-jump:focus-visible {
+            box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(62,166,255,0.2);
+        }
+
+        .ytkit-bookmark-jump-copy {
+            min-width: 0;
+            display: grid;
+            gap: 2px;
+        }
+
+        .ytkit-bookmark-jump-label {
+            color: rgba(255,255,255,0.92);
             font-size: 12px;
-            text-align: center;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .ytkit-bookmark-jump-meta {
+            color: rgba(255,255,255,0.5);
+            font-size: 10px;
+            line-height: 1.45;
+            text-wrap: pretty;
         }
 
         .ytkit-bookmark-ts {
-            color: #8ccfff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 28px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(62,166,255,0.24);
+            background: rgba(62,166,255,0.12);
+            color: #bfe6ff;
             font-size: 12px;
-            font-weight: 700;
-            min-width: 48px;
+            font-weight: 800;
             font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .ytkit-bookmark-note-wrap {
+            min-width: 0;
+            display: grid;
+            gap: 5px;
+            padding: 9px 10px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+            transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+        }
+
+        .ytkit-bookmark-note-wrap:focus-within {
+            border-color: rgba(62,166,255,0.22);
+            background: rgba(255,255,255,0.05);
+            box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(62,166,255,0.16);
+        }
+
+        .ytkit-bookmark-note-label {
+            color: rgba(255,255,255,0.46);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
 
         .ytkit-bookmark-note {
-            flex: 1;
             min-width: 0;
             background: transparent;
             border: none;
             color: rgba(255,255,255,0.9);
             font-size: 12px;
+            line-height: 1.45;
             outline: none;
-            padding: 2px 4px;
+            padding: 0;
         }
 
         .ytkit-bookmark-note::placeholder {
@@ -25167,8 +29019,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
         }
 
         .ytkit-bookmarks-add {
-            min-height: 28px;
-            padding: 0 10px;
+            min-height: 32px;
+            padding: 0 12px;
             color: #9bd3ff;
             border-color: rgba(62,166,255,0.18);
             background: rgba(62,166,255,0.1);
@@ -25182,15 +29034,16 @@ body.ytkit-panel-open #ytkit-settings-panel {
         .ytkit-bookmark-delete {
             appearance: none;
             -webkit-appearance: none;
-            width: 24px;
-            height: 24px;
+            width: 30px;
+            height: 30px;
             padding: 0;
             border-radius: 999px;
-            border: 1px solid transparent;
-            background: transparent;
-            color: rgba(255,255,255,0.42);
-            font-size: 15px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+            color: rgba(255,255,255,0.52);
+            font-size: 16px;
             cursor: pointer;
+            touch-action: manipulation;
             transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
             outline: none;
         }
@@ -25203,6 +29056,21 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
         .ytkit-bookmark-delete:focus-visible {
             box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(239,68,68,0.18);
+        }
+
+        @media (max-width: 720px) {
+            .ytkit-bookmarks-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .ytkit-bookmarks-actions {
+                justify-content: space-between;
+            }
+
+            .ytkit-bookmark-row {
+                grid-template-columns: minmax(0, 1fr);
+            }
         }
 
         .ytkit-transcript-panel {
@@ -25226,11 +29094,34 @@ body.ytkit-panel-open #ytkit-settings-panel {
             border-bottom: 1px solid rgba(255,255,255,0.07);
         }
 
+        .ytkit-transcript-heading {
+            min-width: 0;
+            display: grid;
+            gap: 4px;
+        }
+
+        .ytkit-transcript-eyebrow {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            min-height: 20px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.58);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
         .ytkit-transcript-title {
             color: rgba(255,255,255,0.9);
             font-size: 14px;
             font-weight: 700;
             letter-spacing: -0.01em;
+            text-wrap: balance;
         }
 
         .ytkit-transcript-toggle {
@@ -25260,6 +29151,60 @@ body.ytkit-panel-open #ytkit-settings-panel {
             box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(var(--ytkit-accent-rgb),0.2);
         }
 
+        .ytkit-transcript-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 14px 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            flex-wrap: wrap;
+        }
+
+        .ytkit-transcript-meta__pill {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 0 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.76);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        .ytkit-transcript-meta__pill[data-tone="success"] {
+            background: rgba(34,197,94,0.14);
+            border-color: rgba(34,197,94,0.24);
+            color: #ecfdf5;
+        }
+
+        .ytkit-transcript-meta__pill[data-tone="warning"] {
+            background: rgba(245,158,11,0.14);
+            border-color: rgba(245,158,11,0.24);
+            color: #fef3c7;
+        }
+
+        .ytkit-transcript-meta__pill[data-tone="danger"] {
+            background: rgba(239,68,68,0.14);
+            border-color: rgba(239,68,68,0.24);
+            color: #fee2e2;
+        }
+
+        .ytkit-transcript-meta__pill[data-tone="info"] {
+            background: rgba(59,130,246,0.14);
+            border-color: rgba(59,130,246,0.24);
+            color: #dbeafe;
+        }
+
+        .ytkit-transcript-meta__copy {
+            color: rgba(255,255,255,0.58);
+            font-size: 11px;
+            line-height: 1.55;
+        }
+
         .ytkit-transcript-panel.is-collapsed {
             max-height: none;
         }
@@ -25279,11 +29224,13 @@ body.ytkit-panel-open #ytkit-settings-panel {
             background: rgba(255,255,255,0.06);
             color: #f3f4f6;
             border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 6px;
-            padding: 4px 10px;
+            border-radius: 999px;
+            min-height: 30px;
+            padding: 0 12px;
             font: 600 11px/1 'Roboto', system-ui, sans-serif;
             letter-spacing: 0.02em;
             cursor: pointer;
+            touch-action: manipulation;
             transition: background 120ms ease, transform 120ms ease, border-color 120ms ease;
         }
         .ytkit-transcript-export__btn:hover {
@@ -25305,17 +29252,90 @@ body.ytkit-panel-open #ytkit-settings-panel {
             padding: 8px 8px 10px;
         }
 
+        .ytkit-transcript-body.is-stateful {
+            padding: 12px;
+        }
+
+        .ytkit-transcript-state {
+            display: grid;
+            gap: 6px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+        }
+
+        .ytkit-transcript-state__title {
+            color: rgba(255,255,255,0.92);
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .ytkit-transcript-state__copy {
+            color: rgba(255,255,255,0.58);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .ytkit-transcript-state__skeleton {
+            display: grid;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .ytkit-transcript-state__skeleton-line {
+            display: block;
+            height: 10px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,255,255,0.14), rgba(255,255,255,0.05));
+            background-size: 180% 100%;
+            animation: ytkit-transcript-shimmer 1.3s linear infinite;
+        }
+
+        .ytkit-transcript-state__skeleton-line:nth-child(2) {
+            width: 86%;
+        }
+
+        .ytkit-transcript-state__skeleton-line:nth-child(3) {
+            width: 92%;
+        }
+
+        .ytkit-transcript-state__skeleton-line:nth-child(4) {
+            width: 74%;
+        }
+
+        @keyframes ytkit-transcript-shimmer {
+            0% { background-position: 180% 0; }
+            100% { background-position: -20% 0; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .ytkit-transcript-state__skeleton-line {
+                animation: none;
+            }
+        }
+
         .ytkit-transcript-line {
             display: flex;
             gap: 10px;
+            width: 100%;
             padding: 7px 8px;
             border-radius: 10px;
+            border: none;
+            background: transparent;
+            text-align: left;
             cursor: pointer;
-            transition: background-color 160ms ease;
+            touch-action: manipulation;
+            transition: background-color 160ms ease, box-shadow 160ms ease;
         }
 
         .ytkit-transcript-line:hover {
             background: rgba(255,255,255,0.06);
+        }
+
+        .ytkit-transcript-line:focus-visible {
+            box-shadow: inset 0 0 0 1px rgba(var(--ytkit-accent-rgb),0.3), 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(var(--ytkit-accent-rgb),0.18);
         }
 
         .ytkit-transcript-line__ts {
@@ -25329,6 +29349,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
         }
 
         .ytkit-transcript-line__text {
+            min-width: 0;
             color: rgba(255,255,255,0.88);
             font-size: 13px;
             line-height: 1.45;
@@ -25441,10 +29462,53 @@ body.ytkit-panel-open #ytkit-settings-panel {
         }
 
         .ytkit-playlist-enhance {
+            display: grid;
+            gap: 10px;
+            margin: 6px 0 4px;
+            padding: 10px 12px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018)),
+                rgba(255,255,255,0.02);
+        }
+
+        .ytkit-playlist-enhance__heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .ytkit-playlist-enhance__title {
+            color: rgba(255,255,255,0.92);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .ytkit-playlist-enhance__status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 0 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.62);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .ytkit-playlist-enhance__actions {
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
-            padding: 6px 0 2px;
         }
 
         .ytkit-playlist-action {
@@ -25460,6 +29524,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
             font-size: 11px;
             font-weight: 700;
             cursor: pointer;
+            touch-action: manipulation;
             transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
             outline: none;
         }
@@ -25478,12 +29543,54 @@ body.ytkit-panel-open #ytkit-settings-panel {
             box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(var(--ytkit-accent-rgb),0.18);
         }
 
+        .ytkit-playlist-action[data-state="active"] {
+            color: #eefbf1;
+            border-color: rgba(34,197,94,0.26);
+            background: rgba(22,163,74,0.16);
+        }
+
+        .ytkit-playlist-action[data-state="busy"] {
+            color: rgba(226,241,255,0.96);
+            border-color: rgba(var(--ytkit-accent-rgb),0.28);
+            background: rgba(var(--ytkit-accent-rgb),0.12);
+        }
+
+        .ytkit-playlist-action[data-state="success"] {
+            color: #f4fff7;
+            border-color: rgba(34,197,94,0.28);
+            background: rgba(16,92,46,0.2);
+        }
+
+        .ytkit-playlist-action[data-state="error"] {
+            color: #fff5f5;
+            border-color: rgba(239,68,68,0.28);
+            background: rgba(127,29,29,0.2);
+        }
+
+        @media (max-width: 720px) {
+            .ytkit-playlist-enhance {
+                padding: 10px;
+            }
+
+            .ytkit-playlist-enhance__actions {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .ytkit-playlist-action:last-child {
+                grid-column: 1 / -1;
+            }
+        }
+
         .ytkit-remaining-time,
         .ytkit-playlist-duration,
         .ytkit-channel-vid-count,
+        .ytkit-lv-ratio,
+        .ytkit-sub-count-badge,
         .ytkit-age-badge {
             display: inline-flex;
             align-items: center;
+            gap: 6px;
             min-height: 22px;
             margin-left: 8px;
             padding: 0 8px;
@@ -25494,8 +29601,10 @@ body.ytkit-panel-open #ytkit-settings-panel {
             font-size: 11px;
             font-weight: 700;
             letter-spacing: 0;
+            line-height: 1.2;
             vertical-align: middle;
             white-space: nowrap;
+            font-variant-numeric: tabular-nums;
         }
 
         .ytkit-remaining-time {
@@ -25513,6 +29622,56 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
         .ytkit-age-badge {
             color: rgba(255,255,255,0.76);
+        }
+
+        .ytkit-age-badge[data-state="current"] {
+            color: #eefbf1;
+            border-color: rgba(34,197,94,0.2);
+            background: rgba(18,87,47,0.34);
+        }
+
+        .ytkit-age-badge[data-state="future"] {
+            color: #e7f0ff;
+            border-color: rgba(96,165,250,0.24);
+            background: rgba(23,59,112,0.34);
+        }
+
+        .ytkit-lv-ratio,
+        .ytkit-sub-count-badge {
+            color: rgba(255,255,255,0.88);
+            border-color: rgba(255,255,255,0.1);
+            background: rgba(12,17,26,0.56);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+        }
+
+        .ytkit-lv-ratio[data-state="excellent"] {
+            color: #f6fff8;
+            border-color: rgba(34,197,94,0.28);
+            background: rgba(16,92,46,0.34);
+        }
+
+        .ytkit-lv-ratio[data-state="strong"] {
+            color: #fef7ea;
+            border-color: rgba(250,204,21,0.24);
+            background: rgba(97,69,13,0.34);
+        }
+
+        .ytkit-lv-ratio[data-state="steady"] {
+            color: #ebf2ff;
+            border-color: rgba(96,165,250,0.22);
+            background: rgba(28,59,109,0.32);
+        }
+
+        .ytkit-meta-chip__value {
+            color: rgba(255,255,255,0.96);
+            font-weight: 800;
+        }
+
+        .ytkit-meta-chip__label {
+            color: rgba(255,255,255,0.58);
+            font-size: 10px;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
         }
 
         .ytkit-speed-badge,
@@ -25566,16 +29725,23 @@ body.ytkit-panel-open #ytkit-settings-panel {
         .ytkit-copy-title-btn {
             appearance: none;
             -webkit-appearance: none;
-            width: 28px;
-            height: 28px;
-            margin-left: 8px;
-            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 0;
+            min-width: 30px;
+            min-height: 30px;
+            margin-left: 10px;
+            padding: 0 9px;
             border-radius: 999px;
             border: 1px solid rgba(255,255,255,0.08);
             background: rgba(255,255,255,0.05);
             color: rgba(255,255,255,0.72);
+            font-family: var(--ytkit-font);
+            line-height: 1;
             cursor: pointer;
+            touch-action: manipulation;
             vertical-align: middle;
+            overflow: hidden;
             transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
             outline: none;
         }
@@ -25594,16 +29760,78 @@ body.ytkit-panel-open #ytkit-settings-panel {
             box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(var(--ytkit-accent-rgb),0.18);
         }
 
-        .ytkit-copy-title-btn.is-copied {
+        .ytkit-copy-title-btn[data-state="copied"] {
             color: #d8ffe3;
             border-color: rgba(34,197,94,0.26);
             background: rgba(22,163,74,0.16);
+        }
+
+        .ytkit-copy-title-btn[data-state="copying"] {
+            color: rgba(226,241,255,0.96);
+            border-color: rgba(var(--ytkit-accent-rgb),0.28);
+            background: rgba(var(--ytkit-accent-rgb),0.12);
+        }
+
+        .ytkit-copy-title-btn[data-state="error"] {
+            color: #fff5f5;
+            border-color: rgba(239,68,68,0.28);
+            background: rgba(127,29,29,0.2);
+        }
+
+        .ytkit-copy-title-btn:disabled {
+            cursor: progress;
+            pointer-events: none;
+        }
+
+        .ytkit-copy-title-btn__icon {
+            width: 14px;
+            height: 14px;
+            display: grid;
+            place-items: center;
+            flex-shrink: 0;
+        }
+
+        .ytkit-copy-title-btn__label {
+            max-width: 0;
+            opacity: 0;
+            overflow: hidden;
+            margin-left: 0;
+            color: inherit;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+            transition: max-width 160ms ease, opacity 160ms ease, margin-left 160ms ease;
+        }
+
+        .ytkit-copy-title-btn:hover .ytkit-copy-title-btn__label,
+        .ytkit-copy-title-btn:focus-visible .ytkit-copy-title-btn__label,
+        .ytkit-copy-title-btn[data-state="copying"] .ytkit-copy-title-btn__label,
+        .ytkit-copy-title-btn[data-state="copied"] .ytkit-copy-title-btn__label,
+        .ytkit-copy-title-btn[data-state="error"] .ytkit-copy-title-btn__label {
+            max-width: 72px;
+            opacity: 1;
+            margin-left: 6px;
         }
 
         .ytkit-copy-title-btn svg {
             width: 14px;
             height: 14px;
             display: block;
+        }
+
+        @media (max-width: 760px) {
+            .ytkit-copy-title-btn {
+                margin-left: 8px;
+            }
+
+            .ytkit-copy-title-btn:hover .ytkit-copy-title-btn__label,
+            .ytkit-copy-title-btn:focus-visible .ytkit-copy-title-btn__label,
+            .ytkit-copy-title-btn[data-state="copying"] .ytkit-copy-title-btn__label,
+            .ytkit-copy-title-btn[data-state="copied"] .ytkit-copy-title-btn__label,
+            .ytkit-copy-title-btn[data-state="error"] .ytkit-copy-title-btn__label {
+                max-width: 60px;
+            }
         }
 
         .ytkit-po-gear:hover svg {
@@ -25697,12 +29925,33 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
             #ytkit-subs-load-banner {
                 flex-wrap: wrap;
+                display: grid;
+                grid-template-columns: 1fr;
                 align-items: flex-start;
+                gap: 12px;
+                padding: 14px;
             }
 
             .ytkit-subs-load-banner__actions {
                 width: 100%;
-                justify-content: space-between;
+                justify-content: flex-start;
+            }
+
+            .ytkit-subs-load-banner__btn {
+                flex: 1 1 0;
+                justify-content: center;
+            }
+
+            #ytkit-subs-load-chip {
+                left: 10px;
+                right: 10px;
+                bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+                width: auto;
+            }
+
+            .ytkit-subs-load-chip__main,
+            .ytkit-subs-load-chip__resume {
+                min-height: 40px;
             }
 
             .ytkit-mini-player-bar {

@@ -38,6 +38,97 @@ test('_sanitizeFilename preserves Unicode and produces valid filenames', () => {
     assert.ok(source.includes("[\\x00-\\x1f]") || source.includes('\\x00-\\x1f'), '_sanitizeFilename should strip control characters');
 });
 
+test('copyVideoTitle uses a clipboard fallback path and clears reset timers', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf("id: 'copyVideoTitle'");
+    const end = source.indexOf("id: 'channelAgeDisplay'");
+    assert.ok(start > -1 && end > start, 'copyVideoTitle block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes("document.execCommand('copy')"), 'copyVideoTitle should fall back to document.execCommand(\'copy\')');
+    assert.ok(block.includes('_resetTimer'), 'copyVideoTitle should keep a reset timer for transient button states');
+    assert.ok(block.includes('this._clearResetTimer();'), 'copyVideoTitle should clear reset timers during lifecycle changes');
+});
+
+test('downloadThumbnail uses shared video id parsing and mutation retries', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf("id: 'downloadThumbnail'");
+    const end = source.indexOf("id: 'grayscaleThumbnails'");
+    assert.ok(start > -1 && end > start, 'downloadThumbnail block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes('const videoId = getVideoId();'), 'downloadThumbnail should use getVideoId() for the active video');
+    assert.ok(block.includes("addMutationRule('downloadThumbnail'"), 'downloadThumbnail should retry when the watch action row hydrates late');
+    assert.ok(block.includes('_sanitizeFilename('), 'downloadThumbnail should sanitize title-based filenames');
+});
+
+test('videoResolutionBadge supports SD and avoids direct thumbnail style mutation', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf("id: 'videoResolutionBadge'");
+    const end = source.indexOf("id: 'likeViewRatio'");
+    assert.ok(start > -1 && end > start, 'videoResolutionBadge block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes("label: 'SD'"), 'videoResolutionBadge should include an SD quality path');
+    assert.ok(block.includes("thumb.classList.add('ytkit-res-host')"), 'videoResolutionBadge should use a host class for positioning');
+    assert.ok(!block.includes("thumb.style.position = 'relative'"), 'videoResolutionBadge should not mutate thumbnail inline position styles');
+});
+
+test('playlistEnhancer restores duplicate hiding and copy fallback behavior', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf("id: 'playlistEnhancer'");
+    const end = source.indexOf("id: 'commentSearch'");
+    assert.ok(start > -1 && end > start, 'playlistEnhancer block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes('Hide Duplicates'), 'playlistEnhancer should expose a duplicate-hiding control');
+    assert.ok(block.includes("document.execCommand('copy')"), 'playlistEnhancer should fall back to document.execCommand(\'copy\') for URL copy');
+    assert.ok(block.includes("addMutationRule('playlistEnhancer'"), 'playlistEnhancer should resync when playlist panel content hydrates late');
+});
+
+test('customSpeedButtons rebinds to swapped videos and exposes pressed states', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf("id: 'customSpeedButtons'");
+    const end = source.indexOf("id: 'openInNewTab'");
+    assert.ok(start > -1 && end > start, 'customSpeedButtons block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes('_bindVideo(video)'), 'customSpeedButtons should rebind when the active video element changes');
+    assert.ok(block.includes("addMutationRule('customSpeedButtons'"), 'customSpeedButtons should resync during late watch-page hydration');
+    assert.ok(block.includes("button.setAttribute('aria-pressed'"), 'customSpeedButtons should expose active preset state via aria-pressed');
+});
+
+test('videoScreenshot exposes capture states and mutation-driven reinjection', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf("id: 'videoScreenshot'");
+    const end = source.indexOf("id: 'perChannelSpeed'");
+    assert.ok(start > -1 && end > start, 'videoScreenshot block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes("_setState('capturing')"), 'videoScreenshot should expose an explicit capturing state');
+    assert.ok(block.includes('_copyBlobToClipboard(blob)'), 'videoScreenshot should report clipboard-copy outcomes instead of silently ignoring them');
+    assert.ok(block.includes("addMutationRule('videoScreenshot'"), 'videoScreenshot should recover when player controls hydrate late');
+    assert.ok(block.includes("btn.addEventListener('click'"), 'videoScreenshot should use an event listener rather than relying on btn.onclick');
+});
+
 // ── textarea input handler: must be debounced ──
 
 test('textarea input handler uses debounce for feature reinit', () => {
