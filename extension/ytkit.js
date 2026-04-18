@@ -436,7 +436,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.11.3';
+    const YTKIT_VERSION = '3.11.4';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -21614,63 +21614,6 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         sidebar.className = 'ytkit-sidebar';
         sidebar.setAttribute('aria-label', 'Settings categories');
 
-        const sidebarCard = document.createElement('section');
-        sidebarCard.className = 'ytkit-sidebar-card';
-
-        const sidebarCardTitle = document.createElement('h2');
-        sidebarCardTitle.className = 'ytkit-sidebar-card-title';
-        sidebarCardTitle.textContent = 'Control center';
-
-        const sidebarCardCopy = document.createElement('p');
-        sidebarCardCopy.className = 'ytkit-sidebar-card-copy';
-        sidebarCardCopy.textContent = 'Find a feature fast, then flip it on to see the page respond instantly.';
-
-        const sidebarStats = document.createElement('div');
-        sidebarStats.className = 'ytkit-sidebar-stats';
-        [
-            { id: 'ytkit-sidebar-enabled-count', value: enabledTopLevelFeatures, label: 'Enabled' },
-            { id: 'ytkit-sidebar-feature-count', value: totalTopLevelFeatures, label: 'Features' },
-            { id: 'ytkit-sidebar-category-count', value: populatedCategoryCount, label: 'Sections' }
-        ].forEach((stat) => {
-            const statCard = document.createElement('div');
-            statCard.className = 'ytkit-sidebar-stat';
-            const statValue = document.createElement('span');
-            statValue.className = 'ytkit-sidebar-stat-value';
-            statValue.id = stat.id;
-            statValue.textContent = String(stat.value);
-            const statLabel = document.createElement('span');
-            statLabel.className = 'ytkit-sidebar-stat-label';
-            statLabel.textContent = stat.label;
-            statCard.appendChild(statValue);
-            statCard.appendChild(statLabel);
-            sidebarStats.appendChild(statCard);
-        });
-
-        const sidebarFootnote = document.createElement('div');
-        sidebarFootnote.className = 'ytkit-sidebar-footnote';
-        const sidebarContext = document.createElement('span');
-        sidebarContext.appendChild(document.createTextNode('Current page '));
-        const sidebarContextStrong = document.createElement('strong');
-        sidebarContextStrong.textContent = currentPageLabel;
-        sidebarContext.appendChild(sidebarContextStrong);
-        const sidebarShortcut = document.createElement('span');
-        sidebarShortcut.appendChild(document.createTextNode('Open anytime '));
-        const sidebarShortcutStrong = document.createElement('strong');
-        sidebarShortcutStrong.textContent = SETTINGS_SHORTCUTS.label;
-        sidebarShortcut.appendChild(sidebarShortcutStrong);
-        sidebarFootnote.appendChild(sidebarContext);
-        sidebarFootnote.appendChild(sidebarShortcut);
-
-        sidebarCard.appendChild(sidebarCardTitle);
-        sidebarCard.appendChild(sidebarCardCopy);
-        sidebarCard.appendChild(sidebarStats);
-        sidebarCard.appendChild(sidebarFootnote);
-        sidebar.appendChild(sidebarCard);
-
-        const sidebarDivider = document.createElement('div');
-        sidebarDivider.className = 'ytkit-sidebar-divider';
-        sidebar.appendChild(sidebarDivider);
-
         // Search box
         const searchContainer = document.createElement('div');
         searchContainer.className = 'ytkit-search-container';
@@ -24127,70 +24070,6 @@ body.ytkit-panel-open #ytkit-settings-panel {
     flex-shrink: 0;
 }
 
-.ytkit-sidebar-card {
-    padding: 14px;
-    border-radius: 18px;
-    background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)), var(--ytkit-bg-surface);
-    border: 1px solid rgba(255,255,255,0.08);
-    box-shadow: 0 14px 30px rgba(0,0,0,0.18);
-}
-
-.ytkit-sidebar-card-title {
-    margin: 0;
-    font-size: 13px;
-    font-weight: 800;
-}
-
-.ytkit-sidebar-card-copy {
-    margin: 4px 0 0;
-    font-size: 11px;
-    line-height: 1.45;
-    color: var(--ytkit-text-muted);
-}
-
-.ytkit-sidebar-stats {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0,1fr));
-    gap: 8px;
-    margin-top: 12px;
-}
-
-.ytkit-sidebar-stat {
-    padding: 9px 10px;
-    border-radius: 13px;
-    background: rgba(255,255,255,0.035);
-    border: 1px solid rgba(255,255,255,0.06);
-}
-
-.ytkit-sidebar-stat-value {
-    display: block;
-    font-size: 16px;
-    font-weight: 800;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-}
-
-.ytkit-sidebar-stat-label {
-    display: block;
-    margin-top: 5px;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--ytkit-text-muted);
-}
-
-.ytkit-sidebar-footnote {
-    margin-top: 10px;
-    padding-top: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    border-top: 1px solid rgba(255,255,255,0.06);
-    font-size: 10px;
-    color: var(--ytkit-text-muted);
-}
 
 .ytkit-sidebar-footnote strong {
     color: var(--ytkit-text-secondary);
