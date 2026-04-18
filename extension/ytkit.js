@@ -436,7 +436,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.11.1';
+    const YTKIT_VERSION = '3.11.2';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -6461,6 +6461,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const mp = document.getElementById('movie_player');
                     return mp && mp.contains(target);
                 };
+                // Scroll-up-over-video collapse: require 3 consecutive scroll-up
+                // ticks within 600ms to prevent accidental collapse from a single
+                // inertial gesture (mirrors the right-panel collapse guard).
+                let _playerCollapseCount = 0;
+                let _playerCollapseTimer = null;
+
                 this._wheelHandler = (e) => {
                     if (!this._isActive) return;
                     if (!isOverPlayer(e.target) && !isInRightContent(e.target)) return;
@@ -6476,7 +6482,28 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         this._expandSplit();
                         return;
                     }
-                    if (this._isSplit && !isInRightContent(e.target)) {
+                    if (this._isSplit) {
+                        // Scroll UP over the video → collapse split (3-tick guard)
+                        if (isOverPlayer(e.target) && e.deltaY < 0) {
+                            e.stopPropagation();
+                            _playerCollapseCount++;
+                            clearTimeout(_playerCollapseTimer);
+                            _playerCollapseTimer = setTimeout(() => { _playerCollapseCount = 0; }, 600);
+                            if (_playerCollapseCount >= 3) {
+                                _playerCollapseCount = 0;
+                                this._collapseSplit(false);
+                            }
+                            return;
+                        }
+                        // Reset collapse counter on any non-up scroll over player
+                        if (isOverPlayer(e.target)) {
+                            _playerCollapseCount = 0;
+                        }
+                        // Forward wheel events to the right panel scroll target.
+                        // Covers both:
+                        //  - scrolling over the player area (target not in right content)
+                        //  - scrolling over the right panel comments (target in right
+                        //    content but native scroll blocked by position:fixed layout)
                         const scrollEl = this._scrollTarget;
                         if (scrollEl) {
                             e.stopPropagation();
@@ -6494,8 +6521,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         this._expandSplit();
                         return;
                     }
-                    if (this._isSplit && !isInRightContent(e.target)) {
+                    if (this._isSplit) {
                         const delta = this._touchStartY - t.clientY;
+                        // Swipe down on video → collapse (pull-down gesture)
+                        if (isOverPlayer(e.target) && delta < -40) {
+                            e.stopPropagation();
+                            this._collapseSplit(false);
+                            return;
+                        }
+                        // Forward touch scroll to right panel (covers both
+                        // over-player and over-right-content targets)
                         const scrollEl = this._scrollTarget;
                         if (scrollEl) {
                             e.stopPropagation();
