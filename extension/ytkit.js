@@ -2022,7 +2022,7 @@ return response;
             }
         }
 
-        pollInterval = setInterval(poll, 1000);
+        pollInterval = setInterval(poll, 750);
         poll();
     }
 
