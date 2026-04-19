@@ -228,6 +228,8 @@
   "enableHandleRevealer": false,
   "autoDownloadOnVisit": false,
   "downloadQuality": "best",
+  "downloadVideoFormat": "mp4",
+  "downloadAudioFormat": "mp3",
   "deArrow": false,
   "daReplaceTitles": true,
   "daReplaceThumbs": true,

@@ -4,6 +4,25 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.13.0] - Download Options Popup, Format/Quality/Directory Controls
+
+### Added
+- **Download options popup** — clicking the player download button now opens a popup with Video/Audio mode tabs, format chips (MP4/MKV/WebM for video; MP3/M4A/Opus/FLAC/WAV for audio), quality selector, and a custom save directory field.
+- **Context menu expanded** — right-click player now shows "Download Video (MP4)", "Download Audio (MP3)", and "Download Options..." entries.
+- **New settings** — `downloadVideoFormat` (default: mp4), `downloadAudioFormat` (default: mp3) with corresponding feature entries in the Downloads settings group.
+- **Format passthrough** — download requests now send `format`, `quality`, and `outputDir` to the MediaDL server.
+- **Server `/config` endpoint** — GET returns current download path and available formats/qualities; PUT updates the download directory.
+- **Server format support** — video downloads now respect `format` parameter for merge output (mp4/mkv/webm). Audio downloads support mp3/m4a/opus/flac/wav with proper ffmpeg codec selection.
+- **Server quality unlocked** — removed hardcoded 1080p cap; quality parameter (`best`/`2160`/`1440`/`1080`/`720`/`480`) now fully controls yt-dlp format selection.
+- **Custom output directory** — per-download directory override with path validation and auto-creation.
+
+### Fixed
+- **Installer URLs** — MediaDLManager now points to `MediaDL` repo instead of deprecated `YouTube-Kit` installer.
+- **GitHub link** — settings panel footer link updated to Astra-Deck repo.
+- **Nyan cat GIF URL** — updated from YouTube-Kit to Astra-Deck.
+
+---
+
 ## [3.12.0] - Options Page Redesign, Security Hardening, Rebrand Cleanup
 
 ### Changed — Options Page Redesign
