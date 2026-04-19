@@ -436,7 +436,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.13.1';
+    const YTKIT_VERSION = '3.13.2';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -484,7 +484,7 @@ return response;
     }
 
     const BRAND_ASSETS = Object.freeze({
-        glyph: getBrandAssetUrl('brand-glyph.svg'),
+        glyph: getBrandAssetUrl('32.png'),
         wordmarkDark: getBrandAssetUrl('brand-wordmark-dark.svg'),
         wordmarkLight: getBrandAssetUrl('brand-wordmark-light.svg')
     });
