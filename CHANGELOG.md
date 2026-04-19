@@ -4,6 +4,33 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.12.0] - Options Page Redesign, Security Hardening, Rebrand Cleanup
+
+### Changed — Options Page Redesign
+- **Layout narrowed** from 1180px to 820px max-width for focused readability.
+- **CSS variables simplified** — renamed `--panel-bg`/`--panel-border` to `--surface`/`--border`, added `--surface-raised`, `--accent-mid`, `--accent-border`.
+- **Radii tightened** — `--radius-sm/md/lg` now 10/14/18px (was 16/22px).
+- **Shadow simplified** to single `--shadow` token (was `--shadow-lg`/`--shadow-hover`).
+- **Background gradient** simplified from 3-layer to single radial ellipse.
+- **Toggle cards** use compact single-row layout (title left, toggle right) — no more "Enabled/Disabled" text labels.
+- **Card structure refactored** — `.is-toggle` and `.is-complex` CSS classes for differentiated styling. Footer hidden until dirty/invalid for simple items.
+- **Badges trimmed** — removed per-card key badge and type badge (type badge retained only for complex items). Group tag shown inline.
+- **Description removed** from toggle and text/number cards — shown only for complex (list/json/textarea) items.
+- **Hover lift effects removed** from stat cards (false affordance on read-only content).
+- **HTML reduced** from ~1500 lines to ~1100 lines.
+
+### Security
+- **Quick Links URI scheme guard** — blocks `javascript:`, `data:`, and `vbscript:` URIs in user-configured quick link URLs.
+
+### Housekeeping
+- **Legacy branding removed** — deleted all old YTYT root-level images (banner.png, icon.png/ico/svg, favicon.ico, menu.png, icons/, images/).
+- **Userscript URLs updated** — `@namespace`, `@updateURL`, `@downloadURL` now point to `Astra-Deck` repo (was `YouTube-Kit`).
+- **manifest.json `homepage_url`** updated to Astra-Deck repo URL.
+- **package.json** renamed to `astra-deck`, added `version` field, updated repository URL.
+- **Build script** excludes `.claude-octopus` directories from staging.
+
+---
+
 ## [3.11.1] - Deep Audit, Bugfixes, and Premium Polish
 
 ### Fixed

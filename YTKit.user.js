@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         YTKit v3.11.4
-// @namespace    https://github.com/SysAdminDoc/YouTube-Kit
-// @version      3.11.4
-// @updateURL      https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/main/YTKit.user.js
-// @downloadURL    https://raw.githubusercontent.com/SysAdminDoc/YouTube-Kit/main/YTKit.user.js
+// @name         YTKit v3.12.0
+// @namespace    https://github.com/SysAdminDoc/Astra-Deck
+// @version      3.12.0
+// @updateURL      https://raw.githubusercontent.com/SysAdminDoc/Astra-Deck/main/YTKit.user.js
+// @downloadURL    https://raw.githubusercontent.com/SysAdminDoc/Astra-Deck/main/YTKit.user.js
 // @description  Ultimate YouTube customization with ad blocking, SponsorBlock, video/channel hiding, playback enhancements, and 115+ features
 // @author       Matthew Parker
 // @match        https://www.youtube.com/*
@@ -116,7 +116,7 @@
     }
 
     // ── Version ──
-    const YTKIT_VERSION = '3.11.4';
+    const YTKIT_VERSION = '3.12.0';
 
     // ── Z-Index Hierarchy ──
     const Z = {

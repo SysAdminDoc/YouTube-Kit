@@ -102,7 +102,8 @@ const STAGE_SKIP_NAMES = new Set([
     '.git',
     '.DS_Store',
     'Thumbs.db',
-    'node_modules'
+    'node_modules',
+    '.claude-octopus'
 ]);
 
 const STAGE_SKIP_SUFFIXES = [

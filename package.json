@@ -1,12 +1,13 @@
 {
   "private": true,
-  "name": "youtube-kit",
+  "name": "astra-deck",
+  "version": "3.12.0",
   "description": "Chrome/Firefox MV3 extension and Tampermonkey userscript for YouTube enhancement",
   "author": "SysAdminDoc",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/SysAdminDoc/YouTube-Kit.git"
+    "url": "https://github.com/SysAdminDoc/Astra-Deck.git"
   },
   "engines": {
     "node": ">=22"

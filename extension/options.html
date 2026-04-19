@@ -8,467 +8,281 @@
         :root {
             color-scheme: dark;
             --page-bg: #08090c;
-            --panel-bg: rgba(15, 20, 28, 0.94);
-            --panel-bg-strong: #111722;
-            --panel-border: rgba(255, 255, 255, 0.08);
+            --surface: rgba(14, 18, 26, 0.94);
+            --surface-strong: #0e1219;
+            --surface-raised: rgba(255, 255, 255, 0.04);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(255, 255, 255, 0.13);
             --text-primary: #f4f6fb;
             --text-secondary: #c8d2e1;
             --text-muted: #8894a8;
             --accent: #ff6b4a;
+            --accent-mid: #ff8060;
             --accent-soft: rgba(255, 107, 74, 0.14);
+            --accent-border: rgba(255, 107, 74, 0.3);
             --info: #6aa9ff;
             --warning: #ffbe7a;
             --success: #35c77f;
             --error: #ff7480;
-            --radius-md: 16px;
-            --radius-lg: 22px;
-            --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.34);
-            --shadow-hover: 0 26px 54px rgba(0, 0, 0, 0.42);
-            /* Double-halo ring reads as a crisp accent outline in both light and
-               dark contexts and sits above the surface blur without bleed. */
+            --radius-sm: 10px;
+            --radius-md: 14px;
+            --radius-lg: 18px;
+            --shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
             --focus-ring: 0 0 0 2px rgba(8, 9, 12, 0.98), 0 0 0 4px rgba(255, 107, 74, 0.55);
             --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
             --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-            --font-sans: 'Aptos Display', 'Aptos', 'Segoe UI Variable Display', 'Avenir Next', 'Trebuchet MS', sans-serif;
+            --font: 'Aptos Display', 'Aptos', 'Segoe UI Variable Display', 'Avenir Next', system-ui, sans-serif;
         }
 
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
 
         body {
             margin: 0;
             min-height: 100vh;
-            font-family: var(--font-sans);
+            font-family: var(--font);
             color: var(--text-primary);
             background:
-                radial-gradient(circle at top left, rgba(255, 107, 74, 0.08), transparent 24%),
-                radial-gradient(circle at top right, rgba(89, 146, 255, 0.06), transparent 22%),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 14%),
+                radial-gradient(ellipse at 0% 0%, rgba(255, 107, 74, 0.07) 0%, transparent 50%),
                 var(--page-bg);
-            padding: 24px 18px 34px;
+            padding: 28px 20px 48px;
         }
 
         .page-shell {
-            max-width: 1180px;
+            max-width: 820px;
             margin: 0 auto;
         }
 
-        .hero {
-            display: grid;
-            grid-template-columns: minmax(0, 1.3fr) minmax(220px, 0.7fr);
-            gap: 14px;
-            margin-bottom: 14px;
-        }
+        /* ── App Bar ── */
 
-        .hero-card,
-        .panel,
-        .action-card {
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
-                var(--panel-bg);
-            border: 1px solid var(--panel-border);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-lg);
-            transition:
-                transform 260ms var(--ease-out),
-                border-color 220ms var(--ease-out),
-                box-shadow 260ms var(--ease-out);
-        }
-
-        /* Action cards contain real affordances (their buttons), so they
-           elevate on hover to mirror the button's interactivity. Stat cards
-           are pure readouts — no hover treatment to avoid false affordance. */
-        .action-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(255, 255, 255, 0.12);
-            box-shadow: var(--shadow-hover);
-        }
-
-        .action-card:focus-within {
-            border-color: rgba(255, 107, 74, 0.24);
-        }
-
-        .hero-card {
-            padding: 20px;
-        }
-
-        .hero-lockup {
+        .app-bar {
             display: flex;
             align-items: center;
-            gap: 12px;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 0 0 20px;
+            flex-wrap: wrap;
         }
 
-        .hero-mark-shell {
-            width: 48px;
-            height: 48px;
+        .app-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .brand-icon-shell {
+            width: 40px;
+            height: 40px;
             display: grid;
             place-items: center;
-            border-radius: 16px;
-            background:
-                linear-gradient(145deg, rgba(255, 107, 74, 0.18), rgba(102, 214, 255, 0.04)),
-                rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            border-radius: 13px;
+            background: linear-gradient(145deg, rgba(255, 107, 74, 0.16), rgba(102, 169, 255, 0.05));
+            border: 1px solid var(--border);
         }
 
-        .hero-mark {
-            width: 28px;
-            height: 28px;
-            display: block;
-        }
+        .brand-icon { display: block; }
 
-        .hero-branding {
-            min-width: 0;
-        }
-
-        .hero-kicker {
-            display: block;
-            margin-top: 4px;
-            color: var(--text-muted);
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        .eyebrow {
-            display: inline-flex;
-            padding: 5px 9px;
-            border-radius: 999px;
-            background: var(--accent-soft);
-            border: 1px solid rgba(255, 107, 74, 0.2);
-            color: #ffb59f;
-            font-size: 10px;
-            font-weight: 800;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-        }
-
-        h1 {
-            margin: 14px 0 8px;
-            font-size: clamp(28px, 4vw, 40px);
-            line-height: 1;
-            letter-spacing: -0.045em;
-            text-wrap: balance;
-        }
-
-        .brand-accent {
-            background: linear-gradient(135deg, #ff8f70, #ff5f4a);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .hero-copy {
-            margin: 0;
-            max-width: 52ch;
-            color: var(--text-muted);
-            font-size: 13px;
-            line-height: 1.6;
-        }
-
-        .hero-pills {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-top: 14px;
-        }
-
-        .pill {
-            padding: 6px 10px;
-            border-radius: 999px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(255, 255, 255, 0.04);
-            color: var(--text-secondary);
-            font-size: 11px;
-            font-weight: 700;
-        }
-
-        .version-card {
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            padding: 20px;
-        }
-
-        .version-label {
-            color: var(--text-muted);
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-        }
-
-        .version-value {
-            margin-top: 8px;
-            font-size: clamp(30px, 3vw, 38px);
-            font-weight: 800;
-            letter-spacing: -0.06em;
-            font-variant-numeric: tabular-nums;
-        }
-
-        .version-note {
-            margin: 0;
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.55;
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
-            gap: 10px;
-            margin-bottom: 14px;
-        }
-
-        .stat-card {
-            padding: 14px;
-            border-radius: var(--radius-md);
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
-                var(--panel-bg-strong);
-            border: 1px solid rgba(255, 255, 255, 0.07);
-        }
-
-        .stat-label {
-            display: block;
-            color: var(--text-muted);
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-        }
-
-        .stat-value {
-            display: block;
-            margin-top: 6px;
-            font-size: clamp(20px, 2.4vw, 28px);
-            font-weight: 800;
-            letter-spacing: -0.05em;
-            font-variant-numeric: tabular-nums;
-        }
-
-        .stat-subtext {
-            display: block;
-            margin-top: 4px;
-            color: var(--text-muted);
-            font-size: 11px;
-        }
-
-        .action-grid {
-            display: grid;
-            /* auto-fit with a tighter minimum keeps the four cards on one row
-               on ~900px+ viewports. The explicit 4-column cap prevents a
-               lonely fifth/sixth column appearing on ultrawide displays if
-               more cards are added later. */
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 12px;
-            margin-bottom: 14px;
-        }
-
-        @media (min-width: 1240px) {
-            .action-grid {
-                grid-template-columns: repeat(4, minmax(0, 1fr));
-            }
-        }
-
-        .action-card {
-            padding: 16px;
-        }
-
-        .action-title {
-            margin: 0 0 6px;
-            font-size: 16px;
+        .brand-name {
+            font-size: 17px;
             font-weight: 800;
             letter-spacing: -0.03em;
-            text-wrap: balance;
         }
 
-        .action-copy {
-            margin: 0 0 12px;
+        .brand-version {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.04em;
+            padding: 3px 7px;
+            border-radius: 999px;
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+        }
+
+        .app-stats {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .stat-unit {
             color: var(--text-muted);
             font-size: 12px;
-            line-height: 1.55;
+            white-space: nowrap;
         }
 
-        .button-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
+        .stat-unit strong {
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
         }
+
+        .stat-div {
+            color: rgba(255, 255, 255, 0.15);
+            font-size: 12px;
+            user-select: none;
+        }
+
+        /* ── Main Action ── */
+
+        .main-action {
+            margin-bottom: 12px;
+        }
+
+        .cta-button {
+            width: 100%;
+            min-height: 50px;
+            padding: 0 20px;
+            border: 1px solid rgba(255, 130, 100, 0.36);
+            border-radius: var(--radius-md);
+            background: linear-gradient(135deg, rgba(255, 143, 112, 0.26), rgba(255, 95, 74, 0.30));
+            color: #fff;
+            font: inherit;
+            font-size: 14px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            cursor: pointer;
+            box-shadow: 0 8px 24px rgba(255, 95, 74, 0.12);
+            transition:
+                background-color 180ms var(--ease-out),
+                box-shadow 180ms var(--ease-out),
+                border-color 180ms var(--ease-out),
+                transform 140ms var(--ease-out);
+            outline: none;
+            touch-action: manipulation;
+        }
+
+        .cta-button:hover {
+            background: linear-gradient(135deg, rgba(255, 143, 112, 0.34), rgba(255, 95, 74, 0.38));
+            border-color: rgba(255, 143, 112, 0.5);
+            box-shadow: 0 12px 28px rgba(255, 95, 74, 0.18);
+        }
+
+        .cta-button:active {
+            transform: scale(0.99);
+        }
+
+        .cta-button:focus-visible {
+            box-shadow: var(--focus-ring);
+        }
+
+        /* ── Actions Row ── */
+
+        .actions-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .actions-end { margin-left: auto; }
 
         button {
             min-height: 38px;
             padding: 0 14px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--surface-raised);
             color: var(--text-primary);
             font: inherit;
             font-size: 12px;
             font-weight: 700;
             cursor: pointer;
             transition:
-                border-color 180ms var(--ease-out),
-                background-color 180ms var(--ease-out),
-                box-shadow 180ms var(--ease-out),
-                color 180ms var(--ease-out),
-                transform 160ms var(--ease-out);
+                border-color 160ms var(--ease-out),
+                background-color 160ms var(--ease-out),
+                box-shadow 160ms var(--ease-out),
+                transform 140ms var(--ease-out);
             outline: none;
             touch-action: manipulation;
             -webkit-tap-highlight-color: transparent;
         }
 
         button:hover {
-            border-color: rgba(255, 255, 255, 0.14);
-            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--border-hover);
+            background: rgba(255, 255, 255, 0.07);
         }
 
-        button:active:not(:disabled) {
-            transform: scale(0.985);
-        }
+        button:active:not(:disabled) { transform: scale(0.985); }
 
         button:disabled {
-            opacity: 0.46;
+            opacity: 0.42;
             cursor: not-allowed;
             pointer-events: none;
         }
 
         button[aria-busy="true"] {
-            opacity: 0.92;
+            opacity: 0.9;
             cursor: progress;
-            position: relative;
         }
 
-        /* Inline spinner glyph so long-running actions (export, import, save)
-           read as "working" even when the label hasn't changed yet. Kept as a
-           pseudo-element so no JS needs to manage DOM insertion. */
         button[aria-busy="true"]::before {
             content: '';
             display: inline-block;
-            width: 12px;
-            height: 12px;
-            margin-right: 8px;
+            width: 11px;
+            height: 11px;
+            margin-right: 7px;
             vertical-align: -1px;
             border-radius: 50%;
             border: 1.5px solid currentColor;
             border-top-color: transparent;
-            animation: ytkit-spinner 700ms linear infinite;
+            animation: spin 700ms linear infinite;
         }
 
-        @keyframes ytkit-spinner {
-            to { transform: rotate(360deg); }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
         button.primary {
-            background: linear-gradient(135deg, rgba(255, 143, 112, 0.28), rgba(255, 95, 74, 0.32));
-            border-color: rgba(255, 143, 112, 0.38);
+            background: linear-gradient(135deg, rgba(255, 143, 112, 0.26), rgba(255, 95, 74, 0.30));
+            border-color: rgba(255, 143, 112, 0.36);
             color: #fff;
-            box-shadow: 0 10px 22px rgba(255, 95, 74, 0.14);
+            box-shadow: 0 6px 18px rgba(255, 95, 74, 0.12);
         }
 
         button.primary:hover {
-            background: linear-gradient(135deg, rgba(255, 143, 112, 0.38), rgba(255, 95, 74, 0.42));
-            border-color: rgba(255, 143, 112, 0.52);
-            box-shadow: 0 14px 26px rgba(255, 95, 74, 0.22);
-        }
-
-        button.primary:active:not(:disabled) {
-            box-shadow: 0 6px 14px rgba(255, 95, 74, 0.18);
+            background: linear-gradient(135deg, rgba(255, 143, 112, 0.34), rgba(255, 95, 74, 0.38));
+            border-color: rgba(255, 143, 112, 0.5);
+            box-shadow: 0 10px 22px rgba(255, 95, 74, 0.18);
         }
 
         button.danger {
             color: #fff;
-            background: rgba(255, 116, 128, 0.12);
-            border-color: rgba(255, 116, 128, 0.24);
+            background: rgba(255, 116, 128, 0.1);
+            border-color: rgba(255, 116, 128, 0.22);
         }
 
         button.danger:hover {
-            background: rgba(255, 116, 128, 0.18);
-            border-color: rgba(255, 116, 128, 0.34);
+            background: rgba(255, 116, 128, 0.16);
+            border-color: rgba(255, 116, 128, 0.32);
         }
 
-        .panel {
-            padding: 18px 20px;
-        }
+        button:focus-visible { box-shadow: var(--focus-ring); border-color: var(--accent-border); }
 
-        .panel h2 {
-            margin: 0 0 10px;
-            font-size: 18px;
-            font-weight: 800;
-            letter-spacing: -0.03em;
-        }
-
-        .panel p {
-            margin: 0;
-            color: var(--text-muted);
-            font-size: 13px;
-            line-height: 1.7;
-        }
-
-        .notes-list {
-            margin: 12px 0 0;
-            padding: 0;
-            list-style: none;
-            display: grid;
-            gap: 8px;
-        }
-
-        .notes-list li {
-            padding: 10px 12px;
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.035);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            color: var(--text-secondary);
-            font-size: 12px;
-            line-height: 1.55;
-        }
-
-        .notes-list strong {
-            color: var(--text-primary);
-        }
+        /* ── Page Status ── */
 
         .status {
-            margin-top: 14px;
-            padding: 12px 14px;
-            border-radius: 14px;
-            display: none;
+            padding: 10px 14px;
+            border-radius: var(--radius-sm);
             font-size: 12px;
             font-weight: 700;
-            line-height: 1.55;
+            line-height: 1.5;
+            display: none;
         }
 
         .status.success,
         .status.error,
-        .status.info {
-            animation: ytkit-fade-down 220ms var(--ease-out) both;
+        .status.info { animation: fade-down 200ms var(--ease-out) both; }
+
+        .status.success { display: block; color: #d7ffe8; background: rgba(53, 199, 127, 0.1); border: 1px solid rgba(53, 199, 127, 0.22); }
+        .status.error   { display: block; color: #ffe0e4; background: rgba(255, 116, 128, 0.1); border: 1px solid rgba(255, 116, 128, 0.22); }
+        .status.info    { display: block; color: #ddecff; background: rgba(89, 146, 255, 0.1);  border: 1px solid rgba(89, 146, 255, 0.2);  }
+
+        @keyframes fade-down {
+            from { opacity: 0; transform: translateY(-4px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
 
-        .status.success {
-            display: block;
-            color: #d7ffe8;
-            background: rgba(53, 199, 127, 0.12);
-            border: 1px solid rgba(53, 199, 127, 0.26);
-        }
+        /* ── Settings Modal Shell ── */
 
-        .status.error {
-            display: block;
-            color: #ffe0e4;
-            background: rgba(255, 116, 128, 0.12);
-            border: 1px solid rgba(255, 116, 128, 0.26);
-        }
-
-        .status.info {
-            display: block;
-            color: #ddecff;
-            background: rgba(89, 146, 255, 0.12);
-            border: 1px solid rgba(89, 146, 255, 0.24);
-        }
-
-        .settings-modal-shell[hidden] {
-            display: none;
-        }
+        .settings-modal-shell[hidden] { display: none; }
 
         .settings-modal-shell {
             position: fixed;
@@ -479,142 +293,119 @@
         .settings-modal-backdrop {
             position: absolute;
             inset: 0;
-            background:
-                radial-gradient(circle at top left, rgba(255, 107, 74, 0.1), transparent 26%),
-                linear-gradient(180deg, rgba(4, 7, 10, 0.74), rgba(4, 7, 10, 0.9));
-            animation: ytkit-backdrop-fade 220ms var(--ease-out) both;
+            background: rgba(4, 6, 10, 0.78);
+            animation: backdrop-in 200ms var(--ease-out) both;
         }
+
+        @keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
 
         .settings-modal {
             position: relative;
-            width: min(1120px, calc(100vw - 20px));
-            max-height: calc(100vh - 20px);
-            margin: 10px auto;
+            width: min(1120px, calc(100vw - 24px));
+            max-height: calc(100vh - 24px);
+            margin: 12px auto;
             overflow: hidden;
-            border-radius: 22px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
-                rgba(8, 11, 16, 0.98);
-            box-shadow: 0 26px 60px rgba(0, 0, 0, 0.48);
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            background: rgba(8, 11, 16, 0.98);
+            box-shadow: 0 28px 64px rgba(0, 0, 0, 0.5);
             display: grid;
             grid-template-rows: auto auto 1fr;
             overscroll-behavior: contain;
-            animation: ytkit-modal-enter 260ms var(--ease-out) both;
+            animation: modal-in 240ms var(--ease-out) both;
         }
 
-        @keyframes ytkit-modal-enter {
-            from { opacity: 0; transform: translateY(12px) scale(0.98); }
+        @keyframes modal-in {
+            from { opacity: 0; transform: translateY(10px) scale(0.985); }
             to   { opacity: 1; transform: translateY(0) scale(1); }
         }
 
-        @keyframes ytkit-backdrop-fade {
-            from { opacity: 0; }
-            to   { opacity: 1; }
-        }
+        /* ── Modal Header (compact single row) ── */
 
         .settings-modal-header {
             display: flex;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 14px 16px 12px;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         }
 
-        .settings-modal-brand {
-            min-width: 0;
-        }
-
-        .settings-modal-eyebrow {
-            display: none;
-        }
-
         .settings-modal-title {
-            margin: 0 0 4px;
-            font-size: clamp(18px, 1.8vw, 24px);
-            line-height: 1.05;
-            letter-spacing: -0.04em;
-            text-wrap: balance;
-        }
-
-        .settings-modal-summary {
             margin: 0;
-            max-width: 58ch;
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.55;
-        }
-
-        .settings-modal-header-actions {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 8px;
+            font-size: 15px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
             flex-shrink: 0;
         }
 
         .settings-chip-row {
             display: flex;
-            gap: 8px;
+            align-items: center;
+            gap: 6px;
             flex-wrap: wrap;
-            justify-content: flex-end;
+            margin-left: 4px;
         }
 
         .settings-chip {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 6px 9px;
+            gap: 4px;
+            padding: 4px 8px;
             border-radius: 999px;
             background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            color: var(--text-secondary);
-            font-size: 9px;
-            font-weight: 800;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
         }
 
         .settings-chip strong {
             color: var(--text-primary);
-            font-size: 10px;
-            letter-spacing: 0;
             font-variant-numeric: tabular-nums;
+            letter-spacing: 0;
         }
 
         .settings-chip-problem {
             color: #ffd4d9;
-            background: rgba(255, 116, 128, 0.12);
-            border-color: rgba(255, 116, 128, 0.24);
+            background: rgba(255, 116, 128, 0.1);
+            border-color: rgba(255, 116, 128, 0.22);
         }
+
+        /* Pushes icon-button to far right */
+        .settings-chip-row + .icon-button { margin-left: auto; }
 
         .icon-button {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 34px;
-            height: 34px;
+            width: 32px;
+            height: 32px;
+            min-height: 32px;
             padding: 0;
-            border-radius: 12px;
+            border-radius: var(--radius-sm);
             font-size: 18px;
             line-height: 1;
-            color: var(--text-secondary);
+            color: var(--text-muted);
+            flex-shrink: 0;
         }
 
         .icon-button:hover {
             color: var(--text-primary);
-            background: rgba(255, 255, 255, 0.1);
-            border-color: rgba(255, 255, 255, 0.16);
+            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--border-hover);
         }
+
+        /* ── Modal Toolbar ── */
 
         .settings-modal-toolbar {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 10px 16px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-            background: rgba(255, 255, 255, 0.015);
+            gap: 8px;
+            padding: 9px 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.012);
         }
 
         .settings-search-shell {
@@ -625,26 +416,19 @@
 
         .settings-search-input {
             width: 100%;
-            min-height: 38px;
-            padding: 0 38px;
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(255, 255, 255, 0.04);
+            min-height: 34px;
+            padding: 0 34px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.035);
             color: var(--text-primary);
             font: inherit;
             font-size: 12px;
-            transition:
-                border-color 180ms var(--ease-out),
-                background-color 180ms var(--ease-out);
+            transition: border-color 160ms var(--ease-out), background-color 160ms var(--ease-out);
         }
 
-        .settings-search-input:hover {
-            background: rgba(255, 255, 255, 0.06);
-        }
-
-        .settings-search-input::placeholder {
-            color: var(--text-muted);
-        }
+        .settings-search-input:hover { background: rgba(255, 255, 255, 0.05); }
+        .settings-search-input::placeholder { color: var(--text-muted); }
 
         .settings-search-icon,
         .settings-search-clear {
@@ -654,13 +438,14 @@
         }
 
         .settings-search-icon {
-            left: 12px;
+            left: 11px;
             color: var(--text-muted);
             pointer-events: none;
+            opacity: 0.7;
         }
 
         .settings-search-clear {
-            right: 8px;
+            right: 6px;
             width: 22px;
             height: 22px;
             min-height: 22px;
@@ -673,76 +458,71 @@
             box-shadow: none;
         }
 
-        .settings-search-clear:hover {
-            background: rgba(255, 255, 255, 0.08);
-            color: var(--text-primary);
-        }
+        .settings-search-clear:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-primary); }
 
-        .settings-toolbar-actions {
-            justify-content: flex-end;
-        }
+        .settings-toolbar-actions { justify-content: flex-end; }
+
+        /* ── Modal Body ── */
 
         .settings-modal-body {
             display: grid;
-            grid-template-columns: 220px minmax(0, 1fr);
+            grid-template-columns: 196px minmax(0, 1fr);
             min-height: 0;
         }
 
+        /* ── Sidebar / Group Nav ── */
+
         .settings-groups {
-            padding: 10px 8px 10px 10px;
-            border-right: 1px solid rgba(255, 255, 255, 0.06);
-            overflow: auto;
+            padding: 8px 6px 8px 8px;
+            border-right: 1px solid rgba(255, 255, 255, 0.055);
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 2px;
             overscroll-behavior: contain;
             scrollbar-width: thin;
-            scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
-            scrollbar-gutter: stable;
+            scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
         }
 
         .settings-group-button {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
+            display: flex;
             align-items: center;
-            gap: 10px;
+            justify-content: space-between;
+            gap: 8px;
             width: 100%;
-            min-height: 36px;
+            min-height: 32px;
             padding: 0 10px;
-            border-radius: 12px;
+            border-radius: 8px;
             border: 1px solid transparent;
             background: transparent;
             text-align: left;
-            color: var(--text-secondary);
-            font-size: 11px;
+            color: var(--text-muted);
+            font-size: 11.5px;
             font-weight: 700;
-            transition:
-                border-color 180ms var(--ease-out),
-                background-color 180ms var(--ease-out),
-                color 180ms var(--ease-out),
-                transform 160ms var(--ease-out);
+            letter-spacing: -0.01em;
+            transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), border-color 160ms var(--ease-out);
         }
 
-        .settings-group-button:hover {
-            color: var(--text-primary);
-        }
+        .settings-group-button:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.04); }
 
         .settings-group-button.active {
-            border-color: rgba(255, 255, 255, 0.1);
-            background: rgba(255, 255, 255, 0.05);
             color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.055);
+            border-color: rgba(255, 255, 255, 0.09);
         }
 
         .settings-group-count {
-            padding: 3px 6px;
+            padding: 2px 5px;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.06);
+            background: rgba(255, 255, 255, 0.06);
             color: var(--text-muted);
             font-size: 9px;
             font-weight: 800;
             font-variant-numeric: tabular-nums;
+            flex-shrink: 0;
         }
+
+        /* ── Settings Editor ── */
 
         .settings-editor {
             display: flex;
@@ -752,11 +532,13 @@
             overflow: hidden;
         }
 
+        /* ── Modal Status Banner ── */
+
         .settings-modal-status {
             display: none;
-            margin: 10px 12px 0;
-            padding: 10px 12px;
-            border-radius: 12px;
+            margin: 8px 10px 0;
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
             font-size: 11px;
             font-weight: 700;
             line-height: 1.5;
@@ -764,270 +546,222 @@
 
         .settings-modal-status.success,
         .settings-modal-status.error,
-        .settings-modal-status.info {
-            animation: ytkit-fade-down 220ms var(--ease-out) both;
-        }
+        .settings-modal-status.info { animation: fade-down 200ms var(--ease-out) both; }
 
-        .settings-modal-status.success {
-            display: block;
-            color: #d7ffe8;
-            background: rgba(53, 199, 127, 0.12);
-            border: 1px solid rgba(53, 199, 127, 0.26);
-        }
+        .settings-modal-status.success { display: block; color: #d7ffe8; background: rgba(53, 199, 127, 0.1); border: 1px solid rgba(53, 199, 127, 0.22); }
+        .settings-modal-status.error   { display: block; color: #ffe0e4; background: rgba(255, 116, 128, 0.1); border: 1px solid rgba(255, 116, 128, 0.22); }
+        .settings-modal-status.info    { display: block; color: #ddecff; background: rgba(89, 146, 255, 0.1);  border: 1px solid rgba(89, 146, 255, 0.2);  }
 
-        .settings-modal-status.error {
-            display: block;
-            color: #ffe0e4;
-            background: rgba(255, 116, 128, 0.12);
-            border: 1px solid rgba(255, 116, 128, 0.26);
-        }
-
-        .settings-modal-status.info {
-            display: block;
-            color: #ddecff;
-            background: rgba(89, 146, 255, 0.12);
-            border: 1px solid rgba(89, 146, 255, 0.24);
-        }
-
-        @keyframes ytkit-fade-down {
-            from { opacity: 0; transform: translateY(-4px); }
-            to   { opacity: 1; transform: translateY(0); }
-        }
+        /* ── Workspace Banner (slim indicator bar) ── */
 
         .settings-workspace-banner {
             display: flex;
-            justify-content: space-between;
-            gap: 12px;
             align-items: center;
-            margin: 12px 12px 0;
-            padding: 12px 14px;
-            border-radius: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.07);
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
-                rgba(14, 18, 25, 0.92);
-            /* Cross-fade between warning / error / filtered / in-sync variants
-               so toggling a setting doesn't feel like a hard cut. */
-            transition:
-                border-color 240ms var(--ease-out),
-                background-color 240ms var(--ease-out);
-        }
-
-        .settings-workspace-title,
-        .settings-workspace-note {
-            transition: color 240ms var(--ease-out);
+            justify-content: space-between;
+            gap: 8px;
+            margin: 8px 10px 0;
+            padding: 7px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            background: rgba(255, 255, 255, 0.025);
+            transition: border-color 220ms var(--ease-out), background-color 220ms var(--ease-out);
+            flex-shrink: 0;
         }
 
         .settings-workspace-copy {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
             min-width: 0;
-            display: grid;
-            gap: 3px;
+            flex-wrap: wrap;
         }
 
         .settings-workspace-title {
-            color: var(--text-primary);
-            font-size: 12px;
+            color: var(--text-secondary);
+            font-size: 11px;
             font-weight: 800;
-            letter-spacing: -0.02em;
+            letter-spacing: -0.01em;
+            white-space: nowrap;
+            transition: color 220ms var(--ease-out);
         }
 
         .settings-workspace-note {
             color: var(--text-muted);
             font-size: 11px;
-            line-height: 1.5;
-            text-wrap: pretty;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            transition: color 220ms var(--ease-out);
         }
 
-        .settings-workspace-banner.is-warning {
-            border-color: rgba(255, 107, 74, 0.2);
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)),
-                rgba(24, 18, 18, 0.94);
+        .settings-workspace-banner.is-warning { border-color: rgba(255, 107, 74, 0.18); background: rgba(255, 107, 74, 0.05); }
+        .settings-workspace-banner.is-warning .settings-workspace-title { color: #ffd1c5; }
+        .settings-workspace-banner.is-error { border-color: rgba(255, 116, 128, 0.22); background: rgba(255, 116, 128, 0.06); }
+        .settings-workspace-banner.is-error .settings-workspace-title { color: #ffe0e4; }
+        .settings-workspace-banner.is-filtered { border-color: rgba(106, 169, 255, 0.18); background: rgba(106, 169, 255, 0.04); }
+        .settings-workspace-banner.is-filtered .settings-workspace-title { color: #ddecff; }
+
+        .settings-tertiary-button {
+            min-height: 26px;
+            padding: 0 10px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+            flex-shrink: 0;
         }
 
-        .settings-workspace-banner.is-warning .settings-workspace-title {
-            color: #ffd1c5;
-        }
-
-        .settings-workspace-banner.is-error {
-            border-color: rgba(255, 116, 128, 0.26);
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)),
-                rgba(31, 15, 19, 0.94);
-        }
-
-        .settings-workspace-banner.is-error .settings-workspace-title {
-            color: #ffe0e4;
-        }
-
-        .settings-workspace-banner.is-filtered {
-            border-color: rgba(106, 169, 255, 0.22);
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)),
-                rgba(14, 17, 26, 0.94);
-        }
-
-        .settings-workspace-banner.is-filtered .settings-workspace-title {
-            color: #ddecff;
-        }
+        /* ── Settings List ── */
 
         .settings-list {
-            padding: 12px;
-            overflow: auto;
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 10px;
-            align-content: start;
+            padding: 8px 10px 12px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
             overscroll-behavior: contain;
             scrollbar-width: thin;
-            scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
-            /* Reserve gutter so cards don't jitter horizontally when the
-               editor transitions between short and tall states (e.g. after
-               restore-defaults or a wide search). */
+            scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
             scrollbar-gutter: stable;
         }
+
+        /* ── Empty State ── */
 
         .settings-empty {
             display: grid;
             place-items: center;
-            min-height: 240px;
+            min-height: 200px;
             padding: 24px;
             color: var(--text-muted);
             text-align: center;
         }
 
-        .settings-empty-inner {
-            max-width: 340px;
-        }
+        .settings-empty-inner { max-width: 300px; }
 
         .settings-empty-eyebrow {
             display: inline-flex;
-            padding: 5px 9px;
+            padding: 4px 8px;
             border-radius: 999px;
-            background: rgba(106, 169, 255, 0.12);
-            border: 1px solid rgba(106, 169, 255, 0.2);
+            background: rgba(106, 169, 255, 0.1);
+            border: 1px solid rgba(106, 169, 255, 0.18);
             color: #ddecff;
-            font-size: 10px;
-            font-weight: 800;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        .settings-empty-title {
-            margin: 12px 0 6px;
-            color: var(--text-primary);
-            font-size: 18px;
-            font-weight: 800;
-            letter-spacing: -0.04em;
-            text-wrap: balance;
-        }
-
-        .settings-empty-copy {
-            margin: 0;
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.6;
-            text-wrap: pretty;
-        }
-
-        .settings-item {
-            display: grid;
-            gap: 10px;
-            padding: 12px;
-            border-radius: 14px;
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
-                rgba(11, 16, 23, 0.88);
-            border: 1px solid rgba(255, 255, 255, 0.07);
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-            transition:
-                border-color 220ms var(--ease-out),
-                background-color 220ms var(--ease-out),
-                box-shadow 220ms var(--ease-out);
-        }
-
-        .settings-item:hover {
-            border-color: rgba(255, 255, 255, 0.12);
-        }
-
-        .settings-item:focus-within {
-            border-color: rgba(255, 107, 74, 0.28);
-        }
-
-        .settings-item.is-dirty {
-            border-color: rgba(255, 107, 74, 0.2);
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
-                rgba(19, 18, 20, 0.9);
-            box-shadow:
-                inset 0 1px 0 rgba(255, 255, 255, 0.03),
-                0 0 0 1px rgba(255, 107, 74, 0.08);
-        }
-
-        .settings-item.is-invalid {
-            border-color: rgba(255, 116, 128, 0.26);
-            box-shadow:
-                inset 0 1px 0 rgba(255, 255, 255, 0.03),
-                0 0 0 1px rgba(255, 116, 128, 0.09);
-        }
-
-        .settings-item-header {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 12px;
-        }
-
-        .settings-item-copy {
-            min-width: 0;
-        }
-
-        .settings-item-title {
-            margin: 0 0 4px;
-            font-size: 13px;
-            font-weight: 800;
-            letter-spacing: -0.03em;
-        }
-
-        .settings-item-meta {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-
-        .settings-item-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 7px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            color: var(--text-muted);
             font-size: 9px;
             font-weight: 800;
             letter-spacing: 0.08em;
             text-transform: uppercase;
         }
 
-        .settings-item-badge-key {
-            color: #dde6f2;
-            background: rgba(255, 255, 255, 0.06);
+        .settings-empty-title {
+            margin: 10px 0 5px;
+            color: var(--text-primary);
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            text-wrap: balance;
         }
 
-        .settings-item-badge-group {
-            color: #ffd3c8;
-            background: rgba(255, 107, 74, 0.12);
-            border-color: rgba(255, 107, 74, 0.2);
+        .settings-empty-copy { margin: 0 0 12px; font-size: 12px; line-height: 1.55; }
+
+        /* ── Settings Items ── */
+
+        .settings-item {
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(255, 255, 255, 0.065);
+            background: rgba(255, 255, 255, 0.025);
+            transition: border-color 180ms var(--ease-out);
         }
 
-        .settings-item-badge-type {
-            color: #ddecff;
-            background: rgba(106, 169, 255, 0.1);
-            border-color: rgba(106, 169, 255, 0.16);
+        .settings-item:hover { border-color: rgba(255, 255, 255, 0.1); }
+        .settings-item:focus-within { border-color: rgba(255, 107, 74, 0.24); }
+        .settings-item.is-dirty { border-color: rgba(255, 107, 74, 0.2); background: rgba(255, 107, 74, 0.03); }
+        .settings-item.is-invalid { border-color: rgba(255, 116, 128, 0.24); background: rgba(255, 116, 128, 0.03); }
+
+        /* Toggle variant — compact row */
+        .settings-item.is-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 9px 12px;
+            min-height: 38px;
+        }
+
+        .settings-item.is-toggle .settings-item-title-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+            flex: 1;
+        }
+
+        .settings-item.is-toggle .settings-item-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .settings-item.is-toggle > .settings-item-footer {
+            flex-basis: 100%;
+            padding-bottom: 3px;
+            margin-top: -4px;
+        }
+
+        /* Non-toggle variants — vertical layout */
+        .settings-item:not(.is-toggle) {
+            padding: 11px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .settings-item-title-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+
+        .settings-item-title {
+            margin: 0;
+            font-size: 12.5px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Quiet group label */
+        .settings-item-group {
+            font-size: 9.5px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            opacity: 0.55;
+            white-space: nowrap;
+        }
+
+        /* State badge (pending save / needs fix) */
+        .settings-item-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 6px;
+            border-radius: 999px;
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
         }
 
         .settings-item-state {
             color: #ffb59f;
+            background: rgba(255, 107, 74, 0.12);
+            border: 1px solid rgba(255, 107, 74, 0.2);
         }
 
         .settings-item-state.is-problem {
@@ -1036,56 +770,63 @@
             border-color: rgba(255, 116, 128, 0.22);
         }
 
+        /* Type badge — only for complex types */
+        .settings-item-type {
+            color: #ddecff;
+            background: rgba(106, 169, 255, 0.1);
+            border: 1px solid rgba(106, 169, 255, 0.16);
+            padding: 3px 6px;
+            border-radius: 999px;
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        /* Description — only for complex items */
         .settings-item-description {
             margin: 0;
             color: var(--text-muted);
             font-size: 11px;
-            line-height: 1.6;
+            line-height: 1.55;
         }
 
-        .settings-item-control {
-            min-width: 0;
-        }
+        /* Controls */
+        .settings-item-control { min-width: 0; }
 
         .settings-item-control input[type="text"],
         .settings-item-control input[type="url"],
         .settings-item-control input[type="number"],
         .settings-item-control textarea {
             width: 100%;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 14px;
-            background: rgba(7, 10, 15, 0.86);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: rgba(6, 9, 13, 0.8);
             color: var(--text-primary);
             font: inherit;
             font-size: 12px;
-            padding: 12px;
-            transition:
-                border-color 180ms var(--ease-out),
-                background-color 180ms var(--ease-out);
+            padding: 9px 12px;
+            transition: border-color 160ms var(--ease-out), background-color 160ms var(--ease-out);
         }
 
         .settings-item-control input[type="text"]:hover,
         .settings-item-control input[type="url"]:hover,
         .settings-item-control input[type="number"]:hover,
-        .settings-item-control textarea:hover {
-            border-color: rgba(255, 255, 255, 0.14);
-        }
+        .settings-item-control textarea:hover { border-color: var(--border-hover); }
 
         .settings-item-control textarea {
-            min-height: 112px;
+            min-height: 108px;
             resize: vertical;
             line-height: 1.55;
         }
 
         .settings-item.is-invalid .settings-item-control input,
-        .settings-item.is-invalid .settings-item-control textarea {
-            border-color: rgba(255, 116, 128, 0.28);
-        }
+        .settings-item.is-invalid .settings-item-control textarea { border-color: rgba(255, 116, 128, 0.26); }
 
+        /* Toggle switch */
         .settings-item-toggle {
             display: inline-flex;
             align-items: center;
-            gap: 10px;
             cursor: pointer;
             user-select: none;
             touch-action: manipulation;
@@ -1099,14 +840,13 @@
 
         .settings-item-toggle-track {
             position: relative;
-            width: 46px;
-            height: 28px;
+            width: 44px;
+            height: 26px;
             border-radius: 999px;
             background: rgba(255, 255, 255, 0.12);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            transition:
-                background-color 220ms var(--ease-out),
-                border-color 220ms var(--ease-out);
+            border: 1px solid var(--border);
+            transition: background-color 200ms var(--ease-out), border-color 200ms var(--ease-out);
+            flex-shrink: 0;
         }
 
         .settings-item-toggle-track::after {
@@ -1114,14 +854,12 @@
             position: absolute;
             top: 2px;
             left: 2px;
-            width: 22px;
-            height: 22px;
+            width: 20px;
+            height: 20px;
             border-radius: 50%;
             background: #fff;
-            box-shadow:
-                0 1px 2px rgba(0, 0, 0, 0.24),
-                0 5px 14px rgba(0, 0, 0, 0.3);
-            transition: transform 260ms var(--ease-spring);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+            transition: transform 240ms var(--ease-spring);
         }
 
         .settings-item-toggle input:checked + .settings-item-toggle-track {
@@ -1129,174 +867,113 @@
             border-color: transparent;
         }
 
-        .settings-item-toggle input:checked + .settings-item-toggle-track::after {
-            transform: translateX(18px);
-        }
+        .settings-item-toggle input:checked + .settings-item-toggle-track::after { transform: translateX(18px); }
 
-        .settings-item-toggle:hover .settings-item-toggle-track {
-            border-color: rgba(255, 255, 255, 0.16);
-        }
+        .settings-item-toggle:hover .settings-item-toggle-track { border-color: var(--border-hover); }
 
-        .settings-item-toggle input:focus-visible + .settings-item-toggle-track {
-            box-shadow: var(--focus-ring);
-        }
+        .settings-item-toggle input:focus-visible + .settings-item-toggle-track { box-shadow: var(--focus-ring); }
 
-        .settings-item-toggle-label {
-            color: var(--text-secondary);
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
+        /* Footer — hidden until dirty/invalid for toggle+text, always shown for complex */
         .settings-item-footer {
             display: flex;
             justify-content: space-between;
+            align-items: flex-start;
             gap: 8px;
-            align-items: center;
         }
 
         .settings-item-hint {
             color: var(--text-muted);
             font-size: 10px;
             line-height: 1.5;
-            text-wrap: pretty;
+            flex: 1;
         }
 
         .settings-reset-inline {
-            min-height: 30px;
-            padding: 0 10px;
-            border-radius: 10px;
+            min-height: 26px;
+            padding: 0 9px;
+            border-radius: 6px;
             font-size: 10px;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        .settings-tertiary-button {
-            min-height: 32px;
-            padding: 0 12px;
-            border-radius: 10px;
-            font-size: 10px;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+            font-weight: 700;
+            letter-spacing: 0.04em;
             white-space: nowrap;
+            flex-shrink: 0;
         }
 
-        button:focus-visible,
-        input:focus-visible {
+        input:focus-visible,
+        textarea:focus-visible {
             outline: none;
             box-shadow: var(--focus-ring);
-            border-color: rgba(255, 107, 74, 0.3);
+            border-color: var(--accent-border);
         }
 
+        /* ── Scrollbars ── */
+
         .settings-groups::-webkit-scrollbar,
-        .settings-list::-webkit-scrollbar { width: 6px; height: 6px; }
+        .settings-list::-webkit-scrollbar { width: 5px; }
         .settings-groups::-webkit-scrollbar-track,
         .settings-list::-webkit-scrollbar-track { background: transparent; }
         .settings-groups::-webkit-scrollbar-thumb,
-        .settings-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 999px; }
+        .settings-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 999px; }
         .settings-groups::-webkit-scrollbar-thumb:hover,
-        .settings-list::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.24); }
+        .settings-list::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
 
-        @media (max-width: 960px) {
-            .hero,
-            .action-grid,
-            .settings-modal-body {
-                grid-template-columns: 1fr;
-            }
+        /* ── Utility ── */
 
-            .stats-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0,0,0,0);
+            white-space: nowrap;
+            border: 0;
+        }
 
-            .settings-modal {
-                width: min(100vw - 16px, 1180px);
-                max-height: calc(100vh - 16px);
-                margin: 8px auto;
-            }
+        .button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
 
-            .settings-modal-toolbar,
-            .settings-modal-header {
-                flex-direction: column;
-                align-items: stretch;
-            }
+        /* ── Responsive ── */
 
-            .settings-modal-header-actions {
-                align-items: stretch;
-            }
-
-            .settings-chip-row,
-            .settings-toolbar-actions {
-                justify-content: flex-start;
-            }
-
-            .settings-workspace-banner {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
+        @media (max-width: 900px) {
+            .settings-modal-body { grid-template-columns: 1fr; }
             .settings-groups {
                 border-right: none;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-                max-height: 220px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+                flex-direction: row;
+                flex-wrap: wrap;
+                max-height: none;
+                padding: 8px;
+                gap: 4px;
             }
-
-            .settings-list {
-                grid-template-columns: 1fr;
-            }
+            .settings-group-button { width: auto; }
+            .settings-modal { width: min(100vw - 16px, 1120px); max-height: calc(100vh - 16px); margin: 8px auto; }
+            .settings-modal-toolbar { flex-direction: column; align-items: stretch; }
+            .settings-toolbar-actions { justify-content: flex-start; }
+            .settings-workspace-banner { flex-direction: column; align-items: stretch; }
         }
 
         @media (max-width: 640px) {
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-
-            body {
-                padding: 18px 12px 28px;
-            }
-
-            .hero-card,
-            .panel,
-            .action-card {
-                border-radius: 18px;
-            }
-
-            .settings-modal {
-                border-radius: 18px;
-            }
-
-            .settings-modal-header,
-            .settings-modal-toolbar {
-                padding-left: 12px;
-                padding-right: 12px;
-            }
-
-            .settings-list {
-                padding-left: 10px;
-                padding-right: 10px;
-            }
+            body { padding: 18px 14px 32px; }
+            .app-bar { flex-direction: column; align-items: flex-start; }
+            .settings-modal { border-radius: 16px; }
+            .settings-modal-header { flex-wrap: wrap; }
         }
 
         @media (prefers-reduced-motion: reduce) {
-            *,
-            *::before,
-            *::after {
+            *, *::before, *::after {
                 animation: none !important;
                 transition: none !important;
                 scroll-behavior: auto !important;
             }
         }
 
-        /* Windows High Contrast / forced-colors: force borders and focus
-           indicators to use system colors so every control remains
-           distinguishable when user-chosen themes override our palette. */
         @media (forced-colors: active) {
-            .hero-card,
-            .panel,
-            .action-card,
-            .stat-card,
             .settings-item,
-            .settings-group-button,
             button,
             input,
             textarea {
@@ -1306,18 +983,9 @@
                 color: CanvasText;
             }
 
-            .settings-item-toggle-track {
-                border: 1px solid CanvasText;
-                background: Canvas;
-            }
-
-            .settings-item-toggle input:checked + .settings-item-toggle-track {
-                background: Highlight;
-            }
-
-            .settings-item-toggle-track::after {
-                background: CanvasText;
-            }
+            .settings-item-toggle-track { border: 1px solid CanvasText; background: Canvas; }
+            .settings-item-toggle input:checked + .settings-item-toggle-track { background: Highlight; }
+            .settings-item-toggle-track::after { background: CanvasText; }
 
             button:focus-visible,
             input:focus-visible,
@@ -1331,150 +999,76 @@
 </head>
 <body>
     <div class="page-shell">
-        <section class="hero">
-            <div class="hero-card">
-                <div class="hero-lockup">
-                    <div class="hero-mark-shell" aria-hidden="true">
-                        <img class="hero-mark" src="icons/brand-glyph.svg" alt="">
-                    </div>
-                    <div class="hero-branding">
-                        <span class="eyebrow">Astra Deck</span>
-                        <span class="hero-kicker">Options</span>
-                    </div>
-                </div>
-                <h1>Astra <span class="brand-accent">Deck</span> Settings</h1>
-                <p class="hero-copy">
-                    Back up your configuration, restore from a snapshot, or browse every setting without loading YouTube.
-                </p>
-                <div class="hero-pills">
-                    <span class="pill">Local Storage Only</span>
-                </div>
-            </div>
-            <div class="hero-card version-card">
-                <div>
-                    <div class="version-label">Current Version</div>
-                    <div class="version-value" id="version"></div>
-                </div>
-                <p class="version-note">
-                    Installed and running.
-                </p>
-            </div>
-        </section>
 
-        <section class="stats-grid" aria-label="Storage statistics">
-            <div class="stat-card">
-                <span class="stat-label">Storage Keys</span>
-                <span class="stat-value" id="stat-keys">0</span>
-                <span class="stat-subtext">items</span>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Disk Usage</span>
-                <span class="stat-value" id="stat-size">0 KB</span>
-                <span class="stat-subtext">estimated</span>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Hidden Videos</span>
-                <span class="stat-value" id="stat-hidden-videos">0</span>
-                <span class="stat-subtext">rules</span>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Blocked Channels</span>
-                <span class="stat-value" id="stat-blocked-channels">0</span>
-                <span class="stat-subtext">rules</span>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Bookmarks</span>
-                <span class="stat-value" id="stat-bookmarks">0</span>
-                <span class="stat-subtext">saved</span>
-            </div>
-        </section>
-
-        <section class="action-grid" aria-label="Settings actions">
-            <article class="action-card">
-                <h2 class="action-title">Edit Settings</h2>
-                <p class="action-copy">
-                    Browse and edit every preference in one place. No YouTube tab required.
-                </p>
-                <div class="button-row">
-                    <button id="open-settings-modal-btn" class="primary" type="button">Open Editor</button>
+        <header class="app-bar">
+            <div class="app-brand">
+                <div class="brand-icon-shell" aria-hidden="true">
+                    <img class="brand-icon" src="icons/brand-glyph.svg" alt="" width="22" height="22">
                 </div>
-            </article>
+                <span class="brand-name">Astra Deck</span>
+                <span class="brand-version" id="version"></span>
+            </div>
+            <div class="app-stats" aria-label="Storage statistics">
+                <span class="stat-unit"><strong id="stat-keys">—</strong> keys</span>
+                <span class="stat-div" aria-hidden="true">·</span>
+                <span class="stat-unit"><strong id="stat-size">—</strong></span>
+                <span class="stat-div" aria-hidden="true">·</span>
+                <span class="stat-unit"><strong id="stat-hidden-videos">—</strong> hidden</span>
+                <span class="stat-div" aria-hidden="true">·</span>
+                <span class="stat-unit"><strong id="stat-blocked-channels">—</strong> blocked</span>
+                <span class="stat-div" aria-hidden="true">·</span>
+                <span class="stat-unit"><strong id="stat-bookmarks">—</strong> bookmarks</span>
+            </div>
+        </header>
 
-            <article class="action-card">
-                <h2 class="action-title">Export</h2>
-                <p class="action-copy">
-                    Download your settings, hidden videos, blocked channels, and bookmarks as JSON.
-                </p>
-                <div class="button-row">
-                    <button id="export-btn" class="primary" type="button">Export</button>
-                </div>
-            </article>
+        <p class="sr-only" id="storage-info" aria-live="polite"></p>
 
-            <article class="action-card">
-                <h2 class="action-title">Import</h2>
-                <p class="action-copy">
-                    Restore from a previous backup. Open YouTube tabs update automatically.
-                </p>
-                <div class="button-row">
-                    <button id="import-btn" type="button">Import</button>
-                    <input type="file" id="import-file" accept=".json,application/json" hidden>
-                </div>
-            </article>
+        <div class="main-action">
+            <button id="open-settings-modal-btn" class="cta-button" type="button">Open Settings Editor</button>
+        </div>
 
-            <article class="action-card">
-                <h2 class="action-title">Reset</h2>
-                <p class="action-copy">
-                    Clear all extension storage for a fresh start. This cannot be undone.
-                </p>
-                <div class="button-row">
-                    <button id="reset-btn" class="danger" type="button">Reset All</button>
-                </div>
-            </article>
-        </section>
+        <nav class="actions-row" aria-label="Data management">
+            <div class="button-row">
+                <button id="export-btn" type="button">Export</button>
+                <button id="import-btn" type="button">Import</button>
+                <input type="file" id="import-file" accept=".json,application/json" hidden>
+            </div>
+            <div class="actions-end">
+                <button id="reset-btn" class="danger" type="button">Reset All</button>
+            </div>
+        </nav>
 
-        <section class="panel" aria-label="Storage notes">
-            <h2>Storage</h2>
-            <p id="storage-info">Loading storage details…</p>
-            <ul class="notes-list">
-                <li><strong>Export</strong> saves settings, hidden videos, blocked channels, and bookmarks to JSON.</li>
-                <li><strong>Import</strong> restores matching data from a previously exported file.</li>
-                <li><strong>Reset</strong> clears extension storage only — no system files are affected.</li>
-            </ul>
-            <div class="status" id="status" aria-live="polite"></div>
-        </section>
+        <div class="status" id="status" aria-live="polite"></div>
+
     </div>
 
     <div class="settings-modal-shell" id="settings-modal-shell" hidden>
         <div class="settings-modal-backdrop" data-close-settings-modal></div>
         <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+
             <header class="settings-modal-header">
-                <div class="settings-modal-brand">
-                    <span class="settings-modal-eyebrow">Settings</span>
-                    <h2 class="settings-modal-title" id="settings-modal-title">Settings</h2>
-                    <p class="settings-modal-summary" id="settings-modal-summary">
-                        Browse and edit the extension’s stored settings directly from the options page.
-                    </p>
-                </div>
-                <div class="settings-modal-header-actions">
-                    <div class="settings-chip-row">
-                        <div class="settings-chip"><strong id="settings-total-count">0</strong> settings</div>
-                        <div class="settings-chip"><strong id="settings-dirty-count">0</strong> unsaved</div>
-                        <div class="settings-chip settings-chip-problem" id="settings-problem-chip" hidden><strong id="settings-problem-count">0</strong> need attention</div>
+                <h2 class="settings-modal-title" id="settings-modal-title">Settings</h2>
+                <p class="sr-only" id="settings-modal-summary" aria-live="polite"></p>
+                <div class="settings-chip-row">
+                    <div class="settings-chip"><strong id="settings-total-count">0</strong> settings</div>
+                    <div class="settings-chip"><strong id="settings-dirty-count">0</strong> unsaved</div>
+                    <div class="settings-chip settings-chip-problem" id="settings-problem-chip" hidden>
+                        <strong id="settings-problem-count">0</strong> need attention
                     </div>
-                    <button id="close-settings-modal-btn" class="icon-button" type="button" aria-label="Close settings modal">×</button>
                 </div>
+                <button id="close-settings-modal-btn" class="icon-button" type="button" aria-label="Close settings">×</button>
             </header>
 
             <div class="settings-modal-toolbar">
                 <div class="settings-search-shell">
                     <svg class="settings-search-icon" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                    <input class="settings-search-input" id="settings-search" name="settings-search" type="search" placeholder="Search settings, keys, or groups…" aria-label="Search settings" autocomplete="off" spellcheck="false">
-                    <button id="settings-clear-search-btn" class="settings-search-clear" type="button" aria-label="Clear settings search" hidden>×</button>
+                    <input class="settings-search-input" id="settings-search" name="settings-search" type="search" placeholder="Search settings…" aria-label="Search settings" autocomplete="off" spellcheck="false">
+                    <button id="settings-clear-search-btn" class="settings-search-clear" type="button" aria-label="Clear search" hidden>×</button>
                 </div>
                 <div class="button-row settings-toolbar-actions">
                     <button id="settings-restore-defaults-btn" type="button">Restore Defaults</button>
-                    <button id="settings-discard-btn" type="button">Discard Draft</button>
-                    <button id="settings-save-btn" class="primary" type="button">Save Settings</button>
+                    <button id="settings-discard-btn" type="button">Discard</button>
+                    <button id="settings-save-btn" class="primary" type="button">Save</button>
                 </div>
             </div>
 
@@ -1483,8 +1077,8 @@
                 <div class="settings-editor">
                     <div class="settings-workspace-banner" id="settings-workspace-banner">
                         <div class="settings-workspace-copy">
-                            <strong class="settings-workspace-title" id="settings-workspace-title">Everything is in sync</strong>
-                            <span class="settings-workspace-note" id="settings-workspace-note">Changes stay local until you save them.</span>
+                            <strong class="settings-workspace-title" id="settings-workspace-title">In sync</strong>
+                            <span class="settings-workspace-note" id="settings-workspace-note">Changes stay local until you save.</span>
                         </div>
                         <button id="settings-clear-filters-btn" class="settings-tertiary-button" type="button" hidden>Clear Filters</button>
                     </div>
@@ -1492,16 +1086,18 @@
                     <div class="settings-empty" id="settings-empty" hidden>
                         <div class="settings-empty-inner">
                             <span class="settings-empty-eyebrow">Filtered View</span>
-                            <h3 class="settings-empty-title">No settings match this view</h3>
-                            <p class="settings-empty-copy">Try a broader search or switch back to All Settings.</p>
-                            <button id="settings-empty-reset-btn" class="settings-tertiary-button" type="button">Clear Search & Filters</button>
+                            <h3 class="settings-empty-title">No settings match</h3>
+                            <p class="settings-empty-copy">Try a broader search or switch group.</p>
+                            <button id="settings-empty-reset-btn" class="settings-tertiary-button" type="button">Clear Filters</button>
                         </div>
                     </div>
                     <div class="settings-list" id="settings-list"></div>
                 </div>
             </div>
+
         </section>
     </div>
+
     <script src="options.js"></script>
 </body>
 </html>

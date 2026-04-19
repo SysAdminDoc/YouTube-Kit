@@ -812,6 +812,12 @@
             dirtyBadge.textContent = invalid ? 'Needs Fix' : dirty ? 'Pending Save' : '';
         }
 
+        // Show footer only when there's something to communicate (complex items always show it)
+        const footer = card.querySelector('.settings-item-footer');
+        if (footer && !card.classList.contains('is-complex')) {
+            footer.hidden = !dirty && !invalid;
+        }
+
         const hint = card.querySelector('.settings-item-hint');
         if (hint) {
             if (invalid) {
@@ -1027,17 +1033,9 @@
         const track = document.createElement('span');
         track.className = 'settings-item-toggle-track';
 
-        const text = document.createElement('span');
-        text.className = 'settings-item-toggle-label';
-        text.textContent = input.checked ? 'Enabled' : 'Disabled';
-
-        // Single change listener handles state + label update together.
-        // Previously two separate listeners were attached which doubled the
-        // per-toggle work on every click for no benefit.
         input.addEventListener('change', () => {
             state.draftSettings[key] = input.checked;
             state.invalidKeys.delete(key);
-            text.textContent = input.checked ? 'Enabled' : 'Disabled';
             updateDirtyStateForKey(key);
             updateCardState(card, key);
             updateModalHeaderState();
@@ -1045,7 +1043,6 @@
 
         label.appendChild(input);
         label.appendChild(track);
-        label.appendChild(text);
         return label;
     }
 
@@ -1098,6 +1095,8 @@
         const groupLabel = GROUPS.find((group) => group.id === groupId)?.label || 'Advanced';
         const controlKind = inferControlKind(currentValue, defaultValue);
         const controlKindLabel = formatControlKindLabel(controlKind);
+        const isToggle = controlKind === 'toggle';
+        const isComplex = controlKind === 'list' || controlKind === 'json' || controlKind === 'textarea';
         const idBase = toDomIdFragment(key);
         const controlMeta = {
             controlId: `settings-control-${idBase}`,
@@ -1107,76 +1106,79 @@
         };
 
         const card = document.createElement('article');
-        card.className = 'settings-item';
+        card.className = 'settings-item' + (isToggle ? ' is-toggle' : '') + (isComplex ? ' is-complex' : '');
         card.dataset.key = key;
         card.tabIndex = -1;
+        card.title = key;
         card.setAttribute('aria-labelledby', controlMeta.titleId);
 
-        const header = document.createElement('div');
-        header.className = 'settings-item-header';
-
-        const copy = document.createElement('div');
-        copy.className = 'settings-item-copy';
+        // ── Title row (shared by all variants) ──
+        const titleRow = document.createElement('div');
+        titleRow.className = 'settings-item-title-row';
 
         const title = document.createElement('h3');
         title.className = 'settings-item-title';
         title.id = controlMeta.titleId;
         title.textContent = humanizeKey(key);
+        titleRow.appendChild(title);
 
-        const meta = document.createElement('div');
-        meta.className = 'settings-item-meta';
+        const groupTag = document.createElement('span');
+        groupTag.className = 'settings-item-group';
+        groupTag.textContent = groupLabel;
+        titleRow.appendChild(groupTag);
 
-        const keyBadge = document.createElement('span');
-        keyBadge.className = 'settings-item-badge settings-item-badge-key';
-        keyBadge.textContent = key;
-
-        const groupBadge = document.createElement('span');
-        groupBadge.className = 'settings-item-badge settings-item-badge-group';
-        groupBadge.textContent = groupLabel;
-
-        const typeBadge = document.createElement('span');
-        typeBadge.className = 'settings-item-badge settings-item-badge-type';
-        typeBadge.textContent = controlKindLabel;
+        if (isComplex) {
+            const typeBadge = document.createElement('span');
+            typeBadge.className = 'settings-item-type';
+            typeBadge.textContent = controlKindLabel;
+            titleRow.appendChild(typeBadge);
+        }
 
         const stateBadge = document.createElement('span');
         stateBadge.className = 'settings-item-badge settings-item-state';
         stateBadge.hidden = true;
+        titleRow.appendChild(stateBadge);
 
-        meta.appendChild(keyBadge);
-        meta.appendChild(groupBadge);
-        meta.appendChild(typeBadge);
-        meta.appendChild(stateBadge);
-
-        const description = document.createElement('p');
-        description.className = 'settings-item-description';
-        description.id = controlMeta.descriptionId;
-        description.textContent = `Editing a ${controlKindLabel.toLowerCase()} setting. Draft value: ${formatValuePreview(currentValue)}.`;
-
-        copy.appendChild(title);
-        copy.appendChild(meta);
-        copy.appendChild(description);
-        header.appendChild(copy);
-        card.appendChild(header);
-
-        const controlWrap = document.createElement('div');
-        controlWrap.className = 'settings-item-control';
-
-        if (controlKind === 'toggle') {
-            controlWrap.appendChild(renderToggleControl(card, key, currentValue, controlMeta));
-        } else if (controlKind === 'number') {
-            controlWrap.appendChild(renderNumberControl(card, key, currentValue, controlMeta));
-        } else if (controlKind === 'list') {
-            controlWrap.appendChild(renderListControl(card, key, currentValue, defaultValue, controlMeta));
-        } else if (controlKind === 'json') {
-            controlWrap.appendChild(renderJsonControl(card, key, currentValue, controlMeta));
+        if (isToggle) {
+            // Compact flex row: title-row left, toggle right
+            const right = document.createElement('div');
+            right.className = 'settings-item-right';
+            right.appendChild(renderToggleControl(card, key, currentValue, controlMeta));
+            card.appendChild(titleRow);
+            card.appendChild(right);
         } else {
-            controlWrap.appendChild(renderTextControl(card, key, currentValue, controlKind === 'textarea', controlMeta));
+            card.appendChild(titleRow);
+
+            if (isComplex) {
+                const description = document.createElement('p');
+                description.className = 'settings-item-description';
+                description.id = controlMeta.descriptionId;
+                description.textContent = `Editing a ${controlKindLabel.toLowerCase()} setting. Draft: ${formatValuePreview(currentValue)}.`;
+                card.appendChild(description);
+            }
+
+            const controlWrap = document.createElement('div');
+            controlWrap.className = 'settings-item-control';
+
+            if (controlKind === 'number') {
+                controlWrap.appendChild(renderNumberControl(card, key, currentValue, controlMeta));
+            } else if (controlKind === 'list') {
+                controlWrap.appendChild(renderListControl(card, key, currentValue, defaultValue, controlMeta));
+            } else if (controlKind === 'json') {
+                controlWrap.appendChild(renderJsonControl(card, key, currentValue, controlMeta));
+            } else {
+                controlWrap.appendChild(renderTextControl(card, key, currentValue, controlKind === 'textarea', controlMeta));
+            }
+
+            card.appendChild(controlWrap);
         }
 
-        card.appendChild(controlWrap);
-
+        // ── Footer (hidden until dirty/invalid for toggle+text/number; always shown for complex) ──
         const footer = document.createElement('div');
         footer.className = 'settings-item-footer';
+        if (!isComplex) {
+            footer.hidden = true;
+        }
 
         const hint = document.createElement('div');
         hint.className = 'settings-item-hint';
@@ -1188,9 +1190,6 @@
         resetButton.className = 'settings-reset-inline';
         resetButton.textContent = 'Reset';
         resetButton.disabled = defaultValue === undefined;
-        // Explain why the button is inert when there's no catalog default to
-        // fall back to; otherwise surface the default value that will be
-        // applied so the user knows what "Reset" actually does.
         if (defaultValue === undefined) {
             resetButton.title = 'No catalog default is available for this setting.';
             resetButton.setAttribute('aria-label', `Reset ${humanizeKey(key)} (no catalog default available)`);

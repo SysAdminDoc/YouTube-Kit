@@ -436,7 +436,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.11.4';
+    const YTKIT_VERSION = '3.12.0';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -10662,6 +10662,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const text = line.substring(0, sep).trim();
                     const url = line.substring(sep + 1).trim();
                     if (!text || !url) return null;
+                    // Block javascript:/data: URIs — only allow relative paths and http(s)
+                    const lowerUrl = url.toLowerCase().replace(/[\s\x00-\x1f]/g, '');
+                    if (lowerUrl.startsWith('javascript:') || lowerUrl.startsWith('data:') || lowerUrl.startsWith('vbscript:')) return null;
                     const icon = this._iconMap[url] || this._iconMap['_default'];
                     return { text, url, icon };
                 }).filter(Boolean);

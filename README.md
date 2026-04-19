@@ -1,21 +1,11 @@
-<!-- codex-branding:start -->
-<p align="center"><img src="icon.png" width="128" alt="Astra Deck"></p>
-
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-preview-58A6FF?style=for-the-badge">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-4ade80?style=for-the-badge">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Userscript-58A6FF?style=for-the-badge">
-</p>
-<!-- codex-branding:end -->
-
-<p align="center">
-  <img src="extension/icons/icon128.png" alt="Astra Deck" width="80">
+  <img src="extension/icons/128.png" alt="Astra Deck" width="80">
 </p>
 
 <h1 align="center">Astra Deck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.11.0-ff4e45?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-3.12.0-ff4e45?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/manifest-V3-blue?style=flat-square" alt="Manifest V3">
   <img src="https://img.shields.io/badge/YouTube-Desktop-ff0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube">
@@ -26,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SysAdminDoc/YouTube-Kit/releases/latest"><strong>Download Latest Release</strong></a>
+  <a href="https://github.com/SysAdminDoc/Astra-Deck/releases/latest"><strong>Download Latest Release</strong></a>
 </p>
 
 ---
@@ -36,7 +26,7 @@
 ### Chrome / Edge / Brave
 
 **Option A — CRX sideload:**
-1. Download `astra-deck-chrome-v*.crx` from the [latest release](https://github.com/SysAdminDoc/YouTube-Kit/releases/latest)
+1. Download `astra-deck-chrome-v*.crx` from the [latest release](https://github.com/SysAdminDoc/Astra-Deck/releases/latest)
 2. Open `chrome://extensions/`, enable **Developer mode**
 3. Drag and drop the `.crx` file onto the page
 
@@ -47,7 +37,7 @@
 
 ### Firefox
 
-1. Download `astra-deck-firefox-v*.xpi` from the [latest release](https://github.com/SysAdminDoc/YouTube-Kit/releases/latest)
+1. Download `astra-deck-firefox-v*.xpi` from the [latest release](https://github.com/SysAdminDoc/Astra-Deck/releases/latest)
 2. Open `about:addons`, click the gear icon, select **Install Add-on From File**
 3. Select the `.xpi` file
 
@@ -55,7 +45,7 @@ Requires Firefox 128+.
 
 ### Userscript (Tampermonkey / Violentmonkey)
 
-A userscript build is also available. Install [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/), then **[click here to install](https://github.com/SysAdminDoc/YouTube-Kit/raw/refs/heads/main/YTKit.user.js)**.
+A userscript build is also available. Install [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/), then **[click here to install](https://github.com/SysAdminDoc/Astra-Deck/raw/refs/heads/main/YTKit.user.js)**.
 
 > Some features (SharedAudio, Return YouTube Dislike, SponsorBlock per-category, Cobalt downloads) are only available in the userscript. The extension uses a MediaDL-only download path.
 
