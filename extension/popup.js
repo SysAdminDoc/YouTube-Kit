@@ -2,21 +2,21 @@
 // Quick-toggle 15 of the most-used features without opening the full panel.
 
 const QUICK_TOGGLES = [
-    { key: 'removeAllShorts',        name: 'Hide Shorts',            desc: 'Remove Shorts from feeds' },
-    { key: 'hideRelatedVideos',      name: 'Hide Related',           desc: 'No related panel on watch' },
-    { key: 'sponsorBlock',           name: 'SponsorBlock',           desc: 'Skip sponsored segments' },
-    { key: 'deArrow',                name: 'DeArrow',                desc: 'Better titles & thumbnails' },
-    { key: 'commentSearch',          name: 'Comment Search',         desc: 'Filter comments on watch pages' },
-    { key: 'disableAutoplayNext',    name: 'No Autoplay',            desc: 'Stop auto-advance to next' },
-    { key: 'disableInfiniteScroll',  name: 'Cap Scroll',             desc: 'Stop infinite scroll' },
-    { key: 'persistentSpeed',        name: 'Persistent Speed',       desc: 'Remember playback rate' },
-    { key: 'blueLightFilter',        name: 'Blue-Light Filter',      desc: 'Warmer colors' },
-    { key: 'cleanShareUrls',         name: 'Clean URLs',             desc: 'Strip tracking params' },
-    { key: 'autoTheaterMode',        name: 'Auto Theater',           desc: 'Default to theater view' },
-    { key: 'transcriptViewer',       name: 'Transcript Sidebar',     desc: 'Clickable transcript + export' },
-    { key: 'miniPlayerBar',          name: 'Mini Player Bar',        desc: 'Floating bar on scroll' },
-    { key: 'digitalWellbeing',       name: 'Digital Wellbeing',      desc: 'Break reminders + daily cap' },
-    { key: 'debugMode',              name: 'Debug Mode',             desc: 'Verbose console logging' },
+    { key: 'removeAllShorts',        group: 'Feed Cleanup',      name: 'Hide Shorts',            desc: 'Remove Shorts from feeds' },
+    { key: 'hideRelatedVideos',      group: 'Feed Cleanup',      name: 'Hide Related',           desc: 'No related panel on watch' },
+    { key: 'disableInfiniteScroll',  group: 'Feed Cleanup',      name: 'Cap Scroll',             desc: 'Stop infinite scroll' },
+    { key: 'sponsorBlock',           group: 'Watch Flow',        name: 'SponsorBlock',           desc: 'Skip sponsored segments' },
+    { key: 'deArrow',                group: 'Watch Flow',        name: 'DeArrow',                desc: 'Better titles & thumbnails' },
+    { key: 'commentSearch',          group: 'Watch Flow',        name: 'Comment Search',         desc: 'Filter comments on watch pages' },
+    { key: 'disableAutoplayNext',    group: 'Playback',          name: 'No Autoplay',            desc: 'Stop auto-advance to next' },
+    { key: 'persistentSpeed',        group: 'Playback',          name: 'Persistent Speed',       desc: 'Remember playback rate' },
+    { key: 'autoTheaterMode',        group: 'Playback',          name: 'Auto Theater',           desc: 'Default to theater view' },
+    { key: 'blueLightFilter',        group: 'Focus',             name: 'Blue-Light Filter',      desc: 'Warmer colors' },
+    { key: 'miniPlayerBar',          group: 'Focus',             name: 'Mini Player Bar',        desc: 'Floating bar on scroll' },
+    { key: 'digitalWellbeing',       group: 'Focus',             name: 'Digital Wellbeing',      desc: 'Break reminders + daily cap' },
+    { key: 'cleanShareUrls',         group: 'Utilities',         name: 'Clean URLs',             desc: 'Strip tracking params' },
+    { key: 'transcriptViewer',       group: 'Utilities',         name: 'Transcript Sidebar',     desc: 'Clickable transcript + export' },
+    { key: 'debugMode',              group: 'Utilities',         name: 'Debug Mode',             desc: 'Verbose console logging' },
 ];
 
 const SETTINGS_STORAGE_KEY = 'ytSuiteSettings';
@@ -337,7 +337,11 @@ async function broadcast(key, value) {
 function render(settings, filter) {
     const term = (filter || '').toLowerCase().trim();
     const items = QUICK_TOGGLES.filter((t) =>
-        !term || t.name.toLowerCase().includes(term) || t.desc.toLowerCase().includes(term) || t.key.toLowerCase().includes(term)
+        !term
+            || t.name.toLowerCase().includes(term)
+            || t.desc.toLowerCase().includes(term)
+            || t.key.toLowerCase().includes(term)
+            || t.group.toLowerCase().includes(term)
     );
     list.textContent = '';
     updateSummary(settings);
@@ -346,47 +350,82 @@ function render(settings, filter) {
         renderEmpty(term);
         return;
     }
-    for (const t of items) {
-        const on = Boolean(settings[t.key]);
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = 'toggle' + (on ? ' on' : '');
-        row.dataset.key = t.key;
-        row.setAttribute('role', 'switch');
-        row.setAttribute('aria-checked', String(on));
 
-        const label = document.createElement('div');
-        label.className = 'label';
-        const name = document.createElement('div');
-        name.className = 'name';
-        name.textContent = t.name;
-        const desc = document.createElement('div');
-        desc.className = 'desc';
-        desc.textContent = t.desc;
-        label.appendChild(name);
-        label.appendChild(desc);
+    const groupedItems = new Map();
+    for (const item of items) {
+        const groupName = item.group || 'Quick Controls';
+        if (!groupedItems.has(groupName)) groupedItems.set(groupName, []);
+        groupedItems.get(groupName).push(item);
+    }
 
-        const toggleSwitch = document.createElement('div');
-        toggleSwitch.className = 'switch';
+    for (const [groupName, groupItems] of groupedItems.entries()) {
+        const section = document.createElement('section');
+        section.className = 'toggle-group';
+        const sectionId = `toggle-group-${groupName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        section.setAttribute('aria-labelledby', sectionId);
 
-        row.appendChild(label);
-        row.appendChild(toggleSwitch);
-        row.addEventListener('click', async () => {
-            row.disabled = true;
-            try {
-                const next = !Boolean(popupState.settings[t.key]);
-                await writeSetting(t.key, next);
-                render(popupState.settings, q.value);
-                void broadcast(t.key, next);
-                showStatus(`${t.name} ${next ? 'enabled' : 'disabled'}.`, 'success');
-            } catch (error) {
-                console.warn('[Astra Deck popup] Failed to toggle setting:', error);
-                showStatus(`Couldn't update ${t.name}. Try again.`, 'error', 4200);
-            } finally {
-                row.disabled = false;
-            }
-        });
-        list.appendChild(row);
+        const groupHead = document.createElement('div');
+        groupHead.className = 'toggle-group-head';
+
+        const groupTitle = document.createElement('h2');
+        groupTitle.className = 'toggle-group-title';
+        groupTitle.id = sectionId;
+        groupTitle.textContent = groupName;
+
+        const groupCount = document.createElement('span');
+        groupCount.className = 'toggle-group-count';
+        const groupEnabled = groupItems.reduce((count, item) => count + (settings[item.key] ? 1 : 0), 0);
+        groupCount.textContent = `${groupEnabled}/${groupItems.length} on`;
+
+        groupHead.appendChild(groupTitle);
+        groupHead.appendChild(groupCount);
+        section.appendChild(groupHead);
+
+        for (const t of groupItems) {
+            const on = Boolean(settings[t.key]);
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'toggle' + (on ? ' on' : '');
+            row.dataset.key = t.key;
+            row.setAttribute('role', 'switch');
+            row.setAttribute('aria-checked', String(on));
+            row.setAttribute('aria-label', `${t.name}. ${t.desc}. ${on ? 'Enabled' : 'Disabled'}.`);
+
+            const label = document.createElement('div');
+            label.className = 'label';
+            const name = document.createElement('div');
+            name.className = 'name';
+            name.textContent = t.name;
+            const desc = document.createElement('div');
+            desc.className = 'desc';
+            desc.textContent = t.desc;
+            label.appendChild(name);
+            label.appendChild(desc);
+
+            const toggleSwitch = document.createElement('div');
+            toggleSwitch.className = 'switch';
+
+            row.appendChild(label);
+            row.appendChild(toggleSwitch);
+            row.addEventListener('click', async () => {
+                row.disabled = true;
+                try {
+                    const next = !Boolean(popupState.settings[t.key]);
+                    await writeSetting(t.key, next);
+                    render(popupState.settings, q.value);
+                    void broadcast(t.key, next);
+                    showStatus(`${t.name} ${next ? 'enabled' : 'disabled'}.`, 'success');
+                } catch (error) {
+                    console.warn('[Astra Deck popup] Failed to toggle setting:', error);
+                    showStatus(`Couldn't update ${t.name}. Try again.`, 'error', 4200);
+                } finally {
+                    row.disabled = false;
+                }
+            });
+            section.appendChild(row);
+        }
+
+        list.appendChild(section);
     }
 }
 

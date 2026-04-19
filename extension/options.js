@@ -427,6 +427,91 @@
         }
     }
 
+    function confirmAction({
+        eyebrow = 'Confirm',
+        title,
+        message,
+        confirmLabel = 'Continue',
+        cancelLabel = 'Cancel',
+        tone = 'default'
+    }) {
+        return new Promise((resolve) => {
+            const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+            const shell = document.createElement('div');
+            shell.className = 'confirm-shell';
+
+            const backdrop = document.createElement('div');
+            backdrop.className = 'confirm-backdrop';
+
+            const dialog = document.createElement('section');
+            dialog.className = 'confirm-dialog' + (tone === 'danger' ? ' is-danger' : '');
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.setAttribute('aria-labelledby', 'confirm-title');
+            dialog.setAttribute('aria-describedby', 'confirm-copy');
+
+            const eyebrowEl = document.createElement('span');
+            eyebrowEl.className = 'confirm-eyebrow';
+            eyebrowEl.textContent = eyebrow;
+
+            const titleEl = document.createElement('h2');
+            titleEl.className = 'confirm-title';
+            titleEl.id = 'confirm-title';
+            titleEl.textContent = title;
+
+            const copyEl = document.createElement('p');
+            copyEl.className = 'confirm-copy';
+            copyEl.id = 'confirm-copy';
+            copyEl.textContent = message;
+
+            const actions = document.createElement('div');
+            actions.className = 'confirm-actions';
+
+            const cancelButton = document.createElement('button');
+            cancelButton.type = 'button';
+            cancelButton.textContent = cancelLabel;
+
+            const confirmButton = document.createElement('button');
+            confirmButton.type = 'button';
+            confirmButton.className = tone === 'danger' ? 'danger' : 'primary';
+            confirmButton.textContent = confirmLabel;
+
+            actions.appendChild(cancelButton);
+            actions.appendChild(confirmButton);
+            dialog.appendChild(eyebrowEl);
+            dialog.appendChild(titleEl);
+            dialog.appendChild(copyEl);
+            dialog.appendChild(actions);
+            shell.appendChild(backdrop);
+            shell.appendChild(dialog);
+            document.body.appendChild(shell);
+
+            const finish = (confirmed) => {
+                shell.removeEventListener('keydown', handleKeydown);
+                shell.remove();
+                requestAnimationFrame(() => previousFocus?.focus?.());
+                resolve(confirmed);
+            };
+
+            function handleKeydown(event) {
+                event.stopPropagation();
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    finish(false);
+                    return;
+                }
+                trapFocusWithin(dialog, event);
+            }
+
+            backdrop.addEventListener('click', () => finish(false));
+            cancelButton.addEventListener('click', () => finish(false));
+            confirmButton.addEventListener('click', () => finish(true));
+            shell.addEventListener('keydown', handleKeydown);
+            requestAnimationFrame(() => (tone === 'danger' ? cancelButton : confirmButton).focus());
+        });
+    }
+
     function inferGroup(key) {
         const lower = key.toLowerCase();
 
@@ -562,10 +647,10 @@
             elements.statBookmarks.textContent = String(summary.bookmarks);
 
             elements.storageInfo.textContent =
-                `${summary.keys} ${summary.keys === 1 ? 'key' : 'keys'} in local storage, using about ${summary.sizeText}. ` +
+                `Local storage is ready: ${summary.keys} ${summary.keys === 1 ? 'key' : 'keys'} using about ${summary.sizeText}. ` +
                 `${summary.hiddenVideos} hidden video ${summary.hiddenVideos === 1 ? 'rule' : 'rules'}, ` +
                 `${summary.blockedChannels} blocked ${summary.blockedChannels === 1 ? 'channel' : 'channels'}, ` +
-                `and ${summary.bookmarks} ${summary.bookmarks === 1 ? 'bookmark' : 'bookmarks'} saved.`;
+                `and ${summary.bookmarks} ${summary.bookmarks === 1 ? 'bookmark' : 'bookmarks'} are available for backup or reset.`;
         } catch (error) {
             elements.storageInfo.textContent = 'Unable to read extension storage.';
             elements.statKeys.textContent = '0';
@@ -649,9 +734,13 @@
     }
 
     async function resetSettings() {
-        const confirmed = window.confirm(
-            `Reset all ${BRAND_NAME} extension storage? This clears settings, hidden videos, blocked channels, and bookmarks.`
-        );
+        const confirmed = await confirmAction({
+            eyebrow: 'Destructive action',
+            title: 'Reset all local data?',
+            message: `This clears ${BRAND_NAME} settings, hidden videos, blocked channels, and bookmarks from extension storage.`,
+            confirmLabel: 'Reset All Data',
+            tone: 'danger'
+        });
         if (!confirmed) return;
 
         try {
@@ -1304,7 +1393,7 @@
         requestAnimationFrame(() => elements.settingsSearch.focus());
     }
 
-    function requestCloseSettingsModal() {
+    async function requestCloseSettingsModal() {
         if (state.dirtyKeys.size > 0 || state.invalidKeys.size > 0) {
             const draftPieces = [];
             if (state.dirtyKeys.size > 0) {
@@ -1313,7 +1402,13 @@
             if (state.invalidKeys.size > 0) {
                 draftPieces.push(`${state.invalidKeys.size} ${pluralize(state.invalidKeys.size, 'invalid field')}`);
             }
-            const confirmed = window.confirm(`Discard ${draftPieces.join(' and ')} and close the settings editor?`);
+            const confirmed = await confirmAction({
+                eyebrow: 'Unsaved draft',
+                title: 'Close without saving?',
+                message: `This will discard ${draftPieces.join(' and ')} and close the settings editor.`,
+                confirmLabel: 'Discard Draft',
+                tone: 'danger'
+            });
             if (!confirmed) return;
         }
 
@@ -1411,15 +1506,17 @@
         void runWithBusyButton(elements.importButton, 'Importing…', () => importSettings(file));
     });
     elements.resetButton.addEventListener('click', () => {
-        void runWithBusyButton(elements.resetButton, 'Clearing…', resetSettings);
+        void runWithBusyButton(elements.resetButton, 'Confirming…', resetSettings);
     });
     elements.openSettingsModalButton.addEventListener('click', () => {
         void runWithBusyButton(elements.openSettingsModalButton, 'Loading…', openSettingsModal);
     });
-    elements.closeSettingsModalButton.addEventListener('click', requestCloseSettingsModal);
+    elements.closeSettingsModalButton.addEventListener('click', () => {
+        void requestCloseSettingsModal();
+    });
     elements.settingsModalShell.addEventListener('click', (event) => {
         if (event.target.hasAttribute('data-close-settings-modal')) {
-            requestCloseSettingsModal();
+            void requestCloseSettingsModal();
         }
     });
     let _searchDebounce = null;
@@ -1459,7 +1556,7 @@
     document.addEventListener('keydown', (event) => {
         if (!state.modalOpen) return;
         if (event.key === 'Escape') {
-            requestCloseSettingsModal();
+            void requestCloseSettingsModal();
             return;
         }
         if (event.key === 'Tab') {

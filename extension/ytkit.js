@@ -766,7 +766,7 @@ return response;
                 return { success: false, error: 'No video ID' };
             }
 
-            showToast('Fetching transcript...', '#3b82f6');
+            showToast('Fetching transcript…', '#3b82f6');
             this._log('Starting transcript fetch for:', videoId);
 
             try {
@@ -1851,6 +1851,7 @@ return response;
         panel.setAttribute('role', 'status');
         panel.setAttribute('aria-live', 'polite');
         panel.setAttribute('aria-atomic', 'true');
+        panel.setAttribute('aria-label', `${audioOnly ? 'Audio' : 'Video'} download progress`);
 
         if (!document.getElementById('ytkit-dl-anim')) {
             const s = document.createElement('style');
@@ -1869,7 +1870,7 @@ return response;
         const closeBtn = document.createElement('button');
         closeBtn.type = 'button';
         closeBtn.className = 'ytkit-dl-progress__close';
-        closeBtn.setAttribute('aria-label', 'Close download progress');
+        closeBtn.setAttribute('aria-label', 'Dismiss download progress');
         closeBtn.textContent = '\u2715';
         header.appendChild(badge);
         header.appendChild(closeBtn);
@@ -1918,7 +1919,7 @@ return response;
         const repairBtn = document.createElement('button');
         repairBtn.type = 'button';
         repairBtn.className = 'ytkit-dl-progress__action';
-        repairBtn.textContent = 'Open Repair Steps';
+        repairBtn.textContent = 'Repair downloader';
         repairBtn.setAttribute('aria-label', 'Open local downloader repair steps');
         repairBtn.addEventListener('click', () => MediaDLManager.showInstallPrompt('retry'));
         actions.appendChild(repairBtn);
@@ -2004,7 +2005,6 @@ return response;
                     if (needsRepair) {
                         MediaDLManager.showInstallPrompt('retry');
                     }
-                    setTimeout(() => panel.remove(), 5000);
                 }
             } catch (err) {
                 DebugManager.log('Download', 'Poll failed: ' + err.message);
@@ -2016,9 +2016,8 @@ return response;
                 pct.textContent = 'Error';
                 spd.textContent = '';
                 eta.textContent = '';
-                setProgressState('error', 'Connection Lost', 'Astra Deck lost contact with the local downloader. Reopen the repair steps to recover.', true);
-                showToast('Lost connection to local downloader', '#ef4444', { duration: 5 });
-                setTimeout(() => panel.remove(), 6000);
+                setProgressState('error', 'Connection Lost', 'Astra Deck lost contact with the local downloader. Choose Repair downloader to recover.', true);
+                showToast('Lost contact with the local downloader.', '#ef4444', { duration: 5 });
             }
         }
 
@@ -2113,8 +2112,8 @@ return response;
                 return this.check(true);
             }
             this._autoStartAttempted = true;
-            DebugManager.log('MediaDL', 'Attempting auto-start via mediadl:// protocol...');
-            showToast('Starting Astra Downloader...', '#3b82f6', { duration: 4 });
+            DebugManager.log('MediaDL', 'Attempting auto-start via mediadl:// protocol…');
+            showToast('Starting Astra Downloader…', '#3b82f6', { duration: 4 });
             openProtocol('mediadl://start');
             // Poll for server readiness
             for (let i = 0; i < retries; i++) {
@@ -2183,6 +2182,8 @@ return response;
             const prompt = document.createElement('div');
             prompt.id = 'ytkit-mediadl-install-prompt';
             prompt.className = 'ytkit-install-prompt';
+            prompt.dataset.mode = isRetryMode ? 'repair' : 'install';
+            prompt.dataset.state = isRetryMode ? 'warning' : 'ready';
             prompt.setAttribute('role', 'region');
             prompt.setAttribute('aria-labelledby', 'ytkit-install-prompt-title');
             prompt.setAttribute('aria-describedby', 'ytkit-install-prompt-desc');
@@ -2194,11 +2195,11 @@ return response;
             heading.className = 'ytkit-install-prompt__heading';
             const eyebrow = document.createElement('span');
             eyebrow.className = 'ytkit-install-prompt__eyebrow';
-            eyebrow.textContent = isRetryMode ? 'Repair Needed' : 'Local Downloads';
+            eyebrow.textContent = isRetryMode ? 'Connection check' : 'Local downloads';
             const titleEl = document.createElement('span');
             titleEl.id = 'ytkit-install-prompt-title';
             titleEl.className = 'ytkit-install-prompt__title';
-            titleEl.textContent = isRetryMode ? 'Local Downloader Not Responding' : 'Install Local Downloader';
+            titleEl.textContent = isRetryMode ? 'Reconnect the local downloader' : 'Set up local downloads';
             const closeBtn = document.createElement('button');
             closeBtn.className = 'ytkit-install-prompt__close';
             closeBtn.type = 'button';
@@ -2215,23 +2216,25 @@ return response;
             desc.id = 'ytkit-install-prompt-desc';
             desc.className = 'ytkit-install-prompt__desc';
             desc.textContent = isRetryMode
-                ? 'Try a quick restart first. If the downloader still does not answer, run the Astra Deck setup again to repair the local service.'
-                : 'Set up local downloads once, then Astra Deck can send video or audio jobs straight to the downloader on your device.';
+                ? 'Astra Deck cannot reach the downloader service right now. Start it again if it is installed, or run setup to repair the local service.'
+                : 'Enable reliable audio and video downloads by installing Astra Downloader on this device. One setup covers future downloads.';
 
             const note = document.createElement('div');
             note.className = 'ytkit-install-prompt__note';
+            note.setAttribute('role', 'status');
+            note.setAttribute('aria-live', 'polite');
             note.textContent = isRetryMode
-                ? 'Fastest recovery: start the service again first, then fall back to the setup if needed.'
-                : 'Recommended path: use Download Setup. It installs and repairs everything automatically.';
+                ? 'Fastest path: start the service again first. If it still does not respond, run setup to repair the install.'
+                : 'Recommended path: download setup, open the file, then return here and check again.';
 
             const steps = document.createElement('ol');
             steps.className = 'ytkit-install-prompt__steps';
             [
                 isRetryMode
-                    ? 'Try Starting Again to wake the local service if it is already installed.'
-                    : 'Download Setup to grab the Astra Deck installer for local downloads.',
-                'Double-click the downloaded setup file to install.',
-                'Use Check Again after setup finishes so Astra Deck can confirm everything is ready.'
+                    ? 'Start the service again if the downloader is already installed.'
+                    : 'Download the Astra Downloader setup file.',
+                'Open the setup file from Downloads and finish installation.',
+                'Choose Check again so Astra Deck can confirm the service is ready.'
             ].forEach((copy) => {
                 const item = document.createElement('li');
                 item.className = 'ytkit-install-prompt__step';
@@ -2247,15 +2250,24 @@ return response;
             const setPromptButtonState = (button, label, tone = '') => {
                 const labelEl = button.querySelector('.ytkit-install-prompt__btn-label');
                 if (labelEl) labelEl.textContent = label;
+                const detail = button.dataset.detail || '';
+                button.setAttribute('aria-label', detail ? `${label}. ${detail}` : label);
                 button.classList.remove('is-success', 'is-danger');
                 if (tone === 'success') button.classList.add('is-success');
                 if (tone === 'danger') button.classList.add('is-danger');
+            };
+
+            const setPromptNote = (message, tone = 'ready') => {
+                prompt.dataset.state = tone;
+                note.textContent = message;
             };
 
             const makeBtn = (text, variant, onClick, detail = '') => {
                 const b = document.createElement('button');
                 b.type = 'button';
                 b.className = `ytkit-install-prompt__btn ytkit-install-prompt__btn--${variant}`;
+                b.dataset.detail = detail;
+                b.setAttribute('aria-label', detail ? `${text}. ${detail}` : text);
                 const copy = document.createElement('span');
                 copy.className = 'ytkit-install-prompt__btn-copy';
                 const label = document.createElement('span');
@@ -2275,7 +2287,8 @@ return response;
 
             // 1. Retry / Start Server
             if (isRetryMode) {
-                const retryBtn = makeBtn('Try Starting Again', 'primary', async () => {
+                const retryBtn = makeBtn('Start service', 'primary', async () => {
+                    setPromptNote('Starting the local downloader service…', 'warning');
                     setPromptButtonState(retryBtn, 'Starting…');
                     retryBtn.disabled = true;
                     retryBtn.setAttribute('aria-busy', 'true');
@@ -2286,32 +2299,41 @@ return response;
                         prompt.remove();
                     } else {
                         retryBtn.setAttribute('aria-busy', 'false');
-                        setPromptButtonState(retryBtn, 'Still not responding — use setup below', 'danger');
+                        setPromptNote('The service did not respond. Run setup below to repair the local downloader, then check again.', 'error');
+                        setPromptButtonState(retryBtn, 'Try again', 'danger');
                         retryBtn.disabled = false;
                     }
-                }, 'Best if the downloader is already installed but idle.');
+                }, 'Fastest fix if the downloader is installed but idle.');
                 btnCol.appendChild(retryBtn);
             }
 
             // 2. Copy Install Command
-            const copyBtn = makeBtn('Download Setup', 'accent', async () => {
+            const copyBtn = makeBtn('Download setup', 'accent', async () => {
+                setPromptNote('Downloading the setup file…', 'warning');
                 setPromptButtonState(copyBtn, 'Downloading setup…');
                 copyBtn.disabled = true;
                 copyBtn.setAttribute('aria-busy', 'true');
                 const result = await this.runInstallAssist();
                 copyBtn.setAttribute('aria-busy', 'false');
-                setPromptButtonState(copyBtn, result.downloaded ? 'Setup File Ready' : 'Open Setup File', result.downloaded ? 'success' : '');
+                setPromptButtonState(copyBtn, result.downloaded ? 'Setup ready' : 'Open setup file', result.downloaded ? 'success' : '');
+                setPromptNote(
+                    result.downloaded
+                        ? 'Setup downloaded. Open the file, finish installation, then choose Check again.'
+                        : 'The setup file should be open. Finish installation, then choose Check again.',
+                    'success'
+                );
                 copyBtn.disabled = false;
             }, 'Recommended. Installs or repairs the local downloader.');
             btnCol.appendChild(copyBtn);
 
             // 3. Copy PowerShell command
-            const dlBtn = makeBtn('Copy Fallback Command', 'ghost', async () => {
+            const dlBtn = makeBtn('Copy fallback command', 'ghost', async () => {
                 const copied = await this.copyInstallCommand();
                 if (copied) {
-                    setPromptButtonState(dlBtn, 'Copied! Paste into a terminal', 'success');
+                    setPromptButtonState(dlBtn, 'Command copied', 'success');
+                    setPromptNote('Fallback command copied. Use it in PowerShell only if the setup file cannot run.', 'success');
                     showToast('Fallback install command copied. Use it only if you cannot run the downloaded setup file.', '#3b82f6', { duration: 6 });
-                    setTimeout(() => { setPromptButtonState(dlBtn, 'Copy Fallback Command'); }, 3500);
+                    setTimeout(() => { setPromptButtonState(dlBtn, 'Copy fallback command'); }, 3500);
                 } else {
                     void openExternalUrl(this.INSTALLER_URL).catch(() => {});
                 }
@@ -2319,7 +2341,8 @@ return response;
             btnCol.appendChild(dlBtn);
 
             // 4. "I just installed it" — re-check
-            const recheckBtn = makeBtn('Check Again', 'ghost', async () => {
+            const recheckBtn = makeBtn('Check again', 'ghost', async () => {
+                setPromptNote('Checking for the local downloader service…', 'warning');
                 setPromptButtonState(recheckBtn, 'Checking…');
                 recheckBtn.disabled = true;
                 recheckBtn.setAttribute('aria-busy', 'true');
@@ -2330,16 +2353,17 @@ return response;
                     prompt.remove();
                 } else {
                     recheckBtn.setAttribute('aria-busy', 'false');
-                    setPromptButtonState(recheckBtn, 'Not detected — make sure the installer completed', 'danger');
+                    setPromptButtonState(recheckBtn, 'Not detected yet', 'danger');
+                    setPromptNote('Setup was not detected yet. Make sure the installer finished, then check again.', 'error');
                     recheckBtn.disabled = false;
-                    setTimeout(() => { setPromptButtonState(recheckBtn, 'Check Again'); }, 4000);
+                    setTimeout(() => { setPromptButtonState(recheckBtn, 'Check again'); }, 4000);
                 }
             }, 'Use this after running the setup file.');
             btnCol.appendChild(recheckBtn);
 
             // 5. Dismiss
             if (!isRetryMode) {
-                const dismissBtn = makeBtn('Not now', 'quiet', () => {
+                const dismissBtn = makeBtn('Skip for now', 'quiet', () => {
                     prompt.remove();
                     storageWrite('ytkit_mediadl_prompt_dismissed', true);
                 });
@@ -2352,11 +2376,6 @@ return response;
             prompt.appendChild(steps);
             prompt.appendChild(btnCol);
             document.body.appendChild(prompt);
-
-            // Auto-dismiss after 30s (install mode only)
-            if (!isRetryMode) {
-                setTimeout(() => { if (prompt.parentNode) prompt.remove(); }, 30000);
-            }
         }
     };
 
@@ -2374,12 +2393,12 @@ return response;
     let _downloadInProgress = false;
     async function ytKitDownload(videoUrl, audioOnly, opts = {}) {
         if (_downloadInProgress) {
-            showToast('A download is already in progress', '#f59e0b', { duration: 3 });
+            showToast('A download is already in progress.', '#f59e0b', { duration: 3 });
             return;
         }
         _downloadInProgress = true;
         DebugManager.log('Download', `Download requested: ${videoUrl} (audio=${audioOnly}, format=${opts.format || 'default'}, dir=${opts.outputDir || 'default'})`);
-        showToast(audioOnly ? 'Preparing local audio download...' : 'Preparing local video download...', '#3b82f6', { duration: 2 });
+        showToast(audioOnly ? 'Preparing your audio download…' : 'Preparing your video download…', '#3b82f6', { duration: 2 });
 
         let mdl = await MediaDLManager.check();
         if (!mdl.ok) {
@@ -2514,6 +2533,21 @@ return response;
         let selectedAudioFormat = s.downloadAudioFormat || 'mp3';
         let selectedQuality = s.downloadQuality || 'best';
         let customDir = '';
+        let dlBtn = null;
+        let chipRowCount = 0;
+        const syncDownloadCta = () => {
+            if (!dlBtn) return;
+            const isAudio = selectedMode === 'audio';
+            const format = isAudio ? selectedAudioFormat : selectedVideoFormat;
+            const quality = QUALITY_OPTIONS.find(q => q.value === selectedQuality)?.label || selectedQuality;
+            dlBtn.textContent = isAudio ? 'Download audio' : 'Download video';
+            dlBtn.setAttribute(
+                'aria-label',
+                isAudio
+                    ? `Download audio as ${format.toUpperCase()}`
+                    : `Download video as ${format.toUpperCase()} at ${quality}`
+            );
+        };
 
         const popup = document.createElement('div');
         popup.className = 'ytkit-dl-popup';
@@ -2525,7 +2559,7 @@ return response;
         header.className = 'ytkit-dl-popup__header';
         const title = document.createElement('span');
         title.className = 'ytkit-dl-popup__title';
-        title.textContent = 'Download';
+        title.textContent = 'Download options';
         const closeBtn = document.createElement('button');
         closeBtn.type = 'button';
         closeBtn.className = 'ytkit-dl-popup__close';
@@ -2539,21 +2573,30 @@ return response;
         // ── Mode tabs (Video / Audio) ──
         const tabs = document.createElement('div');
         tabs.className = 'ytkit-dl-popup__tabs';
+        tabs.setAttribute('role', 'tablist');
+        tabs.setAttribute('aria-label', 'Download type');
         const vidTab = document.createElement('button');
         vidTab.type = 'button';
         vidTab.className = 'ytkit-dl-popup__tab is-active';
+        vidTab.setAttribute('role', 'tab');
+        vidTab.setAttribute('aria-selected', 'true');
         vidTab.textContent = 'Video';
         const audTab = document.createElement('button');
         audTab.type = 'button';
         audTab.className = 'ytkit-dl-popup__tab';
-        audTab.textContent = 'Audio Only';
+        audTab.setAttribute('role', 'tab');
+        audTab.setAttribute('aria-selected', 'false');
+        audTab.textContent = 'Audio only';
 
         const updateTabs = () => {
             vidTab.classList.toggle('is-active', selectedMode === 'video');
             audTab.classList.toggle('is-active', selectedMode === 'audio');
+            vidTab.setAttribute('aria-selected', String(selectedMode === 'video'));
+            audTab.setAttribute('aria-selected', String(selectedMode === 'audio'));
             qualityRow.hidden = selectedMode === 'audio';
             videoFormatRow.hidden = selectedMode !== 'video';
             audioFormatRow.hidden = selectedMode !== 'audio';
+            syncDownloadCta();
         };
         vidTab.addEventListener('click', () => { selectedMode = 'video'; updateTabs(); });
         audTab.addEventListener('click', () => { selectedMode = 'audio'; updateTabs(); });
@@ -2571,10 +2614,13 @@ return response;
             row.className = 'ytkit-dl-popup__row';
             const lbl = document.createElement('div');
             lbl.className = 'ytkit-dl-popup__label';
+            lbl.id = `ytkit-dl-popup-row-${++chipRowCount}`;
             lbl.textContent = label;
             row.appendChild(lbl);
             const chips = document.createElement('div');
             chips.className = 'ytkit-dl-popup__chips';
+            chips.setAttribute('role', 'group');
+            chips.setAttribute('aria-labelledby', lbl.id);
             items.forEach(item => {
                 const chip = document.createElement('button');
                 chip.type = 'button';
@@ -2582,10 +2628,17 @@ return response;
                 chip.dataset.value = item.value;
                 chip.title = item.desc || '';
                 chip.textContent = item.label;
+                chip.setAttribute('aria-pressed', String(item.value === selected));
+                chip.setAttribute('aria-label', item.desc ? `${item.label}. ${item.desc}` : item.label);
                 chip.addEventListener('click', () => {
-                    chips.querySelectorAll('.ytkit-dl-popup__chip').forEach(c => c.classList.remove('is-active'));
+                    chips.querySelectorAll('.ytkit-dl-popup__chip').forEach(c => {
+                        c.classList.remove('is-active');
+                        c.setAttribute('aria-pressed', 'false');
+                    });
                     chip.classList.add('is-active');
+                    chip.setAttribute('aria-pressed', 'true');
                     onSelect(item.value);
+                    syncDownloadCta();
                 });
                 chips.appendChild(chip);
             });
@@ -2607,16 +2660,21 @@ return response;
         dirRow.className = 'ytkit-dl-popup__row';
         const dirLabel = document.createElement('div');
         dirLabel.className = 'ytkit-dl-popup__label';
+        dirLabel.id = 'ytkit-dl-popup-save-to-label';
         dirLabel.textContent = 'Save to';
         dirRow.appendChild(dirLabel);
         const dirWrap = document.createElement('div');
         dirWrap.className = 'ytkit-dl-popup__dir-wrap';
+        dirWrap.setAttribute('role', 'group');
+        dirWrap.setAttribute('aria-labelledby', dirLabel.id);
         const dirDisplay = document.createElement('span');
         dirDisplay.className = 'ytkit-dl-popup__dir-path';
         dirDisplay.textContent = 'Default (Downloads)';
         const dirInput = document.createElement('input');
         dirInput.type = 'text';
         dirInput.className = 'ytkit-dl-popup__dir-input';
+        dirInput.id = 'ytkit-dl-popup-custom-dir';
+        dirInput.setAttribute('aria-label', 'Custom download folder');
         dirInput.placeholder = 'C:\\Users\\...\\Videos';
         dirInput.spellcheck = false;
         dirInput.autocomplete = 'off';
@@ -2626,11 +2684,16 @@ return response;
         dirToggle.type = 'button';
         dirToggle.className = 'ytkit-dl-popup__dir-btn';
         dirToggle.textContent = 'Change';
+        dirToggle.setAttribute('aria-controls', dirInput.id);
+        dirToggle.setAttribute('aria-expanded', 'false');
+        dirToggle.setAttribute('aria-label', 'Choose a custom download folder');
         dirToggle.addEventListener('click', () => {
             const showing = !dirInput.hidden;
             dirInput.hidden = showing;
             dirDisplay.hidden = !showing;
             dirToggle.textContent = showing ? 'Change' : 'Default';
+            dirToggle.setAttribute('aria-expanded', String(!showing));
+            dirToggle.setAttribute('aria-label', showing ? 'Choose a custom download folder' : 'Use the default Downloads folder');
             if (showing) { customDir = ''; dirInput.value = ''; }
             else { dirInput.focus(); }
         });
@@ -2645,10 +2708,10 @@ return response;
         // ── Footer: Download button ──
         const footer = document.createElement('div');
         footer.className = 'ytkit-dl-popup__footer';
-        const dlBtn = document.createElement('button');
+        dlBtn = document.createElement('button');
         dlBtn.type = 'button';
         dlBtn.className = 'ytkit-dl-popup__go';
-        dlBtn.textContent = 'Download';
+        syncDownloadCta();
         dlBtn.addEventListener('click', () => {
             const isAudio = selectedMode === 'audio';
             const format = isAudio ? selectedAudioFormat : selectedVideoFormat;
@@ -19416,7 +19479,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 merged._activeProfile = name;
                 merged._settingsVersion = settingsManager.SETTINGS_VERSION;
                 settingsManager.save(merged);
-                if (typeof showToast === 'function') showToast(`Applied profile: ${name}. Reloading...`, '#22c55e');
+                if (typeof showToast === 'function') showToast(`Applied profile: ${name}. Reloading…`, '#22c55e');
                 setTimeout(() => location.reload(), 600);
                 return true;
             },
@@ -20092,7 +20155,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
                     if (!tracks || !tracks.length) { showToast('No captions available', '#ef4444'); return; }
                     const track = tracks.find(t => t.languageCode === 'en') || tracks[0];
-                    showToast('Fetching captions...', '#3b82f6');
+                    showToast('Fetching captions…', '#3b82f6');
                     const { response, data } = await extensionFetchJson({
                         url: track.baseUrl + '&fmt=json3'
                     });
@@ -20515,7 +20578,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             async _load(container) {
                 const vid = getVideoId();
                 if (!vid) { container.textContent = 'No video id'; return; }
-                container.textContent = 'Searching Reddit...';
+                container.textContent = 'Searching Reddit…';
                 try {
                     const url = `https://www.reddit.com/search.json?q=url%3Ayoutube.com%2Fwatch%3Fv%3D${vid}+OR+url%3Ayoutu.be%2F${vid}&sort=top&limit=15`;
                     const { data } = await extensionFetchJson({ url });
@@ -20974,7 +21037,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (this._panel) { this._panel.remove(); this._panel = null; return; }
                 const panel = document.createElement('div');
                 panel.className = 'ytkit-aisum-panel';
-                panel.textContent = 'Fetching transcript...';
+                panel.textContent = 'Fetching transcript…';
                 document.body.appendChild(panel);
                 this._panel = panel;
                 const close = () => { panel.remove(); this._panel = null; };
@@ -20984,9 +21047,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     const transcript = await this._fetchTranscript(vid);
                     if (transcript.length > 120000) {
                         // crude chunking: keep first 120k chars
-                        panel.textContent = 'Transcript truncated to 120k chars. Calling LLM...';
+                        panel.textContent = 'Transcript truncated to 120k chars. Calling LLM…';
                     } else {
-                        panel.textContent = 'Calling LLM...';
+                        panel.textContent = 'Calling LLM…';
                     }
                     const titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string');
                     const title = titleEl?.textContent?.trim() || '(video)';
@@ -21949,6 +22012,66 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         sidebar.className = 'ytkit-sidebar';
         sidebar.setAttribute('aria-label', 'Settings categories');
 
+        const sidebarTop = document.createElement('div');
+        sidebarTop.className = 'ytkit-sidebar-top';
+
+        const sidebarCard = document.createElement('section');
+        sidebarCard.className = 'ytkit-sidebar-card';
+        sidebarCard.setAttribute('aria-label', 'Settings workspace summary');
+
+        const sidebarKicker = document.createElement('span');
+        sidebarKicker.className = 'ytkit-sidebar-card-kicker';
+        sidebarKicker.textContent = 'Workspace';
+
+        const sidebarTitle = document.createElement('h2');
+        sidebarTitle.className = 'ytkit-sidebar-card-title';
+        sidebarTitle.textContent = currentPageLabel === 'Other'
+            ? 'All YouTube controls'
+            : `${currentPageLabel} controls`;
+
+        const sidebarCopy = document.createElement('p');
+        sidebarCopy.className = 'ytkit-sidebar-card-copy';
+        sidebarCopy.textContent = 'Search across the catalog, switch sections, and apply changes instantly.';
+
+        const sidebarStats = document.createElement('div');
+        sidebarStats.className = 'ytkit-sidebar-stats';
+        [
+            { value: enabledTopLevelFeatures, label: 'On' },
+            { value: totalTopLevelFeatures, label: 'Features' },
+            { value: populatedCategoryCount, label: 'Sections' }
+        ].forEach(({ value, label }) => {
+            const stat = document.createElement('span');
+            stat.className = 'ytkit-sidebar-stat';
+
+            const statValue = document.createElement('strong');
+            statValue.className = 'ytkit-sidebar-stat-value';
+            statValue.textContent = String(value);
+
+            const statLabel = document.createElement('span');
+            statLabel.className = 'ytkit-sidebar-stat-label';
+            statLabel.textContent = label;
+
+            stat.appendChild(statValue);
+            stat.appendChild(statLabel);
+            sidebarStats.appendChild(stat);
+        });
+
+        const sidebarFootnote = document.createElement('p');
+        sidebarFootnote.className = 'ytkit-sidebar-footnote';
+        const sidebarFootnoteStrong = document.createElement('strong');
+        sidebarFootnoteStrong.textContent = 'Live apply.';
+        const sidebarFootnoteCopy = document.createElement('span');
+        sidebarFootnoteCopy.textContent = 'Most changes update open YouTube surfaces immediately.';
+        sidebarFootnote.appendChild(sidebarFootnoteStrong);
+        sidebarFootnote.appendChild(sidebarFootnoteCopy);
+
+        sidebarCard.appendChild(sidebarKicker);
+        sidebarCard.appendChild(sidebarTitle);
+        sidebarCard.appendChild(sidebarCopy);
+        sidebarCard.appendChild(sidebarStats);
+        sidebarCard.appendChild(sidebarFootnote);
+        sidebarTop.appendChild(sidebarCard);
+
         // Search box
         const searchContainer = document.createElement('div');
         searchContainer.className = 'ytkit-search-container';
@@ -21984,12 +22107,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         searchActions.appendChild(searchClearBtn);
         searchActions.appendChild(searchMeta);
         searchContainer.appendChild(searchActions);
-        sidebar.appendChild(searchContainer);
+        sidebarTop.appendChild(searchContainer);
 
         const searchHint = document.createElement('p');
         searchHint.className = 'ytkit-search-hint';
         searchHint.textContent = 'Search by feature name or description.';
-        sidebar.appendChild(searchHint);
+        sidebarTop.appendChild(searchHint);
+        sidebar.appendChild(sidebarTop);
 
         const navList = document.createElement('div');
         navList.className = 'ytkit-nav-list';
@@ -22958,25 +23082,33 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             if (cat === 'Downloads') {
                 const banner = document.createElement('div');
                 banner.id = 'ytkit-mediadl-banner';
-                banner.style.cssText = 'background:var(--ytkit-bg-surface);border:1px solid var(--ytkit-border);border-radius:10px;padding:14px 16px;margin-bottom:16px;';
+                banner.className = 'ytkit-mediadl-banner';
+                banner.dataset.state = 'checking';
+                banner.setAttribute('role', 'region');
+                banner.setAttribute('aria-labelledby', 'ytkit-mediadl-title');
+                banner.setAttribute('aria-describedby', 'ytkit-mediadl-status-text');
 
                 const bannerTop = document.createElement('div');
-                bannerTop.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;';
+                bannerTop.className = 'ytkit-mediadl-banner__top';
 
                 const bannerLeft = document.createElement('div');
-                bannerLeft.style.cssText = 'display:flex;align-items:center;gap:10px;flex:1;min-width:0;';
+                bannerLeft.className = 'ytkit-mediadl-banner__main';
                 const statusDot = document.createElement('span');
                 statusDot.id = 'ytkit-mediadl-status-dot';
-                statusDot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#6b7280;flex-shrink:0;transition:background 0.3s;';
+                statusDot.className = 'ytkit-mediadl-banner__dot';
+                statusDot.setAttribute('aria-hidden', 'true');
                 const bannerInfo = document.createElement('div');
-                bannerInfo.style.cssText = 'min-width:0;';
+                bannerInfo.className = 'ytkit-mediadl-banner__copy';
                 const bannerTitle = document.createElement('div');
-                bannerTitle.style.cssText = 'font-size:13px;font-weight:600;color:var(--ytkit-text-primary);';
+                bannerTitle.id = 'ytkit-mediadl-title';
+                bannerTitle.className = 'ytkit-mediadl-banner__title';
                 bannerTitle.textContent = 'Astra Downloader';
                 const bannerStatus = document.createElement('div');
                 bannerStatus.id = 'ytkit-mediadl-status-text';
-                bannerStatus.style.cssText = 'font-size:11px;color:var(--ytkit-text-muted);margin-top:2px;';
-                bannerStatus.textContent = 'Checking...';
+                bannerStatus.className = 'ytkit-mediadl-banner__status';
+                bannerStatus.setAttribute('role', 'status');
+                bannerStatus.setAttribute('aria-live', 'polite');
+                bannerStatus.textContent = 'Checking downloader status…';
                 bannerInfo.appendChild(bannerTitle);
                 bannerInfo.appendChild(bannerStatus);
                 bannerLeft.appendChild(statusDot);
@@ -22984,7 +23116,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 const bannerActions = document.createElement('div');
                 bannerActions.id = 'ytkit-mediadl-banner-actions';
-                bannerActions.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+                bannerActions.className = 'ytkit-mediadl-banner__actions';
+                bannerActions.setAttribute('aria-label', 'Downloader actions');
 
                 bannerTop.appendChild(bannerLeft);
                 bannerTop.appendChild(bannerActions);
@@ -22995,85 +23128,98 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 // Check MediaDL status and update banner
                 (async () => {
                     const result = await MediaDLManager.check();
-                    const dot = document.getElementById('ytkit-mediadl-status-dot');
-                    const text = document.getElementById('ytkit-mediadl-status-text');
-                    const actions = document.getElementById('ytkit-mediadl-banner-actions');
-                    if (!dot || !text || !actions) return;
+                    if (!banner.isConnected) return;
+                    const text = bannerStatus;
+                    const actions = bannerActions;
+
+                    const makeBannerButton = (label, variant = 'ghost') => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = `ytkit-mediadl-banner__btn ytkit-mediadl-banner__btn--${variant}`;
+                        button.textContent = label;
+                        return button;
+                    };
 
                     if (result.ok) {
-                        dot.style.background = '#22c55e';
+                        banner.dataset.state = 'ready';
                         text.textContent = `Running${result.version ? ' (v' + result.version + ')' : ''} \u2014 yt-dlp server ready`;
                         // Add a "Check" refresh button
-                        const refreshBtn = document.createElement('button');
-                        refreshBtn.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid var(--ytkit-border);background:transparent;color:var(--ytkit-text-secondary);font-size:11px;cursor:pointer;';
+                        const refreshBtn = makeBannerButton('Refresh');
                         refreshBtn.textContent = 'Refresh';
                         refreshBtn.onclick = async () => {
-                            refreshBtn.textContent = '...';
+                            refreshBtn.textContent = 'Checking…';
+                            refreshBtn.disabled = true;
+                            banner.dataset.state = 'checking';
                             const r = await MediaDLManager.check(true);
-                            dot.style.background = r.ok ? '#22c55e' : '#ef4444';
-                            text.textContent = r.ok ? `Running${r.version ? ' (v' + r.version + ')' : ''} \u2014 yt-dlp server ready` : 'Not running';
+                            banner.dataset.state = r.ok ? 'ready' : 'missing';
+                            text.textContent = r.ok ? `Running${r.version ? ' (v' + r.version + ')' : ''} \u2014 yt-dlp server ready` : 'Not connected. Local downloads need the setup helper.';
                             refreshBtn.textContent = 'Refresh';
+                            refreshBtn.disabled = false;
                         };
                         actions.appendChild(refreshBtn);
                     } else {
-                        dot.style.background = '#f59e0b';
-                        text.textContent = 'Not installed \u2014 local yt-dlp downloads are unavailable';
-
-                        const btnStyle = 'padding:5px 12px;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;transition:background 0.2s;';
+                        banner.dataset.state = 'missing';
+                        text.textContent = 'Not connected. Local downloads need the setup helper.';
 
                         // "Try Start" button — attempts auto-start via mediadl:// protocol
-                        const startBtn = document.createElement('button');
-                        startBtn.style.cssText = btnStyle + 'border:1px solid var(--ytkit-border);background:transparent;color:var(--ytkit-text-secondary);';
-                        startBtn.textContent = 'Start';
-                        startBtn.title = 'Try to start the MediaDL server';
+                        const startBtn = makeBannerButton('Start service');
+                        startBtn.title = 'Try to start the local downloader service';
                         startBtn.onclick = async () => {
-                            startBtn.textContent = '...';
-                            startBtn.style.pointerEvents = 'none';
+                            startBtn.textContent = 'Starting…';
+                            startBtn.disabled = true;
+                            banner.dataset.state = 'checking';
+                            text.textContent = 'Trying to start the local downloader service…';
                             MediaDLManager.resetAutoStart();
                             const r = await MediaDLManager.tryAutoStart(5);
                             if (r.ok) {
-                                dot.style.background = '#22c55e';
+                                banner.dataset.state = 'ready';
                                 text.textContent = `Running${r.version ? ' (v' + r.version + ')' : ''} \u2014 yt-dlp server ready`;
                                 startBtn.textContent = 'Running';
-                                startBtn.style.background = '#22c55e'; startBtn.style.color = 'white'; startBtn.style.border = 'none';
+                                startBtn.classList.add('is-success');
                             } else {
-                                startBtn.textContent = 'Start';
-                                startBtn.style.pointerEvents = 'auto';
-                                showToast('Server did not start. Try installing below.', '#f59e0b', { duration: 4 });
+                                banner.dataset.state = 'missing';
+                                text.textContent = 'The service did not start. Run setup to repair the local downloader.';
+                                startBtn.textContent = 'Start service';
+                                startBtn.disabled = false;
+                                showToast('The local downloader did not start. Run setup to repair it.', '#f59e0b', { duration: 4 });
                             }
                         };
                         actions.appendChild(startBtn);
 
                         // "Install" button — downloads the setup file and copies the fallback command
-                        const installBtn = document.createElement('button');
-                        installBtn.style.cssText = btnStyle + 'border:none;background:#22c55e;color:white;';
+                        const installBtn = makeBannerButton('Download setup', 'accent');
                         installBtn.textContent = 'Download setup';
                         installBtn.title = 'Download the Astra Deck setup file and reveal it in Downloads';
                         installBtn.onclick = async () => {
-                            installBtn.textContent = 'Preparing...';
-                            installBtn.style.pointerEvents = 'none';
+                            installBtn.textContent = 'Preparing…';
+                            installBtn.disabled = true;
+                            banner.dataset.state = 'checking';
+                            text.textContent = 'Preparing the setup file…';
                             const result = await MediaDLManager.runInstallAssist();
                             installBtn.textContent = result.downloaded ? 'Setup ready' : 'Open setup';
-                            installBtn.style.background = result.downloaded ? '#16a34a' : '#2563eb';
+                            installBtn.classList.toggle('is-success', !!result.downloaded);
+                            banner.dataset.state = result.downloaded ? 'ready' : 'checking';
+                            text.textContent = result.downloaded
+                                ? 'Setup downloaded. Open the file, finish installation, then refresh.'
+                                : 'Setup opened. Finish installation, then refresh.';
                             setTimeout(() => {
                                 installBtn.textContent = 'Download setup';
-                                installBtn.style.background = '#22c55e';
-                                installBtn.style.pointerEvents = 'auto';
+                                installBtn.classList.remove('is-success');
+                                installBtn.disabled = false;
                             }, 3500);
                         };
                         actions.appendChild(installBtn);
 
                         // "Copy command" button
-                        const dlBtn = document.createElement('button');
-                        dlBtn.style.cssText = btnStyle + 'border:1px solid var(--ytkit-border);background:transparent;color:var(--ytkit-text-secondary);';
-                        dlBtn.textContent = 'Fallback command';
+                        const dlBtn = makeBannerButton('Copy command');
                         dlBtn.title = 'Copy the fallback PowerShell install command';
                         dlBtn.onclick = async () => {
                             const copied = await MediaDLManager.copyInstallCommand();
                             if (copied) {
-                                dlBtn.textContent = 'Copied!';
+                                dlBtn.textContent = 'Command copied';
+                                text.textContent = 'Fallback command copied. Use it only if the setup file cannot run.';
                                 showToast('Fallback install command copied. Use it only if you cannot run the downloaded setup file.', '#3b82f6', { duration: 6 });
-                                setTimeout(() => { dlBtn.textContent = 'Fallback command'; }, 3000);
+                                setTimeout(() => { dlBtn.textContent = 'Copy command'; }, 3000);
                             } else {
                                 void openExternalUrl(MediaDLManager.INSTALLER_URL).catch(() => {});
                             }
@@ -24665,6 +24811,170 @@ body.ytkit-panel-open #ytkit-settings-panel {
     border-color: rgba(255,255,255,0.08);
     font-size: 11px;
     font-weight: 700;
+}
+
+.ytkit-mediadl-banner {
+    margin: 0 0 12px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.032), rgba(255,255,255,0.014)),
+        rgba(10,13,18,0.92);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+
+.ytkit-mediadl-banner[data-state="ready"] {
+    border-color: rgba(34,197,94,0.18);
+    background:
+        radial-gradient(circle at top right, rgba(34,197,94,0.08), transparent 36%),
+        linear-gradient(180deg, rgba(255,255,255,0.034), rgba(255,255,255,0.012)),
+        rgba(9,15,12,0.94);
+}
+
+.ytkit-mediadl-banner[data-state="checking"] {
+    border-color: rgba(59,130,246,0.18);
+    background:
+        radial-gradient(circle at top right, rgba(59,130,246,0.08), transparent 36%),
+        linear-gradient(180deg, rgba(255,255,255,0.034), rgba(255,255,255,0.012)),
+        rgba(9,13,19,0.94);
+}
+
+.ytkit-mediadl-banner[data-state="missing"] {
+    border-color: rgba(245,158,11,0.18);
+    background:
+        radial-gradient(circle at top right, rgba(245,158,11,0.08), transparent 36%),
+        linear-gradient(180deg, rgba(255,255,255,0.034), rgba(255,255,255,0.012)),
+        rgba(16,13,9,0.94);
+}
+
+.ytkit-mediadl-banner__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.ytkit-mediadl-banner__main {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    flex: 1;
+    min-width: 0;
+}
+
+.ytkit-mediadl-banner__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    flex-shrink: 0;
+    background: #6b7280;
+    box-shadow: 0 0 0 4px rgba(107,114,128,0.14);
+    transition: background-color 180ms var(--ytkit-ease-out), box-shadow 180ms var(--ytkit-ease-out);
+}
+
+.ytkit-mediadl-banner[data-state="ready"] .ytkit-mediadl-banner__dot {
+    background: #22c55e;
+    box-shadow: 0 0 0 4px rgba(34,197,94,0.14);
+}
+
+.ytkit-mediadl-banner[data-state="checking"] .ytkit-mediadl-banner__dot {
+    background: #60a5fa;
+    box-shadow: 0 0 0 4px rgba(96,165,250,0.14);
+}
+
+.ytkit-mediadl-banner[data-state="missing"] .ytkit-mediadl-banner__dot {
+    background: #f59e0b;
+    box-shadow: 0 0 0 4px rgba(245,158,11,0.14);
+}
+
+.ytkit-mediadl-banner__copy {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+.ytkit-mediadl-banner__title {
+    color: var(--ytkit-text-primary);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.ytkit-mediadl-banner__status {
+    color: rgba(255,255,255,0.62);
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.ytkit-mediadl-banner__actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.ytkit-mediadl-banner__btn {
+    appearance: none;
+    -webkit-appearance: none;
+    min-height: 32px;
+    padding: 0 11px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    color: var(--ytkit-text-secondary);
+    font-family: var(--ytkit-font);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    touch-action: manipulation;
+    transition:
+        border-color 180ms var(--ytkit-ease-out),
+        background-color 180ms var(--ytkit-ease-out),
+        color 180ms var(--ytkit-ease-out),
+        transform 180ms var(--ytkit-ease-out);
+}
+
+.ytkit-mediadl-banner__btn:hover {
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.14);
+    color: var(--ytkit-text-primary);
+}
+
+.ytkit-mediadl-banner__btn--accent {
+    border-color: rgba(34,197,94,0.24);
+    background: rgba(34,197,94,0.16);
+    color: rgba(241,255,245,0.96);
+}
+
+.ytkit-mediadl-banner__btn--accent:hover {
+    background: rgba(34,197,94,0.22);
+    border-color: rgba(34,197,94,0.34);
+}
+
+.ytkit-mediadl-banner__btn.is-success {
+    border-color: rgba(34,197,94,0.28);
+    background: rgba(34,197,94,0.2);
+    color: #f4fff7;
+}
+
+.ytkit-mediadl-banner__btn:disabled {
+    opacity: 0.62;
+    cursor: wait;
+}
+
+@media (max-width: 720px) {
+    .ytkit-mediadl-banner__top {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .ytkit-mediadl-banner__actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
 }
 
 .ytkit-features-grid {
@@ -27280,6 +27590,100 @@ body.ytkit-panel-open #ytkit-settings-panel {
             overflow: hidden;
         }
 
+        .ytkit-sidebar-top {
+            display: grid;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .ytkit-sidebar-card {
+            display: grid;
+            gap: 8px;
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.075);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.016)),
+                rgba(10,14,20,0.88);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.028);
+        }
+
+        .ytkit-sidebar-card-kicker {
+            color: #ffb19a;
+            font-size: 9px;
+            font-weight: 850;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+        }
+
+        .ytkit-sidebar-card-title {
+            margin: 0;
+            color: rgba(255,255,255,0.96);
+            font-size: 15px;
+            line-height: 1.08;
+            font-weight: 800;
+            letter-spacing: -0.035em;
+        }
+
+        .ytkit-sidebar-card-copy {
+            margin: 0;
+            color: rgba(255,255,255,0.58);
+            font-size: 10.5px;
+            line-height: 1.45;
+        }
+
+        .ytkit-sidebar-stats {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 6px;
+        }
+
+        .ytkit-sidebar-stat {
+            min-width: 0;
+            padding: 8px 7px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+        }
+
+        .ytkit-sidebar-stat-value {
+            display: block;
+            color: rgba(255,255,255,0.94);
+            font-size: 14px;
+            line-height: 1;
+            font-weight: 850;
+            letter-spacing: -0.03em;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .ytkit-sidebar-stat-label {
+            display: block;
+            margin-top: 5px;
+            color: rgba(255,255,255,0.48);
+            font-size: 8px;
+            font-weight: 850;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .ytkit-sidebar-footnote {
+            display: flex;
+            gap: 5px;
+            align-items: baseline;
+            margin: 0;
+            color: rgba(255,255,255,0.52);
+            font-size: 10px;
+            line-height: 1.42;
+        }
+
+        .ytkit-sidebar-footnote strong {
+            flex-shrink: 0;
+            color: rgba(255,255,255,0.78);
+            font-weight: 800;
+        }
+
         .ytkit-search-container {
             position: sticky;
             top: 0;
@@ -27990,6 +28394,27 @@ body.ytkit-panel-open #ytkit-settings-panel {
             overscroll-behavior: contain;
         }
 
+        #ytkit-mediadl-install-prompt[data-state="warning"] {
+            border-color: rgba(245,158,11,0.2);
+            background:
+                radial-gradient(circle at top right, rgba(245,158,11,0.15), transparent 42%),
+                linear-gradient(180deg, rgba(22,24,32,0.98), rgba(11,12,18,0.98));
+        }
+
+        #ytkit-mediadl-install-prompt[data-state="success"] {
+            border-color: rgba(34,197,94,0.22);
+            background:
+                radial-gradient(circle at top right, rgba(34,197,94,0.16), transparent 42%),
+                linear-gradient(180deg, rgba(17,25,22,0.98), rgba(8,12,10,0.98));
+        }
+
+        #ytkit-mediadl-install-prompt[data-state="error"] {
+            border-color: rgba(239,68,68,0.24);
+            background:
+                radial-gradient(circle at top right, rgba(239,68,68,0.16), transparent 42%),
+                linear-gradient(180deg, rgba(27,19,24,0.98), rgba(13,9,12,0.98));
+        }
+
         .ytkit-install-prompt__header {
             display: flex;
             align-items: center;
@@ -28072,6 +28497,24 @@ body.ytkit-panel-open #ytkit-settings-panel {
             color: rgba(255,255,255,0.78);
             font-size: 11px;
             line-height: 1.55;
+        }
+
+        #ytkit-mediadl-install-prompt[data-state="warning"] .ytkit-install-prompt__note {
+            border-color: rgba(245,158,11,0.18);
+            background: rgba(245,158,11,0.08);
+            color: rgba(255,244,214,0.88);
+        }
+
+        #ytkit-mediadl-install-prompt[data-state="success"] .ytkit-install-prompt__note {
+            border-color: rgba(34,197,94,0.2);
+            background: rgba(34,197,94,0.08);
+            color: rgba(232,255,239,0.9);
+        }
+
+        #ytkit-mediadl-install-prompt[data-state="error"] .ytkit-install-prompt__note {
+            border-color: rgba(239,68,68,0.22);
+            background: rgba(239,68,68,0.09);
+            color: rgba(255,235,235,0.9);
         }
 
         .ytkit-install-prompt__steps {
@@ -28475,6 +28918,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
             z-index: 2147483647;
             animation: ytkit-slide-in 200ms var(--ytkit-ease-out);
             overflow: hidden;
+            backdrop-filter: blur(14px);
         }
 
         .ytkit-dl-popup__header {
@@ -28503,11 +28947,20 @@ body.ytkit-panel-open #ytkit-settings-panel {
             cursor: pointer;
             font-size: 12px;
             transition: background 150ms, color 150ms;
+            outline: none;
         }
 
         .ytkit-dl-popup__close:hover {
             background: rgba(255,255,255,0.08);
             color: #fff;
+        }
+
+        .ytkit-dl-popup__close:focus-visible,
+        .ytkit-dl-popup__tab:focus-visible,
+        .ytkit-dl-popup__chip:focus-visible,
+        .ytkit-dl-popup__dir-btn:focus-visible,
+        .ytkit-dl-popup__go:focus-visible {
+            box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(34,197,94,0.22);
         }
 
         .ytkit-dl-popup__tabs {
@@ -28520,6 +28973,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
         .ytkit-dl-popup__tab {
             appearance: none;
             -webkit-appearance: none;
+            min-height: 34px;
             padding: 7px 0;
             border-radius: 8px;
             border: 1px solid rgba(255,255,255,0.06);
@@ -28529,6 +28983,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
             font-weight: 600;
             cursor: pointer;
             transition: background 150ms, color 150ms, border-color 150ms;
+            outline: none;
+            touch-action: manipulation;
         }
 
         .ytkit-dl-popup__tab:hover {
@@ -28536,7 +28992,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
             color: rgba(255,255,255,0.7);
         }
 
-        .ytkit-dl-popup__tab.is-active {
+        .ytkit-dl-popup__tab.is-active,
+        .ytkit-dl-popup__tab[aria-selected="true"] {
             background: rgba(34,197,94,0.14);
             border-color: rgba(34,197,94,0.28);
             color: #4ade80;
@@ -28570,6 +29027,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
         .ytkit-dl-popup__chip {
             appearance: none;
             -webkit-appearance: none;
+            min-height: 30px;
             padding: 5px 10px;
             border-radius: 7px;
             border: 1px solid rgba(255,255,255,0.08);
@@ -28579,6 +29037,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
             font-weight: 600;
             cursor: pointer;
             transition: background 150ms, color 150ms, border-color 150ms;
+            outline: none;
+            touch-action: manipulation;
         }
 
         .ytkit-dl-popup__chip:hover {
@@ -28586,7 +29046,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
             color: rgba(255,255,255,0.8);
         }
 
-        .ytkit-dl-popup__chip.is-active {
+        .ytkit-dl-popup__chip.is-active,
+        .ytkit-dl-popup__chip[aria-pressed="true"] {
             background: rgba(34,197,94,0.16);
             border-color: rgba(34,197,94,0.32);
             color: #4ade80;
@@ -28622,8 +29083,10 @@ body.ytkit-panel-open #ytkit-settings-panel {
             outline: none;
         }
 
-        .ytkit-dl-popup__dir-input:focus {
+        .ytkit-dl-popup__dir-input:focus,
+        .ytkit-dl-popup__dir-input:focus-visible {
             border-color: rgba(34,197,94,0.4);
+            box-shadow: 0 0 0 3px rgba(34,197,94,0.14);
         }
 
         .ytkit-dl-popup__dir-btn {
@@ -28639,6 +29102,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
             cursor: pointer;
             flex-shrink: 0;
             transition: background 150ms, color 150ms;
+            outline: none;
+            touch-action: manipulation;
         }
 
         .ytkit-dl-popup__dir-btn:hover {
@@ -28663,6 +29128,8 @@ body.ytkit-panel-open #ytkit-settings-panel {
             font-weight: 700;
             cursor: pointer;
             transition: filter 150ms, transform 150ms;
+            outline: none;
+            touch-action: manipulation;
         }
 
         .ytkit-dl-popup__go:hover {
@@ -30567,6 +31034,15 @@ body.ytkit-panel-open #ytkit-settings-panel {
                 border-bottom: 1px solid rgba(255,255,255,0.08);
                 overflow: visible;
                 padding: 8px 10px 10px;
+            }
+
+            .ytkit-sidebar-top {
+                gap: 6px;
+            }
+
+            .ytkit-sidebar-card,
+            .ytkit-search-hint {
+                display: none;
             }
 
             .ytkit-search-container {
