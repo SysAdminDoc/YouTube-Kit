@@ -1025,15 +1025,16 @@ class MainWindow(QMainWindow):
         ctrl_layout.addWidget(btn_folder)
         layout.addWidget(ctrl)
 
-        # Stats
+        # Stats — keep refs to frames (else Python GC deletes the underlying Qt objects)
         stats_layout = QHBoxLayout()
-        _, self.stat_active = make_stat("Active", "0")
+        self._stat_frame_active, self.stat_active = make_stat("Active", "0")
         self.stat_active.setStyleSheet("font-size: 24px; font-weight: bold; color: #22c55e;")
-        _, self.stat_completed = make_stat("Completed", "0")
-        _, self.stat_uptime = make_stat("Uptime", "--")
-        _, self.stat_port = make_stat("Port", str(self.config.get("ServerPort", SERVER_PORT)))
-        for w in [self.stat_active, self.stat_completed, self.stat_uptime, self.stat_port]:
-            stats_layout.addWidget(w.parent())
+        self._stat_frame_completed, self.stat_completed = make_stat("Completed", "0")
+        self._stat_frame_uptime, self.stat_uptime = make_stat("Uptime", "--")
+        self._stat_frame_port, self.stat_port = make_stat("Port", str(self.config.get("ServerPort", SERVER_PORT)))
+        for frame in (self._stat_frame_active, self._stat_frame_completed,
+                      self._stat_frame_uptime, self._stat_frame_port):
+            stats_layout.addWidget(frame)
         layout.addLayout(stats_layout)
 
         # Log
