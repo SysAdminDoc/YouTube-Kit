@@ -6,9 +6,10 @@ Manages yt-dlp downloads with a PyQt6 GUI, system tray, and REST API on port 975
 First run auto-downloads yt-dlp + ffmpeg. No separate installer needed.
 """
 
-import sys, os, json, time, re, uuid, subprocess, threading, signal, socket, shutil
+import sys, os, json, time, re, uuid, subprocess, threading, socket, shutil
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
+from urllib.parse import urlparse
 
 # ── Bootstrap: auto-install dependencies ──
 def _bootstrap():
@@ -36,13 +37,13 @@ def _bootstrap():
 _bootstrap()
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTabWidget, QScrollArea, QFrame, QCheckBox, QLineEdit,
     QFileDialog, QSystemTrayIcon, QMenu, QMessageBox, QProgressBar, QTextEdit,
-    QSizePolicy, QSpacerItem
+    QSpinBox, QComboBox, QGraphicsOpacityEffect, QStyle
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread, QSize
-from PyQt6.QtGui import QIcon, QFont, QPixmap, QColor, QPalette, QAction
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread, QSize, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QIcon, QFont, QTextCursor
 from flask import Flask, request, jsonify
 import requests as http_requests
 
@@ -87,75 +88,402 @@ DEFAULT_CONFIG = {
     "CloseToTray": True,
 }
 
-# ── Dark theme stylesheet (Catppuccin-inspired) ──
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+DOWNLOAD_ACTIVE_STATES = {'queued', 'downloading', 'merging', 'extracting'}
+DOWNLOAD_TERMINAL_STATES = {'complete', 'failed', 'cancelled'}
+CONTROL_CHARS_RE = re.compile(r'[\x00-\x1f\x7f]')
+MAX_TEXT_FIELD = 500
+MAX_PATH_FIELD = 2048
+
+
+def _timestamp_suffix():
+    return datetime.now().strftime("%Y%m%d%H%M%S")
+
+
+def atomic_write_json(path, data):
+    """Write JSON atomically so crashes do not leave truncated config/history files."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+
+
+def download_file_atomic(url, path, timeout=60, chunk_size=65536):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.download")
+    try:
+        with http_requests.get(url, stream=True, timeout=timeout) as r:
+            r.raise_for_status()
+            with open(tmp, 'wb') as f:
+                for chunk in r.iter_content(chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                f.flush()
+                os.fsync(f.fileno())
+        if tmp.stat().st_size <= 0:
+            raise RuntimeError("Downloaded file was empty")
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+
+
+def backup_corrupt_file(path):
+    path = Path(path)
+    if not path.exists():
+        return
+    backup = path.with_name(f"{path.name}.corrupt-{_timestamp_suffix()}")
+    try:
+        path.replace(backup)
+    except Exception:
+        pass
+
+
+def load_json_file(path, fallback):
+    path = Path(path)
+    if not path.exists():
+        return fallback
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        backup_corrupt_file(path)
+        return fallback
+
+
+def clean_text(value, default="", max_len=MAX_TEXT_FIELD):
+    if value is None:
+        return default
+    value = CONTROL_CHARS_RE.sub("", str(value)).strip()
+    if len(value) > max_len:
+        return value[:max_len].rstrip()
+    return value
+
+
+def clean_path_text(value):
+    return clean_text(value, "", MAX_PATH_FIELD)
+
+
+def ps_single_quote(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def coerce_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("1", "true", "yes", "on"):
+            return True
+        if lowered in ("0", "false", "no", "off"):
+            return False
+    return default
+
+
+def normalize_rate_limit(value):
+    value = clean_text(value, "", 32).upper()
+    return value if re.fullmatch(r'\d+[KMG]?', value) else ""
+
+
+def normalize_proxy(value):
+    value = clean_text(value, "", 512)
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme.lower() in {"http", "https", "socks", "socks4", "socks5"} and parsed.netloc:
+        return value
+    return ""
+
+
+def normalize_sublangs(value):
+    value = clean_text(value, "en", 80)
+    value = re.sub(r'[^a-zA-Z0-9,\-]', '', value)
+    return value or "en"
+
+
+def normalize_url(value):
+    url = clean_text(value, "", 4096)
+    if not url or any(ch.isspace() for ch in url):
+        return None, "Enter a valid http or https URL."
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None, "Enter a valid http or https URL."
+    if len(url) > 4096:
+        return None, "URL is too long to download safely."
+    return url, None
+
+
+def normalize_output_dir(value, default_dir=None):
+    raw = clean_path_text(value)
+    if not raw:
+        raw = clean_path_text(default_dir)
+    if not raw:
+        raw = str(Path.home() / "Videos")
+    try:
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            return None, "Choose an absolute output folder."
+        path.mkdir(parents=True, exist_ok=True)
+        if not path.is_dir():
+            return None, "Output path is not a folder."
+        return str(path), None
+    except Exception as e:
+        return None, f"Cannot use output folder: {e}"
+
+
+def sanitize_config(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    data = dict(DEFAULT_CONFIG)
+    for key in DEFAULT_CONFIG:
+        if key in raw:
+            data[key] = raw[key]
+
+    data["DownloadPath"] = clean_path_text(data.get("DownloadPath")) or DEFAULT_CONFIG["DownloadPath"]
+    data["AudioDownloadPath"] = clean_path_text(data.get("AudioDownloadPath"))
+    data["ServerPort"] = clamp_int(data.get("ServerPort"), SERVER_PORT, 1024, 65535)
+    token = clean_text(data.get("ServerToken"), "", 128)
+    data["ServerToken"] = token if re.fullmatch(r'[A-Za-z0-9_\-]{16,128}', token) else uuid.uuid4().hex
+    for key in ("EmbedMetadata", "EmbedThumbnail", "EmbedChapters", "EmbedSubs",
+                "SponsorBlock", "DownloadArchive", "AutoUpdateYtDlp",
+                "StartMinimized", "CloseToTray"):
+        data[key] = coerce_bool(data.get(key), DEFAULT_CONFIG[key])
+    data["SubLangs"] = normalize_sublangs(data.get("SubLangs"))
+    data["SponsorBlockAction"] = "mark" if data.get("SponsorBlockAction") == "mark" else "remove"
+    data["ConcurrentFragments"] = clamp_int(data.get("ConcurrentFragments"), 4, 1, 32)
+    data["RateLimit"] = normalize_rate_limit(data.get("RateLimit"))
+    data["Proxy"] = normalize_proxy(data.get("Proxy"))
+    return data
+
+
+def sanitize_history_entries(raw):
+    if not isinstance(raw, list):
+        return []
+    entries = []
+    for item in raw[-500:]:
+        if not isinstance(item, dict):
+            continue
+        entries.append({
+            "id": clean_text(item.get("id"), "", 120),
+            "url": clean_text(item.get("url"), "", 4096),
+            "title": clean_text(item.get("title"), "(untitled)", 500) or "(untitled)",
+            "filename": clean_path_text(item.get("filename")),
+            "format": clean_text(item.get("format"), "", 16),
+            "quality": clean_text(item.get("quality"), "", 16),
+            "audioOnly": coerce_bool(item.get("audioOnly"), False),
+            "date": clean_text(item.get("date"), "", 40),
+            "duration": max(0, clamp_int(item.get("duration"), 0, 0, 60 * 60 * 24 * 30)),
+        })
+    return entries
+
+# ── Dark theme stylesheet ──
 STYLESHEET = """
-QMainWindow, QWidget { background-color: #0a0e14; color: #e6edf3; }
-QLabel { color: #e6edf3; }
-QLabel[class="muted"] { color: #525a65; }
-QLabel[class="secondary"] { color: #8b949e; }
-QLabel[class="heading"] { font-size: 20px; font-weight: bold; }
-QLabel[class="section"] { color: #525a65; font-size: 10px; font-weight: bold; letter-spacing: 1px; }
+QMainWindow, QWidget {
+    background-color: #0b0f14;
+    color: #edf2f7;
+    font-family: "Segoe UI", "Inter", "Arial";
+    font-size: 12px;
+}
+QLabel { color: #edf2f7; background: transparent; }
+QLabel[class="title"] { font-size: 23px; font-weight: 700; color: #f8fafc; }
+QLabel[class="subtitle"] { color: #9aa6b2; font-size: 12px; line-height: 18px; }
+QLabel[class="muted"] { color: #7b8794; }
+QLabel[class="secondary"] { color: #aab5c2; }
+QLabel[class="section"] {
+    color: #7b8794;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.1px;
+    text-transform: uppercase;
+}
+QLabel[class="fieldLabel"] { color: #edf2f7; font-size: 12px; font-weight: 600; }
+QLabel[class="fieldHint"] { color: #7b8794; font-size: 11px; }
+QLabel[class="emptyTitle"] { color: #edf2f7; font-size: 15px; font-weight: 700; }
+QLabel[class="emptyBody"] { color: #8793a0; font-size: 12px; }
+QLabel[class="badge"] {
+    border-radius: 10px;
+    padding: 3px 8px;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel[class="badge"][tone="success"] { color: #b9f6ce; background: #0f2c1e; border: 1px solid #1d5c39; }
+QLabel[class="badge"][tone="warning"] { color: #ffe4a3; background: #30250e; border: 1px solid #6c5318; }
+QLabel[class="badge"][tone="danger"] { color: #ffc8c8; background: #351718; border: 1px solid #773033; }
+QLabel[class="badge"][tone="info"] { color: #b9dcff; background: #10283e; border: 1px solid #24567e; }
+QLabel[class="badge"][tone="neutral"] { color: #b7c1cc; background: #111923; border: 1px solid #263241; }
 
 QPushButton {
-    background-color: #1a2028; color: #8b949e; border: 1px solid #2a3140;
-    border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: 600;
+    background-color: #141b24;
+    color: #d7dee7;
+    border: 1px solid #263241;
+    border-radius: 7px;
+    padding: 8px 14px;
+    min-height: 34px;
+    font-size: 12px;
+    font-weight: 650;
 }
-QPushButton:hover { background-color: #222a35; }
-QPushButton:disabled { opacity: 0.5; }
+QPushButton:hover { background-color: #1b2531; border-color: #344457; color: #f8fafc; }
+QPushButton:pressed { background-color: #111821; border-color: #233142; }
+QPushButton:focus { border-color: #3ddc84; }
+QPushButton:disabled { color: #5d6875; background-color: #101720; border-color: #1c2632; }
 QPushButton[class="primary"] {
-    background-color: #22c55e; color: #0a0a0a; border: none; font-weight: bold;
+    background-color: #2dd36f;
+    color: #06100a;
+    border: 1px solid #38e984;
+    font-weight: 750;
 }
-QPushButton[class="primary"]:hover { background-color: #16a34a; }
+QPushButton[class="primary"]:hover { background-color: #38e984; }
+QPushButton[class="secondary"] {
+    background-color: #111821;
+    color: #c7d0da;
+    border: 1px solid #2a3747;
+}
 QPushButton[class="danger"] {
-    background-color: #ef4444; color: white; border: none; font-weight: bold;
+    background-color: #2a1517;
+    color: #ffd1d1;
+    border: 1px solid #6e2a2e;
+    font-weight: 700;
 }
-QPushButton[class="danger"]:hover { background-color: #dc2626; }
+QPushButton[class="danger"]:hover { background-color: #3b1c1f; border-color: #a34449; }
+QPushButton[class="ghost"] {
+    background-color: transparent;
+    border-color: transparent;
+    color: #9aa6b2;
+    padding-left: 10px;
+    padding-right: 10px;
+}
+QPushButton[class="ghost"]:hover { background-color: #121923; border-color: #263241; color: #edf2f7; }
 QPushButton[class="nav"] {
-    background-color: transparent; color: #8b949e; border: none;
-    text-align: left; padding: 10px 16px; font-size: 13px; font-weight: 600;
+    background-color: transparent;
+    color: #9aa6b2;
+    border: 1px solid transparent;
+    text-align: left;
+    padding: 10px 14px;
+    margin: 0 10px 4px 10px;
+    font-size: 13px;
+    font-weight: 650;
     border-radius: 8px;
 }
-QPushButton[class="nav"]:hover { background-color: #1a2028; }
-QPushButton[class="nav"][active="true"] { color: #22c55e; font-weight: bold; }
-
-QLineEdit {
-    background-color: #1a2028; color: #e6edf3; border: 1px solid #2a3140;
-    border-radius: 6px; padding: 6px 8px; font-size: 12px;
-    selection-background-color: #22c55e;
+QPushButton[class="nav"]:hover { background-color: #111821; color: #edf2f7; }
+QPushButton[class="nav"][active="true"] {
+    color: #dfffea;
+    background-color: #102117;
+    border-color: #214d34;
+    font-weight: 750;
 }
-QLineEdit:focus { border-color: #22c55e; }
 
-QCheckBox { color: #8b949e; font-size: 12px; spacing: 8px; }
-QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #2a3140; background: #1a2028; }
-QCheckBox::indicator:checked { background: #22c55e; border-color: #22c55e; }
+QLineEdit, QSpinBox, QComboBox {
+    background-color: #111821;
+    color: #edf2f7;
+    border: 1px solid #263241;
+    border-radius: 7px;
+    padding: 7px 9px;
+    min-height: 34px;
+    font-size: 12px;
+    selection-background-color: #2dd36f;
+    selection-color: #06100a;
+}
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #3ddc84; background-color: #141d28; }
+QLineEdit[state="error"], QSpinBox[state="error"] { border-color: #d25b61; background-color: #1d1216; }
+QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled { color: #65717f; background: #0f151d; border-color: #1d2733; }
+QComboBox::drop-down { border: none; width: 24px; }
+QSpinBox::up-button, QSpinBox::down-button { width: 18px; border: none; background: transparent; }
+
+QCheckBox { color: #c7d0da; font-size: 12px; spacing: 9px; min-height: 28px; }
+QCheckBox::indicator { width: 18px; height: 18px; border-radius: 5px; border: 1px solid #2c3a4a; background: #111821; }
+QCheckBox::indicator:hover { border-color: #3a4c60; }
+QCheckBox::indicator:checked { background: #2dd36f; border-color: #38e984; }
+QCheckBox:disabled { color: #677281; }
 
 QFrame[class="card"] {
-    background-color: #151b23; border: 1px solid #2a3140; border-radius: 10px;
+    background-color: #121922;
+    border: 1px solid #243142;
+    border-radius: 8px;
 }
 QFrame[class="sidebar"] {
-    background-color: #0d1117; border-right: 1px solid #2a3140;
+    background-color: #080c11;
+    border-right: 1px solid #1e2835;
 }
 QFrame[class="stat"] {
-    background-color: #151b23; border: 1px solid #2a3140; border-radius: 10px;
+    background-color: #111821;
+    border: 1px solid #243142;
+    border-radius: 8px;
+}
+QFrame[class="empty"] {
+    background-color: #0e141c;
+    border: 1px dashed #2a3747;
+    border-radius: 8px;
+}
+QFrame[class="download"] {
+    background-color: #121922;
+    border: 1px solid #243142;
+    border-radius: 8px;
+}
+QFrame[class="download"][state="failed"] { border-color: #6e2a2e; background-color: #171315; }
+QFrame[class="download"][state="complete"] { border-color: #1d5c39; background-color: #101915; }
+QFrame[class="divider"] {
+    background-color: #1e2835;
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
 }
 
 QTextEdit {
-    background-color: #151b23; color: #525a65; border: 1px solid #2a3140;
-    border-radius: 8px; font-family: 'Cascadia Code', 'Consolas', monospace;
-    font-size: 11px; padding: 8px;
+    background-color: #0e141c;
+    color: #9aa6b2;
+    border: 1px solid #243142;
+    border-radius: 8px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+    padding: 10px;
 }
 
 QScrollArea { border: none; background: transparent; }
-QScrollBar:vertical { background: #0a0e14; width: 8px; border: none; }
-QScrollBar::handle:vertical { background: #2a3140; border-radius: 4px; min-height: 20px; }
+QScrollBar:vertical { background: transparent; width: 10px; border: none; margin: 2px; }
+QScrollBar::handle:vertical { background: #2a3747; border-radius: 4px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #3a4c60; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 
-QProgressBar { background: #1a2028; border: none; border-radius: 4px; height: 6px; text-align: center; }
-QProgressBar::chunk { background: #22c55e; border-radius: 4px; }
+QProgressBar { background: #0c1219; border: 1px solid #223042; border-radius: 5px; height: 8px; text-align: center; }
+QProgressBar::chunk { background: #2dd36f; border-radius: 4px; }
 
 QTabWidget::pane { border: none; }
 QTabBar { background: transparent; }
 QTabBar::tab { height: 0; width: 0; }
+
+QMenu {
+    background-color: #111821;
+    color: #edf2f7;
+    border: 1px solid #263241;
+    border-radius: 8px;
+    padding: 6px;
+}
+QMenu::item { padding: 7px 24px 7px 10px; border-radius: 6px; }
+QMenu::item:selected { background-color: #182331; }
+QToolTip {
+    background-color: #111821;
+    color: #edf2f7;
+    border: 1px solid #2a3747;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+QMessageBox { background-color: #0b0f14; }
 """
 
 # ══════════════════════════════════════════════════════════════
@@ -164,17 +492,7 @@ QTabBar::tab { height: 0; width: 0; }
 class Config:
     def __init__(self):
         INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-        self._data = dict(DEFAULT_CONFIG)
-        if CONFIG_PATH.exists():
-            try:
-                with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                    saved = json.load(f)
-                for k, v in saved.items():
-                    self._data[k] = v
-            except Exception:
-                pass
-        if not self._data.get("ServerToken"):
-            self._data["ServerToken"] = uuid.uuid4().hex
+        self._data = sanitize_config(load_json_file(CONFIG_PATH, {}))
         self.save()
 
     def get(self, key, default=None):
@@ -185,8 +503,8 @@ class Config:
 
     def save(self):
         try:
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(self._data, f, indent=2)
+            self._data = sanitize_config(self._data)
+            atomic_write_json(CONFIG_PATH, self._data)
         except Exception:
             pass
 
@@ -203,11 +521,7 @@ class History:
             self._write([])
 
     def load(self):
-        try:
-            with open(HISTORY_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            return []
+        return sanitize_history_entries(load_json_file(HISTORY_PATH, []))
 
     def add(self, entry):
         data = self.load()
@@ -221,8 +535,7 @@ class History:
 
     def _write(self, data):
         try:
-            with open(HISTORY_PATH, 'w', encoding='utf-8') as f:
-                json.dump(data, f)
+            atomic_write_json(HISTORY_PATH, sanitize_history_entries(data))
         except Exception:
             pass
 
@@ -277,17 +590,16 @@ class DownloadManager(QObject):
 
     def start_download(self, url, audio_only=False, fmt=None, quality=None,
                        output_dir=None, title=None, referer=None):
+        url, err = normalize_url(url)
+        if err:
+            return None, err
+        audio_only = coerce_bool(audio_only, False)
+
         with self._lock:
             active = sum(1 for d in self.downloads.values()
-                         if d.status in ('downloading', 'merging', 'extracting'))
+                         if d.status in DOWNLOAD_ACTIVE_STATES)
             if active >= MAX_CONCURRENT:
-                return None, "Too many concurrent downloads"
-
-        # Validate
-        if not url or not url.startswith(('http://', 'https://')):
-            return None, "Invalid URL"
-        if len(url) > 4096:
-            return None, "URL too long"
+                return None, "Download limit reached. Wait for an active download to finish."
 
         # Sanitize format/quality
         if audio_only:
@@ -302,14 +614,21 @@ class DownloadManager(QObject):
                 output_dir = self.config.get("AudioDownloadPath")
             else:
                 output_dir = self.config.get("DownloadPath", str(Path.home() / "Videos"))
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        output_dir, err = normalize_output_dir(output_dir, self.config.get("DownloadPath", str(Path.home() / "Videos")))
+        if err:
+            return None, err
+        title = clean_text(title, None, 500) or None
+        referer, _ = normalize_url(referer) if referer else (None, None)
 
         with self._lock:
+            active = sum(1 for d in self.downloads.values()
+                         if d.status in DOWNLOAD_ACTIVE_STATES)
+            if active >= MAX_CONCURRENT:
+                return None, "Download limit reached. Wait for an active download to finish."
             self._next_id += 1
             dl_id = f"dl_{self._next_id}_{uuid.uuid4().hex[:6]}"
-
-        dl = Download(dl_id, url, audio_only, fmt, quality, output_dir, title, referer)
-        self.downloads[dl_id] = dl
+            dl = Download(dl_id, url, audio_only, fmt, quality, output_dir, title, referer)
+            self.downloads[dl_id] = dl
 
         thread = threading.Thread(target=self._run_download, args=(dl,), daemon=True)
         thread.start()
@@ -335,9 +654,8 @@ class DownloadManager(QObject):
                 '--ffmpeg-location', ffmpeg_dir, '-o', out_tpl,
                 '--progress-template', 'download:MDLP %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s']
 
-        frags = self.config.get("ConcurrentFragments", 4)
-        if frags and int(frags) > 0:
-            args += ['--concurrent-fragments', str(int(frags))]
+        frags = clamp_int(self.config.get("ConcurrentFragments", 4), 4, 1, 32)
+        args += ['--concurrent-fragments', str(frags)]
         if self.config.get("EmbedMetadata"):
             args.append('--embed-metadata')
         if self.config.get("EmbedThumbnail"):
@@ -352,7 +670,7 @@ class DownloadManager(QObject):
             args += [f'--sponsorblock-{action}', 'all']
         if self.config.get("DownloadArchive"):
             args += ['--download-archive', str(ARCHIVE_PATH)]
-        rate = self.config.get("RateLimit", "")
+        rate = str(self.config.get("RateLimit", "")).strip().upper()
         if rate and re.match(r'^\d+[KMG]?$', rate):
             args += ['--limit-rate', rate]
         proxy = self.config.get("Proxy", "")
@@ -378,15 +696,22 @@ class DownloadManager(QObject):
 
         try:
             proc = subprocess.Popen(
-                args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1, creationflags=subprocess.CREATE_NO_WINDOW
+                args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
             )
             dl.process = proc
+            last_lines = []
+            error_lines = []
 
             for line in proc.stdout:
                 line = line.strip()
                 if not line:
                     continue
+                last_lines.append(line)
+                if len(last_lines) > 30:
+                    last_lines = last_lines[-30:]
+                if 'ERROR' in line.upper():
+                    error_lines.append(line)
 
                 # Structured progress (MDLP prefix)
                 m = re.match(r'^MDLP\s+(\d+\.?\d*)%?\s+(\S+)\s+(\S+)', line)
@@ -436,17 +761,16 @@ class DownloadManager(QObject):
                 m = re.search(r'\[download\] Downloading video (?:\d+ of \d+|\d+)', line)
 
             proc.wait()
-            stderr = proc.stderr.read()
 
             if dl.status != "complete":
-                if proc.returncode == 0 or dl.progress >= 99:
+                if dl.status == "cancelled":
+                    dl.error = dl.error or "Cancelled by user."
+                elif proc.returncode == 0 or dl.progress >= 99:
                     dl.status = "complete"
                     dl.progress = 100
                 else:
                     dl.status = "failed"
-                    # Extract last meaningful error line
-                    err_lines = [l.strip() for l in stderr.split('\n') if l.strip() and 'ERROR' in l.upper()]
-                    dl.error = err_lines[-1] if err_lines else stderr.strip()[-200:] if stderr.strip() else "Unknown error"
+                    dl.error = error_lines[-1] if error_lines else " ".join(last_lines)[-240:] if last_lines else "Unknown error"
 
         except FileNotFoundError:
             dl.status = "failed"
@@ -470,25 +794,47 @@ class DownloadManager(QObject):
         self.download_completed.emit(dl.id)
 
     def cancel(self, dl_id):
-        dl = self.downloads.get(dl_id)
+        with self._lock:
+            dl = self.downloads.get(dl_id)
         if not dl:
             return False
-        if dl.process and dl.process.poll() is None:
-            dl.process.kill()
+        if dl.status in DOWNLOAD_TERMINAL_STATES:
+            return False
         dl.status = "cancelled"
+        dl.error = "Cancelled by user."
+        proc = dl.process
+        if proc and proc.poll() is None:
+            def terminate():
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            threading.Thread(target=terminate, daemon=True).start()
         self.progress_updated.emit()
         return True
 
     def active_count(self):
-        return sum(1 for d in self.downloads.values()
-                   if d.status in ('downloading', 'merging', 'extracting'))
+        with self._lock:
+            return sum(1 for d in self.downloads.values()
+                       if d.status in DOWNLOAD_ACTIVE_STATES)
+
+    def snapshot(self):
+        with self._lock:
+            return list(self.downloads.values())
 
     def cleanup_old(self):
         cutoff = time.time() - 300  # 5 min
-        to_remove = [k for k, d in self.downloads.items()
-                     if d.status in ('complete', 'failed', 'cancelled') and d.start_time < cutoff]
-        for k in to_remove:
-            del self.downloads[k]
+        with self._lock:
+            to_remove = [k for k, d in self.downloads.items()
+                         if d.status in DOWNLOAD_TERMINAL_STATES and d.start_time < cutoff]
+            for k in to_remove:
+                del self.downloads[k]
 
 # ══════════════════════════════════════════════════════════════
 # HTTP SERVER (Flask in background thread)
@@ -504,14 +850,15 @@ def create_api(config, dl_manager, history):
     def check_auth():
         return request.headers.get("X-Auth-Token") == token
 
+    def is_extension_origin(origin):
+        return bool(re.match(r'^(chrome-extension|moz-extension)://', origin or ""))
+
     def cors_response(data, status=200):
         resp = jsonify(data)
         resp.status_code = status
         origin = request.headers.get("Origin", "")
-        if re.match(r'^(chrome-extension|moz-extension)://', origin):
+        if is_extension_origin(origin):
             resp.headers["Access-Control-Allow-Origin"] = origin
-        else:
-            resp.headers["Access-Control-Allow-Origin"] = "null"
         resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type,X-Auth-Token,X-MDL-Client"
         return resp
@@ -525,24 +872,25 @@ def create_api(config, dl_manager, history):
     def health():
         resp = {
             "status": "ok", "version": APP_VERSION,
-            "port": config.get("ServerPort", SERVER_PORT),
+            "port": clamp_int(config.get("ServerPort", SERVER_PORT), SERVER_PORT, 1024, 65535),
             "downloads": dl_manager.active_count(),
             "token_required": True,
         }
-        if request.headers.get("X-MDL-Client") == "MediaDL":
+        origin = request.headers.get("Origin", "")
+        if request.headers.get("X-MDL-Client") == "MediaDL" and (not origin or is_extension_origin(origin)):
             resp["token"] = token
         return cors_response(resp)
 
     @api.route('/download', methods=['POST'])
     def download():
         if not check_auth():
-            return cors_response({"error": "Unauthorized"}, 401)
+            return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
         body = request.get_json(silent=True)
         if not body or not body.get('url'):
-            return cors_response({"error": "Missing url"}, 400)
-        url = str(body['url'])
-        if not url.startswith(('http://', 'https://')) or len(url) > 4096:
-            return cors_response({"error": "Invalid URL"}, 400)
+            return cors_response({"error": "Missing download URL."}, 400)
+        url, url_err = normalize_url(body['url'])
+        if url_err:
+            return cors_response({"error": url_err}, 400)
 
         dl_id, err = dl_manager.start_download(
             url=url,
@@ -554,29 +902,30 @@ def create_api(config, dl_manager, history):
             referer=body.get('referer'),
         )
         if err:
-            return cors_response({"error": err}, 429 if "concurrent" in err.lower() else 400)
+            return cors_response({"error": err}, 429 if "limit" in err.lower() else 400)
         return cors_response({"id": dl_id, "status": "downloading"})
 
     @api.route('/status/<dl_id>')
     def status(dl_id):
         if not check_auth():
-            return cors_response({"error": "Unauthorized"}, 401)
-        dl = dl_manager.downloads.get(dl_id)
+            return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
+        with dl_manager._lock:
+            dl = dl_manager.downloads.get(dl_id)
         if not dl:
-            return cors_response({"error": "Not found"}, 404)
+            return cors_response({"error": "Download no longer exists in the active queue."}, 404)
         return cors_response(dl.to_dict())
 
     @api.route('/queue')
     def queue():
         if not check_auth():
-            return cors_response({"error": "Unauthorized"}, 401)
-        items = [d.to_dict() for d in dl_manager.downloads.values()]
+            return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
+        items = [d.to_dict() for d in dl_manager.snapshot()]
         return cors_response({"downloads": items, "count": len(items)})
 
     @api.route('/history')
     def hist():
         if not check_auth():
-            return cors_response({"error": "Unauthorized"}, 401)
+            return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
         h = history.load()
         limit = request.args.get('limit', type=int)
         if limit and len(h) > limit:
@@ -586,7 +935,7 @@ def create_api(config, dl_manager, history):
     @api.route('/config', methods=['GET'])
     def get_config():
         if not check_auth():
-            return cors_response({"error": "Unauthorized"}, 401)
+            return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
         c = config.data
         c['videoFormats'] = ['mp4', 'mkv', 'webm']
         c['audioFormats'] = ['mp3', 'm4a', 'opus', 'flac', 'wav']
@@ -596,19 +945,24 @@ def create_api(config, dl_manager, history):
     @api.route('/cancel/<dl_id>', methods=['DELETE'])
     def cancel(dl_id):
         if not check_auth():
-            return cors_response({"error": "Unauthorized"}, 401)
+            return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
+        with dl_manager._lock:
+            exists = dl_id in dl_manager.downloads
         if dl_manager.cancel(dl_id):
             return cors_response({"id": dl_id, "cancelled": True})
-        return cors_response({"error": "Not found"}, 404)
+        if exists:
+            return cors_response({"error": "Download is already finished and cannot be cancelled."}, 409)
+        return cors_response({"error": "Download no longer exists in the active queue."}, 404)
 
     @api.route('/shutdown')
     def shutdown():
         if not check_auth():
-            return cors_response({"error": "Unauthorized"}, 401)
+            return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
         func = request.environ.get('werkzeug.server.shutdown')
         if func:
             func()
-        return cors_response({"status": "shutting_down"})
+            return cors_response({"status": "shutting_down"})
+        return cors_response({"status": "stop_from_app_required"}, 202)
 
     return api
 
@@ -631,11 +985,7 @@ class SetupWorker(QThread):
             if not YTDLP_PATH.exists():
                 self.log.emit("Downloading yt-dlp...")
                 self.progress.emit(10)
-                r = http_requests.get(YTDLP_URL, stream=True, timeout=60)
-                r.raise_for_status()
-                with open(YTDLP_PATH, 'wb') as f:
-                    for chunk in r.iter_content(8192):
-                        f.write(chunk)
+                download_file_atomic(YTDLP_URL, YTDLP_PATH, timeout=60, chunk_size=8192)
                 self.log.emit("  Done")
             else:
                 self.log.emit("yt-dlp already installed")
@@ -646,18 +996,36 @@ class SetupWorker(QThread):
                 self.log.emit("Downloading ffmpeg (this may take a moment)...")
                 self.progress.emit(35)
                 import zipfile, io
-                r = http_requests.get(FFMPEG_URL, stream=True, timeout=120)
-                r.raise_for_status()
                 data = io.BytesIO()
-                for chunk in r.iter_content(65536):
-                    data.write(chunk)
+                with http_requests.get(FFMPEG_URL, stream=True, timeout=120) as r:
+                    r.raise_for_status()
+                    for chunk in r.iter_content(65536):
+                        if chunk:
+                            data.write(chunk)
                 data.seek(0)
-                with zipfile.ZipFile(data) as zf:
-                    for entry in zf.namelist():
-                        if entry.endswith('ffmpeg.exe'):
-                            with zf.open(entry) as src, open(FFMPEG_PATH, 'wb') as dst:
-                                shutil.copyfileobj(src, dst)
-                            break
+                found = False
+                tmp_ffmpeg = FFMPEG_PATH.with_name(f".{FFMPEG_PATH.name}.{uuid.uuid4().hex}.download")
+                try:
+                    with zipfile.ZipFile(data) as zf:
+                        for entry in zf.namelist():
+                            if entry.endswith('ffmpeg.exe'):
+                                with zf.open(entry) as src, open(tmp_ffmpeg, 'wb') as dst:
+                                    shutil.copyfileobj(src, dst)
+                                    dst.flush()
+                                    os.fsync(dst.fileno())
+                                if tmp_ffmpeg.stat().st_size <= 0:
+                                    raise RuntimeError("ffmpeg.exe in archive was empty")
+                                os.replace(tmp_ffmpeg, FFMPEG_PATH)
+                                found = True
+                                break
+                finally:
+                    try:
+                        if tmp_ffmpeg.exists():
+                            tmp_ffmpeg.unlink()
+                    except Exception:
+                        pass
+                if not found:
+                    raise RuntimeError("ffmpeg.exe was not found in the downloaded archive")
                 self.log.emit("  Done")
             else:
                 self.log.emit("ffmpeg already installed")
@@ -667,10 +1035,7 @@ class SetupWorker(QThread):
             if not ICON_PATH.exists():
                 self.log.emit("Downloading icon...")
                 try:
-                    r = http_requests.get(ICON_URL, timeout=10)
-                    r.raise_for_status()
-                    with open(ICON_PATH, 'wb') as f:
-                        f.write(r.content)
+                    download_file_atomic(ICON_URL, ICON_PATH, timeout=10, chunk_size=8192)
                 except Exception:
                     pass
             self.progress.emit(70)
@@ -700,7 +1065,7 @@ class SetupWorker(QThread):
                 self.log.emit("Updating yt-dlp...")
                 try:
                     subprocess.Popen([str(YTDLP_PATH), '-U'],
-                                     creationflags=subprocess.CREATE_NO_WINDOW)
+                                     creationflags=CREATE_NO_WINDOW)
                 except Exception:
                     pass
 
@@ -721,15 +1086,15 @@ class SetupWorker(QThread):
             ico = str(ICON_PATH) if ICON_PATH.exists() else ""
             ps_cmd = (
                 f'$ws = New-Object -ComObject WScript.Shell; '
-                f'$sc = $ws.CreateShortcut("{lnk}"); '
-                f'$sc.TargetPath = "{exe}"; '
-                f'$sc.WorkingDirectory = "{INSTALL_DIR}"; '
-                + (f'$sc.IconLocation = "{ico}"; ' if ico else '')
+                f'$sc = $ws.CreateShortcut({ps_single_quote(lnk)}); '
+                f'$sc.TargetPath = {ps_single_quote(exe)}; '
+                f'$sc.WorkingDirectory = {ps_single_quote(INSTALL_DIR)}; '
+                + (f'$sc.IconLocation = {ps_single_quote(ico)}; ' if ico else '')
                 + f'$sc.Description = "Astra Deck Download Server"; '
                 f'$sc.Save()'
             )
             subprocess.run(['powershell', '-NoProfile', '-Command', ps_cmd],
-                           capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                           capture_output=True, creationflags=CREATE_NO_WINDOW)
         except Exception:
             pass
 
@@ -740,7 +1105,7 @@ class SetupWorker(QThread):
                 'schtasks', '/Create', '/TN', 'AstraDownloader',
                 '/TR', f'"{exe}" -Background',
                 '/SC', 'ONLOGON', '/RL', 'LIMITED', '/F'
-            ], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            ], capture_output=True, creationflags=CREATE_NO_WINDOW)
         except Exception:
             pass
 
@@ -851,26 +1216,119 @@ def run_uninstall():
 # ══════════════════════════════════════════════════════════════
 # GUI WIDGETS
 # ══════════════════════════════════════════════════════════════
-def make_card():
+def repolish(widget):
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+    widget.update()
+
+
+def make_label(text, class_name=None, word_wrap=False):
+    lbl = QLabel(text)
+    if class_name:
+        lbl.setProperty("class", class_name)
+    lbl.setWordWrap(word_wrap)
+    return lbl
+
+
+def make_section_label(text):
+    return make_label(text, "section")
+
+
+def make_divider():
+    divider = QFrame()
+    divider.setProperty("class", "divider")
+    return divider
+
+
+def make_card(class_name="card"):
     f = QFrame()
-    f.setProperty("class", "card")
-    f.setStyleSheet("QFrame[class='card'] { padding: 16px; }")
+    f.setProperty("class", class_name)
     return f
 
-def make_stat(label_text, value_text="0"):
+
+def make_status_badge(text, tone="neutral"):
+    badge = QLabel(text)
+    badge.setProperty("class", "badge")
+    badge.setProperty("tone", tone)
+    badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    badge.setMinimumHeight(22)
+    return badge
+
+
+def download_status_tone(status):
+    if status in ("complete",):
+        return "success"
+    if status in ("failed", "cancelled"):
+        return "danger"
+    if status in ("merging", "extracting", "queued"):
+        return "warning"
+    if status in ("downloading",):
+        return "info"
+    return "neutral"
+
+
+def human_status(status):
+    return {
+        "queued": "Queued",
+        "downloading": "Downloading",
+        "merging": "Merging",
+        "extracting": "Extracting",
+        "complete": "Complete",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+    }.get(status, str(status).title())
+
+
+def format_duration(seconds):
+    try:
+        seconds = int(seconds or 0)
+    except (TypeError, ValueError):
+        return ""
+    if seconds <= 0:
+        return ""
+    mins, secs = divmod(seconds, 60)
+    hours, mins = divmod(mins, 60)
+    if hours:
+        return f"{hours}h {mins}m"
+    if mins:
+        return f"{mins}m {secs}s"
+    return f"{secs}s"
+
+
+def clamp_int(value, default, minimum, maximum):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def make_empty_state(title, body):
+    frame = make_card("empty")
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(18, 18, 18, 18)
+    layout.setSpacing(6)
+    layout.addWidget(make_label(title, "emptyTitle"))
+    layout.addWidget(make_label(body, "emptyBody", word_wrap=True))
+    return frame
+
+
+def make_stat(label_text, value_text="0", hint_text=""):
     f = QFrame()
     f.setProperty("class", "stat")
     layout = QVBoxLayout(f)
-    layout.setContentsMargins(16, 12, 16, 12)
-    lbl = QLabel(label_text)
-    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    lbl.setStyleSheet("color: #525a65; font-size: 10px; font-weight: bold;")
+    layout.setContentsMargins(16, 14, 16, 14)
+    layout.setSpacing(4)
+    lbl = make_label(label_text, "section")
     val = QLabel(value_text)
-    val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    val.setStyleSheet("font-size: 24px; font-weight: bold;")
+    val.setAlignment(Qt.AlignmentFlag.AlignLeft)
+    val.setStyleSheet("font-size: 25px; font-weight: 750; color: #f8fafc;")
     val.setObjectName(f"stat_{label_text.lower()}")
     layout.addWidget(lbl)
     layout.addWidget(val)
+    if hint_text:
+        hint = make_label(hint_text, "fieldHint")
+        layout.addWidget(hint)
     return f, val
 
 # ══════════════════════════════════════════════════════════════
@@ -883,10 +1341,14 @@ class MainWindow(QMainWindow):
         self.dl_manager = dl_manager
         self.history_mgr = history
         self._force_exit = False
+        self._page_anim = None
+        self._setup_running = False
+        self._tray_hint_shown = False
+        self._downloads_signature = None
 
         self.setWindowTitle(APP_NAME)
-        self.setMinimumSize(640, 480)
-        self.resize(780, 560)
+        self.setMinimumSize(760, 560)
+        self.resize(980, 680)
 
         # Icon
         if ICON_PATH.exists():
@@ -902,28 +1364,39 @@ class MainWindow(QMainWindow):
         # Sidebar
         sidebar = QFrame()
         sidebar.setProperty("class", "sidebar")
-        sidebar.setFixedWidth(180)
+        sidebar.setFixedWidth(196)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
 
         # Brand
         brand = QWidget()
         brand_layout = QVBoxLayout(brand)
-        brand_layout.setContentsMargins(16, 20, 16, 24)
-        title_lbl = QLabel(APP_NAME)
-        title_lbl.setStyleSheet("font-size: 16px; font-weight: bold;")
-        ver_lbl = QLabel(f"v{APP_VERSION}")
-        ver_lbl.setStyleSheet("color: #525a65; font-size: 10px;")
+        brand_layout.setContentsMargins(18, 22, 18, 24)
+        brand_layout.setSpacing(3)
+        title_lbl = make_label(APP_NAME)
+        title_lbl.setStyleSheet("font-size: 16px; font-weight: 750; color: #f8fafc;")
+        ver_lbl = make_label(f"Companion service  v{APP_VERSION}", "muted")
+        ver_lbl.setStyleSheet("font-size: 10px; color: #7b8794;")
         brand_layout.addWidget(title_lbl)
         brand_layout.addWidget(ver_lbl)
         sidebar_layout.addWidget(brand)
 
         # Nav buttons
         self.nav_buttons = []
+        nav_icons = {
+            "Dashboard": QStyle.StandardPixmap.SP_ComputerIcon,
+            "Downloads": QStyle.StandardPixmap.SP_ArrowDown,
+            "History": QStyle.StandardPixmap.SP_FileDialogDetailedView,
+            "Settings": QStyle.StandardPixmap.SP_FileDialogInfoView,
+        }
         for name in ["Dashboard", "Downloads", "History", "Settings"]:
             btn = QPushButton(name)
             btn.setProperty("class", "nav")
+            btn.setIcon(self.style().standardIcon(nav_icons[name]))
+            btn.setIconSize(QSize(15, 15))
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(f"Open {name.lower()}")
             btn.clicked.connect(lambda checked, n=name: self._nav_click(n))
             sidebar_layout.addWidget(btn)
             self.nav_buttons.append(btn)
@@ -932,11 +1405,12 @@ class MainWindow(QMainWindow):
 
         # Status dot
         status_row = QHBoxLayout()
-        status_row.setContentsMargins(16, 0, 16, 16)
+        status_row.setContentsMargins(18, 0, 18, 18)
+        status_row.setSpacing(8)
         self.status_dot = QLabel("\u2022")
-        self.status_dot.setStyleSheet("color: #525a65; font-size: 16px;")
-        self.status_label = QLabel("Stopped")
-        self.status_label.setStyleSheet("color: #525a65; font-size: 11px;")
+        self.status_dot.setStyleSheet("color: #7b8794; font-size: 20px;")
+        self.status_label = make_label("Stopped", "muted")
+        self.status_label.setStyleSheet("font-size: 11px; color: #7b8794;")
         status_row.addWidget(self.status_dot)
         status_row.addWidget(self.status_label)
         status_row.addStretch()
@@ -967,8 +1441,10 @@ class MainWindow(QMainWindow):
         show_action.triggered.connect(self._show_from_tray)
         self.tray_startstop = tray_menu.addAction("Stop Server")
         self.tray_startstop.triggered.connect(self._toggle_server)
+        folder_action = tray_menu.addAction("Open Downloads Folder")
+        folder_action.triggered.connect(self._open_folder)
         tray_menu.addSeparator()
-        exit_action = tray_menu.addAction("Exit")
+        exit_action = tray_menu.addAction("Quit Astra Downloader")
         exit_action.triggered.connect(self._force_close)
         self.tray.setContextMenu(tray_menu)
         self.tray.activated.connect(self._tray_activated)
@@ -991,90 +1467,163 @@ class MainWindow(QMainWindow):
         # Server state
         self.server_running = False
         self.server_thread = None
+        self.server_obj = None
         self.server_start_time = None
 
         if start_minimized:
             QTimer.singleShot(100, self._minimize_to_tray)
 
+    def _make_page_header(self, title, subtitle):
+        header = QVBoxLayout()
+        header.setSpacing(5)
+        header.addWidget(make_label(title, "title"))
+        header.addWidget(make_label(subtitle, "subtitle", word_wrap=True))
+        return header
+
+    def _make_tool_button(self, text, icon, class_name="secondary"):
+        btn = QPushButton(text)
+        btn.setProperty("class", class_name)
+        btn.setIcon(self.style().standardIcon(icon))
+        btn.setIconSize(QSize(15, 15))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setAccessibleName(text)
+        return btn
+
     def _build_dashboard(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(18)
 
-        layout.addWidget(QLabel("Dashboard", objectName="heading"))
-        layout.itemAt(0).widget().setStyleSheet("font-size: 22px; font-weight: bold; margin-bottom: 16px;")
+        layout.addLayout(self._make_page_header(
+            "Control Center",
+            "Run the local Astra Deck download service, monitor activity, and keep the companion ready in the tray."
+        ))
 
         # Server control
         ctrl = make_card()
-        ctrl_layout = QHBoxLayout(ctrl)
+        ctrl_layout = QVBoxLayout(ctrl)
+        ctrl_layout.setContentsMargins(20, 18, 20, 18)
+        ctrl_layout.setSpacing(14)
+
+        top = QHBoxLayout()
+        top.setSpacing(16)
         left = QVBoxLayout()
-        self.dash_status = QLabel("Server Stopped")
-        self.dash_status.setStyleSheet("font-size: 16px; font-weight: 600;")
-        self.dash_endpoint = QLabel(f"http://127.0.0.1:{self.config.get('ServerPort', SERVER_PORT)}")
-        self.dash_endpoint.setStyleSheet("color: #525a65; font-size: 11px;")
+        left.setSpacing(5)
+        self.dash_status = make_label("Server stopped")
+        self.dash_status.setStyleSheet("font-size: 17px; font-weight: 750; color: #f8fafc;")
+        self.dash_endpoint = make_label(f"http://127.0.0.1:{self.config.get('ServerPort', SERVER_PORT)}", "secondary")
+        self.dash_endpoint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.dash_hint = make_label("Local-only API. Requests require your private Astra token.", "fieldHint", word_wrap=True)
         left.addWidget(self.dash_status)
         left.addWidget(self.dash_endpoint)
-        ctrl_layout.addLayout(left)
-        ctrl_layout.addStretch()
-        self.btn_startstop = QPushButton("Start Server")
-        self.btn_startstop.setProperty("class", "primary")
+        left.addWidget(self.dash_hint)
+        top.addLayout(left, 1)
+        self.server_badge = make_status_badge("Stopped", "neutral")
+        top.addWidget(self.server_badge, 0, Qt.AlignmentFlag.AlignTop)
+        ctrl_layout.addLayout(top)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        self.btn_startstop = self._make_tool_button("Start Server", QStyle.StandardPixmap.SP_MediaPlay, "primary")
         self.btn_startstop.clicked.connect(self._toggle_server)
-        ctrl_layout.addWidget(self.btn_startstop)
-        btn_folder = QPushButton("Open Folder")
+        actions.addWidget(self.btn_startstop)
+        btn_copy = self._make_tool_button("Copy URL", QStyle.StandardPixmap.SP_FileDialogContentsView)
+        btn_copy.clicked.connect(self._copy_endpoint)
+        actions.addWidget(btn_copy)
+        btn_folder = self._make_tool_button("Open Folder", QStyle.StandardPixmap.SP_DirOpenIcon)
         btn_folder.clicked.connect(self._open_folder)
-        ctrl_layout.addWidget(btn_folder)
+        actions.addWidget(btn_folder)
+        actions.addStretch()
+        ctrl_layout.addLayout(actions)
+
+        self.setup_status = make_label("", "fieldHint")
+        self.setup_status.hide()
+        self.setup_progress = QProgressBar()
+        self.setup_progress.setRange(0, 100)
+        self.setup_progress.setValue(0)
+        self.setup_progress.setTextVisible(False)
+        self.setup_progress.hide()
+        ctrl_layout.addWidget(self.setup_status)
+        ctrl_layout.addWidget(self.setup_progress)
         layout.addWidget(ctrl)
 
         # Stats — keep refs to frames (else Python GC deletes the underlying Qt objects)
         stats_layout = QHBoxLayout()
-        self._stat_frame_active, self.stat_active = make_stat("Active", "0")
-        self.stat_active.setStyleSheet("font-size: 24px; font-weight: bold; color: #22c55e;")
-        self._stat_frame_completed, self.stat_completed = make_stat("Completed", "0")
-        self._stat_frame_uptime, self.stat_uptime = make_stat("Uptime", "--")
-        self._stat_frame_port, self.stat_port = make_stat("Port", str(self.config.get("ServerPort", SERVER_PORT)))
+        stats_layout.setSpacing(10)
+        self._stat_frame_active, self.stat_active = make_stat("Active", "0", "In progress")
+        self.stat_active.setStyleSheet("font-size: 25px; font-weight: 750; color: #61f09a;")
+        self._stat_frame_completed, self.stat_completed = make_stat("Completed", "0", "This session")
+        self._stat_frame_uptime, self.stat_uptime = make_stat("Uptime", "--", "Since launch")
+        self._stat_frame_port, self.stat_port = make_stat("Port", str(self.config.get("ServerPort", SERVER_PORT)), "Local API")
         for frame in (self._stat_frame_active, self._stat_frame_completed,
                       self._stat_frame_uptime, self._stat_frame_port):
             stats_layout.addWidget(frame)
         layout.addLayout(stats_layout)
 
-        # Log
-        log_label = QLabel("Server Log")
-        log_label.setStyleSheet("color: #525a65; font-size: 12px; font-weight: bold; margin-top: 8px;")
-        layout.addWidget(log_label)
+        log_header = QHBoxLayout()
+        log_header.addWidget(make_section_label("Server log"))
+        log_header.addStretch()
+        btn_clear_log = self._make_tool_button("Clear Log", QStyle.StandardPixmap.SP_DialogResetButton, "ghost")
+        btn_clear_log.clicked.connect(self._clear_log)
+        log_header.addWidget(btn_clear_log)
+        btn_diag = self._make_tool_button("Copy Diagnostics", QStyle.StandardPixmap.SP_FileDialogContentsView, "ghost")
+        btn_diag.clicked.connect(self._copy_diagnostics)
+        log_header.addWidget(btn_diag)
+        log_header.addWidget(make_status_badge("Local only", "neutral"))
+        layout.addLayout(log_header)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(180)
+        self.log_text.setMinimumHeight(180)
+        self.log_text.document().setMaximumBlockCount(300)
         self.log_text.setPlainText("Ready.")
-        layout.addWidget(self.log_text)
+        layout.addWidget(self.log_text, 1)
 
-        layout.addStretch()
         self.tabs.addTab(page, "Dashboard")
 
     def _build_downloads(self):
         page = QWidget()
-        self.downloads_layout = QVBoxLayout(page)
-        self.downloads_layout.setContentsMargins(24, 20, 24, 20)
-        self.downloads_layout.addWidget(QLabel("Active Downloads", styleSheet="font-size: 22px; font-weight: bold; margin-bottom: 12px;"))
-        self.no_downloads_label = QLabel("No active downloads.")
-        self.no_downloads_label.setStyleSheet("color: #525a65; font-size: 13px;")
-        self.downloads_layout.addWidget(self.no_downloads_label)
-        self.downloads_layout.addStretch()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+        layout.addLayout(self._make_page_header(
+            "Downloads",
+            "Live queue activity from Astra Deck, including progress, speed, failures, and recent completions."
+        ))
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        self.downloads_list_layout = QVBoxLayout(content)
+        self.downloads_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.downloads_list_layout.setSpacing(10)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
         self.tabs.addTab(page, "Downloads")
 
     def _build_history(self):
         page = QWidget()
-        self.history_layout = QVBoxLayout(page)
-        self.history_layout.setContentsMargins(24, 20, 24, 20)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
         header = QHBoxLayout()
-        header.addWidget(QLabel("Download History", styleSheet="font-size: 22px; font-weight: bold;"))
-        header.addStretch()
-        btn_clear = QPushButton("Clear History")
+        header.addLayout(self._make_page_header(
+            "History",
+            "The latest completed downloads are kept here for quick confirmation."
+        ), 1)
+        btn_clear = self._make_tool_button("Clear History", QStyle.StandardPixmap.SP_TrashIcon, "danger")
         btn_clear.clicked.connect(self._clear_history)
-        header.addWidget(btn_clear)
-        self.history_layout.addLayout(header)
-        self.history_container = QVBoxLayout()
-        self.history_layout.addLayout(self.history_container)
-        self.history_layout.addStretch()
+        header.addWidget(btn_clear, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        self.history_container = QVBoxLayout(content)
+        self.history_container.setContentsMargins(0, 0, 0, 0)
+        self.history_container.setSpacing(10)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
         self.tabs.addTab(page, "History")
 
     def _build_settings(self):
@@ -1083,109 +1632,211 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(14)
 
-        layout.addWidget(QLabel("Settings", styleSheet="font-size: 22px; font-weight: bold; margin-bottom: 16px;"))
+        layout.addLayout(self._make_page_header(
+            "Settings",
+            "Tune storage, post-processing, performance, and tray behavior for the companion service."
+        ))
 
-        # Paths
-        layout.addWidget(QLabel("PATHS", styleSheet="color: #525a65; font-size: 10px; font-weight: bold;"))
+        # Connection
+        layout.addWidget(make_section_label("Connection"))
+        conn_card = make_card()
+        conn_l = QVBoxLayout(conn_card)
+        conn_l.setContentsMargins(18, 16, 18, 16)
+        conn_l.setSpacing(12)
+        port_row = QHBoxLayout()
+        port_copy = QVBoxLayout()
+        port_copy.setSpacing(2)
+        port_copy.addWidget(make_label("Local API port", "fieldLabel"))
+        port_copy.addWidget(make_label("Astra Deck uses 9751 by default. Change this only for custom clients or troubleshooting.", "fieldHint", word_wrap=True))
+        port_row.addLayout(port_copy, 1)
+        self.cfg_port = QSpinBox()
+        self.cfg_port.setAccessibleName("Local API port")
+        self.cfg_port.setRange(1024, 65535)
+        self.cfg_port.setValue(clamp_int(self.config.get("ServerPort", SERVER_PORT), SERVER_PORT, 1024, 65535))
+        self.cfg_port.setFixedWidth(100)
+        port_row.addWidget(self.cfg_port)
+        conn_l.addLayout(port_row)
+        conn_l.addWidget(make_divider())
+        token_copy = QVBoxLayout()
+        token_copy.setSpacing(2)
+        token_copy.addWidget(make_label("Private token", "fieldLabel"))
+        token_copy.addWidget(make_label("Required for extension requests. Regenerate only if you want to revoke the current token.", "fieldHint", word_wrap=True))
+        conn_l.addLayout(token_copy)
+        token_row = QHBoxLayout()
+        token_row.setSpacing(8)
+        self.cfg_token = QLineEdit(self.config.get("ServerToken", ""))
+        self.cfg_token.setAccessibleName("Private API token")
+        self.cfg_token.setReadOnly(True)
+        self.cfg_token.setEchoMode(QLineEdit.EchoMode.Password)
+        token_row.addWidget(self.cfg_token, 1)
+        self.btn_token_reveal = self._make_tool_button("Reveal", QStyle.StandardPixmap.SP_FileDialogInfoView)
+        self.btn_token_reveal.clicked.connect(self._toggle_token_visible)
+        token_row.addWidget(self.btn_token_reveal)
+        btn_token_copy = self._make_tool_button("Copy", QStyle.StandardPixmap.SP_FileDialogContentsView)
+        btn_token_copy.clicked.connect(self._copy_token)
+        token_row.addWidget(btn_token_copy)
+        btn_token_reset = self._make_tool_button("Regenerate", QStyle.StandardPixmap.SP_BrowserReload, "danger")
+        btn_token_reset.clicked.connect(self._regenerate_token)
+        token_row.addWidget(btn_token_reset)
+        conn_l.addLayout(token_row)
+        layout.addWidget(conn_card)
+
+        # Storage
+        layout.addWidget(make_section_label("Storage"))
         paths_card = make_card()
         paths_l = QVBoxLayout(paths_card)
-        paths_l.addWidget(QLabel("Video Download Folder", styleSheet="color: #8b949e; font-size: 11px;"))
+        paths_l.setContentsMargins(18, 16, 18, 16)
+        paths_l.setSpacing(10)
+        paths_l.addWidget(make_label("Video download folder", "fieldLabel"))
+        paths_l.addWidget(make_label("Used for video downloads unless a request specifies a custom destination.", "fieldHint", word_wrap=True))
         row = QHBoxLayout()
+        row.setSpacing(8)
         self.cfg_dl_path = QLineEdit(self.config.get("DownloadPath", ""))
-        row.addWidget(self.cfg_dl_path)
-        btn = QPushButton("...")
-        btn.setFixedWidth(36)
+        self.cfg_dl_path.setAccessibleName("Video download folder")
+        self.cfg_dl_path.setPlaceholderText(str(Path.home() / "Videos" / "YouTube"))
+        row.addWidget(self.cfg_dl_path, 1)
+        btn = self._make_tool_button("Browse", QStyle.StandardPixmap.SP_DirOpenIcon)
         btn.clicked.connect(lambda: self._browse(self.cfg_dl_path))
         row.addWidget(btn)
         paths_l.addLayout(row)
-        paths_l.addWidget(QLabel("Audio Download Folder (blank = same as video)", styleSheet="color: #8b949e; font-size: 11px;"))
+        paths_l.addWidget(make_divider())
+        paths_l.addWidget(make_label("Audio download folder", "fieldLabel"))
+        paths_l.addWidget(make_label("Leave blank to save audio beside video downloads.", "fieldHint", word_wrap=True))
         row2 = QHBoxLayout()
+        row2.setSpacing(8)
         self.cfg_audio_path = QLineEdit(self.config.get("AudioDownloadPath", ""))
-        row2.addWidget(self.cfg_audio_path)
-        btn2 = QPushButton("...")
-        btn2.setFixedWidth(36)
+        self.cfg_audio_path.setAccessibleName("Audio download folder")
+        self.cfg_audio_path.setPlaceholderText("Same as video folder")
+        row2.addWidget(self.cfg_audio_path, 1)
+        btn2 = self._make_tool_button("Browse", QStyle.StandardPixmap.SP_DirOpenIcon)
         btn2.clicked.connect(lambda: self._browse(self.cfg_audio_path))
         row2.addWidget(btn2)
         paths_l.addLayout(row2)
         layout.addWidget(paths_card)
 
         # Post-processing
-        layout.addWidget(QLabel("POST-PROCESSING", styleSheet="color: #525a65; font-size: 10px; font-weight: bold;"))
+        layout.addWidget(make_section_label("Post-processing"))
         pp_card = make_card()
         pp_l = QVBoxLayout(pp_card)
-        self.cfg_metadata = QCheckBox("Embed metadata (title, artist, date)")
+        pp_l.setContentsMargins(18, 16, 18, 16)
+        pp_l.setSpacing(8)
+        self.cfg_metadata = QCheckBox("Embed metadata: title, artist, upload date")
         self.cfg_metadata.setChecked(self.config.get("EmbedMetadata", True))
         self.cfg_thumbnail = QCheckBox("Embed thumbnail as cover art")
         self.cfg_thumbnail.setChecked(self.config.get("EmbedThumbnail", True))
         self.cfg_chapters = QCheckBox("Embed chapter markers")
         self.cfg_chapters.setChecked(self.config.get("EmbedChapters", True))
-        self.cfg_subs = QCheckBox("Embed subtitles")
+        self.cfg_subs = QCheckBox("Embed subtitles when available")
         self.cfg_subs.setChecked(self.config.get("EmbedSubs", False))
-        sub_row = QHBoxLayout()
-        sub_row.addSpacing(20)
-        sub_row.addWidget(QLabel("Languages:", styleSheet="color: #525a65; font-size: 11px;"))
-        self.cfg_sublangs = QLineEdit(self.config.get("SubLangs", "en"))
-        self.cfg_sublangs.setFixedWidth(120)
-        sub_row.addWidget(self.cfg_sublangs)
-        sub_row.addStretch()
-        self.cfg_sponsorblock = QCheckBox("SponsorBlock (remove sponsored segments)")
-        self.cfg_sponsorblock.setChecked(self.config.get("SponsorBlock", False))
         for w in [self.cfg_metadata, self.cfg_thumbnail, self.cfg_chapters, self.cfg_subs]:
             pp_l.addWidget(w)
+        sub_row = QHBoxLayout()
+        sub_row.setSpacing(8)
+        sub_row.addSpacing(28)
+        sub_row.addWidget(make_label("Subtitle languages", "fieldHint"))
+        self.cfg_sublangs = QLineEdit(self.config.get("SubLangs", "en"))
+        self.cfg_sublangs.setAccessibleName("Subtitle languages")
+        self.cfg_sublangs.setPlaceholderText("en,es")
+        self.cfg_sublangs.setFixedWidth(140)
+        sub_row.addWidget(self.cfg_sublangs)
+        sub_row.addStretch()
         pp_l.addLayout(sub_row)
+        pp_l.addWidget(make_divider())
+        self.cfg_sponsorblock = QCheckBox("Use SponsorBlock segments")
+        self.cfg_sponsorblock.setChecked(self.config.get("SponsorBlock", False))
         pp_l.addWidget(self.cfg_sponsorblock)
+        sb_row = QHBoxLayout()
+        sb_row.setSpacing(8)
+        sb_row.addSpacing(28)
+        sb_row.addWidget(make_label("Action", "fieldHint"))
+        self.cfg_sb_action = QComboBox()
+        self.cfg_sb_action.setAccessibleName("SponsorBlock action")
+        self.cfg_sb_action.addItem("Remove segments", "remove")
+        self.cfg_sb_action.addItem("Mark segments", "mark")
+        current_action = self.config.get("SponsorBlockAction", "remove")
+        self.cfg_sb_action.setCurrentIndex(1 if current_action == "mark" else 0)
+        self.cfg_sb_action.setEnabled(self.cfg_sponsorblock.isChecked())
+        self.cfg_sponsorblock.toggled.connect(self.cfg_sb_action.setEnabled)
+        sb_row.addWidget(self.cfg_sb_action)
+        sb_row.addStretch()
+        pp_l.addLayout(sb_row)
         layout.addWidget(pp_card)
 
         # Performance
-        layout.addWidget(QLabel("PERFORMANCE", styleSheet="color: #525a65; font-size: 10px; font-weight: bold;"))
+        layout.addWidget(make_section_label("Performance"))
         perf_card = make_card()
         perf_l = QVBoxLayout(perf_card)
+        perf_l.setContentsMargins(18, 16, 18, 16)
+        perf_l.setSpacing(12)
         frag_row = QHBoxLayout()
-        frag_row.addWidget(QLabel("Concurrent fragments:", styleSheet="color: #8b949e; font-size: 12px;"))
-        self.cfg_fragments = QLineEdit(str(self.config.get("ConcurrentFragments", 4)))
-        self.cfg_fragments.setFixedWidth(50)
+        frag_copy = QVBoxLayout()
+        frag_copy.setSpacing(2)
+        frag_copy.addWidget(make_label("Concurrent fragments", "fieldLabel"))
+        frag_copy.addWidget(make_label("Higher values may improve speed on fast connections.", "fieldHint", word_wrap=True))
+        frag_row.addLayout(frag_copy, 1)
+        self.cfg_fragments = QSpinBox()
+        self.cfg_fragments.setAccessibleName("Concurrent fragments")
+        self.cfg_fragments.setRange(1, 32)
+        self.cfg_fragments.setValue(clamp_int(self.config.get("ConcurrentFragments", 4), 4, 1, 32))
+        self.cfg_fragments.setFixedWidth(86)
         frag_row.addWidget(self.cfg_fragments)
-        frag_row.addStretch()
         perf_l.addLayout(frag_row)
+        perf_l.addWidget(make_divider())
         rate_row = QHBoxLayout()
-        rate_row.addWidget(QLabel("Rate limit (e.g. 500K, 2M):", styleSheet="color: #8b949e; font-size: 12px;"))
+        rate_copy = QVBoxLayout()
+        rate_copy.setSpacing(2)
+        rate_copy.addWidget(make_label("Rate limit", "fieldLabel"))
+        rate_copy.addWidget(make_label("Optional yt-dlp limit such as 500K or 2M.", "fieldHint", word_wrap=True))
+        rate_row.addLayout(rate_copy, 1)
         self.cfg_ratelimit = QLineEdit(self.config.get("RateLimit", ""))
-        self.cfg_ratelimit.setFixedWidth(80)
+        self.cfg_ratelimit.setAccessibleName("Rate limit")
+        self.cfg_ratelimit.setPlaceholderText("No limit")
+        self.cfg_ratelimit.setFixedWidth(120)
         rate_row.addWidget(self.cfg_ratelimit)
-        rate_row.addStretch()
         perf_l.addLayout(rate_row)
         proxy_row = QHBoxLayout()
-        proxy_row.addWidget(QLabel("Proxy:", styleSheet="color: #8b949e; font-size: 12px;"))
+        proxy_copy = QVBoxLayout()
+        proxy_copy.setSpacing(2)
+        proxy_copy.addWidget(make_label("Proxy", "fieldLabel"))
+        proxy_copy.addWidget(make_label("Optional http, https, or socks proxy URL.", "fieldHint", word_wrap=True))
+        proxy_row.addLayout(proxy_copy, 1)
         self.cfg_proxy = QLineEdit(self.config.get("Proxy", ""))
-        self.cfg_proxy.setFixedWidth(200)
+        self.cfg_proxy.setAccessibleName("Proxy")
+        self.cfg_proxy.setPlaceholderText("https://proxy.example:8080")
+        self.cfg_proxy.setMinimumWidth(260)
         proxy_row.addWidget(self.cfg_proxy)
-        proxy_row.addStretch()
         perf_l.addLayout(proxy_row)
         layout.addWidget(perf_card)
 
         # Behavior
-        layout.addWidget(QLabel("BEHAVIOR", styleSheet="color: #525a65; font-size: 10px; font-weight: bold;"))
+        layout.addWidget(make_section_label("Behavior"))
         beh_card = make_card()
         beh_l = QVBoxLayout(beh_card)
-        self.cfg_autoupdate = QCheckBox("Auto-update yt-dlp on server start")
+        beh_l.setContentsMargins(18, 16, 18, 16)
+        beh_l.setSpacing(8)
+        self.cfg_autoupdate = QCheckBox("Update yt-dlp automatically when the server starts")
         self.cfg_autoupdate.setChecked(self.config.get("AutoUpdateYtDlp", True))
-        self.cfg_archive = QCheckBox("Skip already-downloaded videos")
+        self.cfg_archive = QCheckBox("Skip videos already recorded in the download archive")
         self.cfg_archive.setChecked(self.config.get("DownloadArchive", True))
-        self.cfg_closetotray = QCheckBox("Close to system tray instead of quitting")
+        self.cfg_closetotray = QCheckBox("Close to the system tray instead of quitting")
         self.cfg_closetotray.setChecked(self.config.get("CloseToTray", True))
-        self.cfg_startmin = QCheckBox("Start minimized to tray")
+        self.cfg_startmin = QCheckBox("Start minimized to the tray")
         self.cfg_startmin.setChecked(self.config.get("StartMinimized", False))
         for w in [self.cfg_autoupdate, self.cfg_archive, self.cfg_closetotray, self.cfg_startmin]:
             beh_l.addWidget(w)
         layout.addWidget(beh_card)
 
-        btn_save = QPushButton("Save Settings")
-        btn_save.setProperty("class", "primary")
+        save_row = QHBoxLayout()
+        self.settings_status = make_label("", "fieldHint")
+        save_row.addWidget(self.settings_status, 1)
+        btn_save = self._make_tool_button("Save Settings", QStyle.StandardPixmap.SP_DialogSaveButton, "primary")
         btn_save.clicked.connect(self._save_settings)
         self.btn_save = btn_save
-        layout.addWidget(btn_save)
+        save_row.addWidget(btn_save)
+        layout.addLayout(save_row)
         layout.addStretch()
 
         self.tabs.addTab(scroll, "Settings")
@@ -1196,10 +1847,25 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(idx)
         for i, btn in enumerate(self.nav_buttons):
             btn.setProperty("active", "true" if i == idx else "false")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            repolish(btn)
+        self._animate_page()
         if name == "History":
             self._refresh_history()
+
+    def _animate_page(self):
+        widget = self.tabs.currentWidget()
+        if not widget:
+            return
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(120)
+        anim.setStartValue(0.86)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(lambda: widget.setGraphicsEffect(None))
+        self._page_anim = anim
+        anim.start()
 
     # ── Server ──
     def _toggle_server(self):
@@ -1211,17 +1877,28 @@ class MainWindow(QMainWindow):
     def _start_server(self):
         if self.server_running:
             return
-        if not YTDLP_PATH.exists():
-            self._append_log("ERROR: yt-dlp not found. Running setup...")
+        if self._setup_running:
+            self._append_log("Setup is already running. The server will start when it finishes.")
+            return
+        if not YTDLP_PATH.exists() or not FFMPEG_PATH.exists():
+            self._append_log("Required tools are missing. Starting setup...")
             self._run_setup()
             return
 
-        port = self.config.get("ServerPort", SERVER_PORT)
+        port = clamp_int(self.config.get("ServerPort", SERVER_PORT), SERVER_PORT, 1024, 65535)
         api = create_api(self.config, self.dl_manager, self.history_mgr)
+
+        try:
+            from werkzeug.serving import make_server
+            self.server_obj = make_server('127.0.0.1', port, api, threaded=True)
+        except Exception as e:
+            self.server_obj = None
+            self._append_log(f"Server error: {e}")
+            return
 
         def run():
             try:
-                api.run(host='127.0.0.1', port=port, threaded=True, use_reloader=False)
+                self.server_obj.serve_forever()
             except Exception as e:
                 self._append_log(f"Server error: {e}")
 
@@ -1229,46 +1906,128 @@ class MainWindow(QMainWindow):
         self.server_thread.start()
         self.server_running = True
         self.server_start_time = time.time()
-        self._append_log(f"Server started on port {port}")
+        self._append_log(f"Server started on http://127.0.0.1:{port}")
         self._update_server_ui()
 
         # Auto-update yt-dlp
         if self.config.get("AutoUpdateYtDlp") and YTDLP_PATH.exists():
             threading.Thread(target=lambda: subprocess.run(
                 [str(YTDLP_PATH), '-U'], capture_output=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW
             ), daemon=True).start()
 
     def _stop_server(self):
+        if self.server_obj:
+            try:
+                self.server_obj.shutdown()
+                self.server_obj.server_close()
+            except Exception as e:
+                self._append_log(f"Server shutdown warning: {e}")
+            self.server_obj = None
         self.server_running = False
         self.server_start_time = None
-        # Flask doesn't have a clean shutdown from outside — just let the daemon thread die
         self._append_log("Server stopped")
         self._update_server_ui()
 
     def _update_server_ui(self):
         if self.server_running:
-            self.status_dot.setStyleSheet("color: #22c55e; font-size: 16px;")
+            self.status_dot.setStyleSheet("color: #2dd36f; font-size: 20px;")
             self.status_label.setText("Running")
-            self.status_label.setStyleSheet("color: #22c55e; font-size: 11px;")
-            self.dash_status.setText("Server Running")
+            self.status_label.setStyleSheet("color: #9ff3bd; font-size: 11px;")
+            self.dash_status.setText("Server running")
+            self.dash_hint.setText("Ready for Astra Deck requests. The service only listens on this computer.")
+            self.server_badge.setText("Running")
+            self.server_badge.setProperty("tone", "success")
             self.btn_startstop.setText("Stop Server")
-            self.btn_startstop.setProperty("class", "danger")
+            self.btn_startstop.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+            self.btn_startstop.setProperty("class", "secondary")
             self.tray_startstop.setText("Stop Server")
             self.tray.setToolTip(f"{APP_NAME} - Running")
         else:
-            self.status_dot.setStyleSheet("color: #525a65; font-size: 16px;")
+            self.status_dot.setStyleSheet("color: #7b8794; font-size: 20px;")
             self.status_label.setText("Stopped")
-            self.status_label.setStyleSheet("color: #525a65; font-size: 11px;")
-            self.dash_status.setText("Server Stopped")
+            self.status_label.setStyleSheet("color: #7b8794; font-size: 11px;")
+            self.dash_status.setText("Server stopped")
+            self.dash_hint.setText("Start the service before using download actions in Astra Deck.")
+            self.server_badge.setText("Stopped")
+            self.server_badge.setProperty("tone", "neutral")
             self.btn_startstop.setText("Start Server")
+            self.btn_startstop.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
             self.btn_startstop.setProperty("class", "primary")
             self.tray_startstop.setText("Start Server")
             self.tray.setToolTip(f"{APP_NAME} - Stopped")
-        self.btn_startstop.style().unpolish(self.btn_startstop)
-        self.btn_startstop.style().polish(self.btn_startstop)
+        repolish(self.btn_startstop)
+        repolish(self.server_badge)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                self._clear_layout(item.layout())
+
+    def _download_card(self, dl, recent=False):
+        card = QFrame()
+        card.setProperty("class", "download")
+        if dl.status in ("failed", "complete"):
+            card.setProperty("state", dl.status)
+        card_l = QVBoxLayout(card)
+        card_l.setContentsMargins(16, 13, 16, 13)
+        card_l.setSpacing(9)
+
+        top = QHBoxLayout()
+        title = make_label(dl.title if dl.title and dl.title != "Unknown" else "Preparing download", "fieldLabel", word_wrap=True)
+        top.addWidget(title, 1)
+        top.addWidget(make_status_badge(human_status(dl.status), download_status_tone(dl.status)))
+        if not recent and dl.status in ("queued", "downloading", "merging", "extracting"):
+            btn_cancel = self._make_tool_button("Cancel", QStyle.StandardPixmap.SP_DialogCancelButton, "ghost")
+            btn_cancel.clicked.connect(lambda checked=False, dl_id=dl.id: self.dl_manager.cancel(dl_id))
+            top.addWidget(btn_cancel)
+        elif recent and dl.status in ("failed", "cancelled"):
+            btn_retry = self._make_tool_button("Retry", QStyle.StandardPixmap.SP_BrowserReload, "ghost")
+            btn_retry.clicked.connect(lambda checked=False, item=dl: self._retry_download(item))
+            top.addWidget(btn_retry)
+        elif recent and dl.status == "complete" and dl.filename:
+            btn_show = self._make_tool_button("Show", QStyle.StandardPixmap.SP_DirOpenIcon, "ghost")
+            btn_show.clicked.connect(lambda checked=False, path=dl.filename: self._show_download_location(path))
+            top.addWidget(btn_show)
+        card_l.addLayout(top)
+
+        if dl.status in ("queued", "downloading", "merging", "extracting"):
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(int(min(max(dl.progress, 0), 100)))
+            bar.setTextVisible(False)
+            card_l.addWidget(bar)
+
+        meta_parts = []
+        if dl.status in ("downloading", "merging", "extracting"):
+            meta_parts.append(f"{dl.progress:.1f}%")
+        if dl.speed:
+            meta_parts.append(dl.speed)
+        if dl.eta:
+            meta_parts.append(f"ETA {dl.eta}")
+        if dl.format:
+            meta_parts.append(dl.format.upper())
+        if dl.quality:
+            meta_parts.append(str(dl.quality))
+        if dl.error:
+            meta_parts.append(dl.error)
+        elif dl.filename:
+            meta_parts.append(Path(dl.filename).name)
+        meta = make_label("  /  ".join(meta_parts) if meta_parts else dl.url, "fieldHint", word_wrap=True)
+        card_l.addWidget(meta)
+        return card
 
     def _update_ui(self):
+        if self.server_running and self.server_thread and not self.server_thread.is_alive():
+            self.server_running = False
+            self.server_start_time = None
+            self.server_obj = None
+            self._append_log("Server stopped unexpectedly")
+            self._update_server_ui()
+
         # Stats
         self.stat_active.setText(str(self.dl_manager.active_count()))
         self.stat_completed.setText(str(self.dl_manager.total_completed))
@@ -1284,119 +2043,319 @@ class MainWindow(QMainWindow):
             self.stat_uptime.setText("--")
 
         # Downloads tab
-        active = [d for d in self.dl_manager.downloads.values()
-                  if d.status not in ('complete', 'failed', 'cancelled')]
-        # Clear old widgets (skip the title label)
-        while self.downloads_layout.count() > 1:
-            item = self.downloads_layout.takeAt(1)
-            if item.widget():
-                item.widget().deleteLater()
+        downloads = self.dl_manager.snapshot()
+        active = [d for d in downloads
+                  if d.status in ('queued', 'downloading', 'merging', 'extracting')]
+        recent = [d for d in downloads
+                  if d.status in ('complete', 'failed', 'cancelled')]
+        active.sort(key=lambda d: d.start_time, reverse=True)
+        recent.sort(key=lambda d: d.start_time, reverse=True)
+        signature = tuple(
+            (d.id, d.status, round(d.progress, 1), d.speed, d.eta, d.title, d.error, d.filename)
+            for d in active + recent[:8]
+        )
+        if signature == self._downloads_signature:
+            return
+        self._downloads_signature = signature
 
-        if not active:
-            lbl = QLabel("No active downloads.")
-            lbl.setStyleSheet("color: #525a65; font-size: 13px;")
-            self.downloads_layout.addWidget(lbl)
-        else:
+        self._clear_layout(self.downloads_list_layout)
+        if not active and not recent:
+            self.downloads_list_layout.addWidget(make_empty_state(
+                "Queue is clear",
+                "Downloads sent from Astra Deck will appear here with progress, speed, and failure details."
+            ))
+        if active:
+            self.downloads_list_layout.addWidget(make_section_label("In progress"))
             for dl in active:
-                card = QFrame()
-                card.setProperty("class", "card")
-                card_l = QVBoxLayout(card)
-                card_l.setContentsMargins(14, 10, 14, 10)
-                title = QLabel(dl.title or "Downloading...")
-                title.setStyleSheet("font-size: 13px; font-weight: 600;")
-                title.setWordWrap(False)
-                card_l.addWidget(title)
-                bar = QProgressBar()
-                bar.setRange(0, 100)
-                bar.setValue(int(min(max(dl.progress, 0), 100)))
-                bar.setTextVisible(False)
-                bar.setFixedHeight(6)
-                card_l.addWidget(bar)
-                meta_parts = [f"{dl.progress:.1f}%"]
-                if dl.speed:
-                    meta_parts.append(dl.speed)
-                if dl.eta:
-                    meta_parts.append(f"ETA {dl.eta}")
-                meta_parts.append(dl.status)
-                meta = QLabel("  |  ".join(meta_parts))
-                meta.setStyleSheet("color: #8b949e; font-size: 10px;")
-                card_l.addWidget(meta)
-                self.downloads_layout.addWidget(card)
-        self.downloads_layout.addStretch()
+                self.downloads_list_layout.addWidget(self._download_card(dl))
+        if recent:
+            self.downloads_list_layout.addWidget(make_section_label("Recent activity"))
+            for dl in recent[:8]:
+                self.downloads_list_layout.addWidget(self._download_card(dl, recent=True))
+        self.downloads_list_layout.addStretch()
 
     def _refresh_history(self):
-        # Clear
-        while self.history_container.count():
-            item = self.history_container.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._clear_layout(self.history_container)
 
         data = self.history_mgr.load()
         if not data:
-            lbl = QLabel("No downloads yet.")
-            lbl.setStyleSheet("color: #525a65; font-size: 13px;")
-            self.history_container.addWidget(lbl)
+            self.history_container.addWidget(make_empty_state(
+                "No downloads yet",
+                "Completed downloads will be listed here with format, quality, and duration."
+            ))
+            self.history_container.addStretch()
             return
 
         for h in reversed(data[-50:]):
-            card = QFrame()
-            card.setProperty("class", "card")
+            card = make_card("download")
+            card.setProperty("state", "complete")
             card_l = QVBoxLayout(card)
-            card_l.setContentsMargins(12, 8, 12, 8)
-            title = QLabel(h.get("title", "(untitled)"))
-            title.setStyleSheet("font-size: 12px; font-weight: 600;")
-            card_l.addWidget(title)
-            parts = [p for p in [h.get("date"), h.get("format"), h.get("quality"),
-                                 f"{h.get('duration', 0)}s"] if p]
-            meta = QLabel("  |  ".join(parts))
-            meta.setStyleSheet("color: #525a65; font-size: 10px;")
+            card_l.setContentsMargins(16, 13, 16, 13)
+            card_l.setSpacing(7)
+            top = QHBoxLayout()
+            title = make_label(h.get("title", "(untitled)"), "fieldLabel", word_wrap=True)
+            top.addWidget(title, 1)
+            top.addWidget(make_status_badge("Complete", "success"))
+            if h.get("filename"):
+                btn_show = self._make_tool_button("Show", QStyle.StandardPixmap.SP_DirOpenIcon, "ghost")
+                btn_show.clicked.connect(lambda checked=False, path=h.get("filename"): self._show_download_location(path))
+                top.addWidget(btn_show)
+            card_l.addLayout(top)
+            parts = [p for p in [
+                h.get("date"),
+                str(h.get("format", "")).upper() if h.get("format") else "",
+                h.get("quality"),
+                format_duration(h.get("duration", 0)),
+            ] if p]
+            filename = h.get("filename")
+            if filename:
+                parts.append(Path(filename).name)
+            meta = make_label("  /  ".join(parts), "fieldHint", word_wrap=True)
             card_l.addWidget(meta)
             self.history_container.addWidget(card)
+        self.history_container.addStretch()
 
     def _clear_history(self):
+        if not self.history_mgr.load():
+            self._refresh_history()
+            return
+        result = QMessageBox.question(
+            self,
+            "Clear Download History",
+            "Clear the saved download history?\n\nDownloaded files will stay on disk.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
         self.history_mgr.clear()
         self._refresh_history()
+        self._append_log("Download history cleared")
+
+    def _retry_download(self, dl):
+        dl_id, err = self.dl_manager.start_download(
+            url=dl.url,
+            audio_only=dl.audio_only,
+            fmt=dl.format,
+            quality=dl.quality,
+            output_dir=dl.output_dir,
+            title=dl.title if dl.title != "Unknown" else None,
+            referer=dl.referer,
+        )
+        if err:
+            self._append_log(f"Retry failed: {err}")
+            return
+        self._append_log(f"Retry queued: {dl.title if dl.title != 'Unknown' else dl.url}")
+        self._nav_click("Downloads")
+
+    def _show_download_location(self, file_path):
+        if not file_path:
+            self._open_folder()
+            return
+        path = Path(file_path)
+        try:
+            target = path.parent if path.suffix else path
+            if target.exists():
+                os.startfile(str(target))
+                return
+            self._append_log("Download location is no longer available")
+        except Exception as e:
+            self._append_log(f"Could not open download location: {e}")
+
+    def _set_input_error(self, widget, is_error):
+        widget.setProperty("state", "error" if is_error else "")
+        repolish(widget)
+
+    def _show_settings_status(self, message, tone="neutral"):
+        colors = {
+            "success": "#9ff3bd",
+            "danger": "#ffb8b8",
+            "warning": "#ffe4a3",
+            "neutral": "#7b8794",
+        }
+        self.settings_status.setText(message)
+        self.settings_status.setStyleSheet(f"color: {colors.get(tone, colors['neutral'])}; font-size: 11px;")
+
+    def _sync_connection_ui(self):
+        port = clamp_int(self.config.get("ServerPort", SERVER_PORT), SERVER_PORT, 1024, 65535)
+        self.dash_endpoint.setText(f"http://127.0.0.1:{port}")
+        self.stat_port.setText(str(port))
 
     def _save_settings(self):
-        self.config.set("DownloadPath", self.cfg_dl_path.text().strip())
-        self.config.set("AudioDownloadPath", self.cfg_audio_path.text().strip())
+        for field in (self.cfg_dl_path, self.cfg_audio_path, self.cfg_sublangs,
+                      self.cfg_ratelimit, self.cfg_proxy):
+            self._set_input_error(field, False)
+
+        old_port = clamp_int(self.config.get("ServerPort", SERVER_PORT), SERVER_PORT, 1024, 65535)
+        old_token = self.config.get("ServerToken", "")
+        new_port = self.cfg_port.value()
+        new_token = self.cfg_token.text().strip()
+        dl_path = self.cfg_dl_path.text().strip()
+        audio_path = self.cfg_audio_path.text().strip()
+        sublangs = normalize_sublangs(self.cfg_sublangs.text())
+        rate = normalize_rate_limit(self.cfg_ratelimit.text())
+        proxy = self.cfg_proxy.text().strip()
+        has_error = False
+
+        dl_path, dl_path_err = normalize_output_dir(dl_path, DEFAULT_CONFIG["DownloadPath"])
+        audio_path, audio_path_err = normalize_output_dir(audio_path, dl_path) if audio_path else ("", None)
+
+        if dl_path_err:
+            self._set_input_error(self.cfg_dl_path, True)
+            has_error = True
+        if audio_path_err:
+            self._set_input_error(self.cfg_audio_path, True)
+            has_error = True
+        if not sublangs:
+            self._set_input_error(self.cfg_sublangs, True)
+            has_error = True
+        if self.cfg_ratelimit.text().strip() and not rate:
+            self._set_input_error(self.cfg_ratelimit, True)
+            has_error = True
+        if proxy and not normalize_proxy(proxy):
+            self._set_input_error(self.cfg_proxy, True)
+            has_error = True
+        else:
+            proxy = normalize_proxy(proxy)
+        if not new_token:
+            self._show_settings_status("Token cannot be empty.", "danger")
+            has_error = True
+
+        if has_error:
+            self._show_settings_status("Check the highlighted fields before saving.", "danger")
+            return
+
+        connection_changed = new_port != old_port or new_token != old_token
+        restart_now = False
+        connection_change_blocked = False
+        if connection_changed and self.server_running:
+            result = QMessageBox.question(
+                self,
+                "Restart Server",
+                "Connection settings changed.\n\nRestart the local server now so Astra Deck can use the updated values?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            restart_now = result == QMessageBox.StandardButton.Yes
+            if not restart_now:
+                new_port = old_port
+                new_token = old_token
+                self.cfg_port.setValue(old_port)
+                self.cfg_token.setText(old_token)
+                connection_changed = False
+                connection_change_blocked = True
+
+        if restart_now:
+            self._stop_server()
+
+        self.cfg_dl_path.setText(dl_path)
+        self.cfg_audio_path.setText(audio_path)
+        self.cfg_sublangs.setText(sublangs)
+        self.cfg_ratelimit.setText(rate)
+        self.cfg_proxy.setText(proxy)
+        self.config.set("ServerPort", new_port)
+        self.config.set("ServerToken", new_token)
+        self.config.set("DownloadPath", dl_path)
+        self.config.set("AudioDownloadPath", audio_path)
         self.config.set("EmbedMetadata", self.cfg_metadata.isChecked())
         self.config.set("EmbedThumbnail", self.cfg_thumbnail.isChecked())
         self.config.set("EmbedChapters", self.cfg_chapters.isChecked())
         self.config.set("EmbedSubs", self.cfg_subs.isChecked())
-        self.config.set("SubLangs", self.cfg_sublangs.text().strip())
+        self.config.set("SubLangs", sublangs)
         self.config.set("SponsorBlock", self.cfg_sponsorblock.isChecked())
-        try:
-            v = int(self.cfg_fragments.text())
-            if 1 <= v <= 32:
-                self.config.set("ConcurrentFragments", v)
-        except ValueError:
-            pass
-        self.config.set("RateLimit", self.cfg_ratelimit.text().strip())
-        self.config.set("Proxy", self.cfg_proxy.text().strip())
+        self.config.set("SponsorBlockAction", self.cfg_sb_action.currentData())
+        self.config.set("ConcurrentFragments", self.cfg_fragments.value())
+        self.config.set("RateLimit", rate)
+        self.config.set("Proxy", proxy)
         self.config.set("AutoUpdateYtDlp", self.cfg_autoupdate.isChecked())
         self.config.set("DownloadArchive", self.cfg_archive.isChecked())
         self.config.set("CloseToTray", self.cfg_closetotray.isChecked())
         self.config.set("StartMinimized", self.cfg_startmin.isChecked())
         self.config.save()
-        self.btn_save.setText("Saved!")
+        self._sync_connection_ui()
+        if restart_now:
+            self._start_server()
+            self._show_settings_status("Settings saved and server restarted.", "success")
+        elif connection_change_blocked:
+            self._show_settings_status("Other settings saved. Stop or restart the server before changing connection details.", "warning")
+        else:
+            self._show_settings_status("Settings saved.", "success")
+        self.btn_save.setText("Saved")
         QTimer.singleShot(1500, lambda: self.btn_save.setText("Save Settings"))
+        QTimer.singleShot(3200, lambda: self._show_settings_status(""))
 
     def _browse(self, line_edit):
         path = QFileDialog.getExistingDirectory(self, "Select Folder", line_edit.text())
         if path:
             line_edit.setText(path)
 
+    def _copy_endpoint(self):
+        QApplication.clipboard().setText(self.dash_endpoint.text())
+        self._append_log("Endpoint copied to clipboard")
+        old = self.dash_hint.text()
+        self.dash_hint.setText("Endpoint copied.")
+        QTimer.singleShot(1600, lambda: self.dash_hint.setText(old))
+
+    def _copy_token(self):
+        QApplication.clipboard().setText(self.cfg_token.text())
+        self._show_settings_status("Token copied to clipboard.", "success")
+        QTimer.singleShot(2200, lambda: self._show_settings_status(""))
+
+    def _copy_diagnostics(self):
+        active = self.dl_manager.active_count()
+        diagnostics = [
+            f"{APP_NAME} {APP_VERSION}",
+            f"Server: {'running' if self.server_running else 'stopped'}",
+            f"Endpoint: {self.dash_endpoint.text()}",
+            f"Active downloads: {active}",
+            f"Completed this session: {self.dl_manager.total_completed}",
+            f"yt-dlp installed: {YTDLP_PATH.exists()}",
+            f"ffmpeg installed: {FFMPEG_PATH.exists()}",
+            f"Install directory: {INSTALL_DIR}",
+            "",
+            "Recent log:",
+            self.log_text.toPlainText()[-3000:],
+        ]
+        QApplication.clipboard().setText("\n".join(diagnostics))
+        self._append_log("Diagnostics copied to clipboard")
+
+    def _clear_log(self):
+        self.log_text.setPlainText("Ready.")
+
+    def _toggle_token_visible(self):
+        showing = self.cfg_token.echoMode() == QLineEdit.EchoMode.Normal
+        self.cfg_token.setEchoMode(QLineEdit.EchoMode.Password if showing else QLineEdit.EchoMode.Normal)
+        self.btn_token_reveal.setText("Reveal" if showing else "Hide")
+
+    def _regenerate_token(self):
+        result = QMessageBox.question(
+            self,
+            "Regenerate Private Token",
+            "Generate a new private token?\n\nExisting extension requests will need the refreshed token after you save.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        self.cfg_token.setText(uuid.uuid4().hex)
+        self._show_settings_status("New token ready. Save settings to apply it.", "warning")
+
     def _open_folder(self):
         p = self.config.get("DownloadPath", "")
-        if p and Path(p).exists():
-            os.startfile(p)
-        else:
-            os.startfile(str(INSTALL_DIR))
+        try:
+            target = Path(p) if p else INSTALL_DIR
+            if not target.exists():
+                target.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(target))
+        except Exception as e:
+            self._append_log(f"Could not open folder: {e}")
 
     def _append_log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"{ts} {msg}")
+        cursor = self.log_text.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.log_text.setTextCursor(cursor)
 
     # ── Tray ──
     def _tray_activated(self, reason):
@@ -1419,7 +2378,17 @@ class MainWindow(QMainWindow):
         if not self._force_exit and self.config.get("CloseToTray", True):
             event.ignore()
             self.hide()
+            if not self._tray_hint_shown and self.tray.isVisible():
+                self.tray.showMessage(
+                    APP_NAME,
+                    "Still running in the tray so Astra Deck can keep sending downloads.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    3000,
+                )
+                self._tray_hint_shown = True
         else:
+            if self.server_running:
+                self._stop_server()
             self.tray.hide()
             self.update_timer.stop()
             self.cleanup_timer.stop()
@@ -1427,17 +2396,51 @@ class MainWindow(QMainWindow):
 
     # ── First-run setup ──
     def _run_setup(self):
+        if self._setup_running:
+            return
+        self._setup_running = True
         self._append_log("Running first-time setup...")
+        self.setup_status.setText("Installing required download tools...")
+        self.setup_status.show()
+        self.setup_progress.setValue(0)
+        self.setup_progress.show()
+        self.btn_startstop.setEnabled(False)
+        self.btn_startstop.setText("Setting Up")
         self.setup_worker = SetupWorker()
         self.setup_worker.log.connect(self._append_log)
-        self.setup_worker.progress.connect(lambda v: None)
+        self.setup_worker.progress.connect(self._setup_progress)
         self.setup_worker.finished_ok.connect(self._setup_done)
-        self.setup_worker.finished_err.connect(lambda e: self._append_log(f"Setup error: {e}"))
+        self.setup_worker.finished_err.connect(self._setup_failed)
         self.setup_worker.start()
 
+    def _setup_progress(self, value):
+        self.setup_progress.setValue(value)
+        if value < 30:
+            self.setup_status.setText("Installing yt-dlp...")
+        elif value < 70:
+            self.setup_status.setText("Installing ffmpeg...")
+        elif value < 95:
+            self.setup_status.setText("Registering shortcuts and protocols...")
+        else:
+            self.setup_status.setText("Finishing setup...")
+
     def _setup_done(self):
+        self._setup_running = False
+        self.btn_startstop.setEnabled(True)
+        self.setup_progress.setValue(100)
+        self.setup_status.setText("Setup complete.")
         self._append_log("Setup complete. Starting server...")
         self._start_server()
+        QTimer.singleShot(1400, self.setup_status.hide)
+        QTimer.singleShot(1400, self.setup_progress.hide)
+
+    def _setup_failed(self, error):
+        self._setup_running = False
+        self.btn_startstop.setEnabled(True)
+        self.btn_startstop.setText("Start Server")
+        self.setup_status.setText("Setup failed. Check the log for details.")
+        self.setup_progress.hide()
+        self._append_log(f"Setup error: {error}")
 
 # ══════════════════════════════════════════════════════════════
 # SINGLE INSTANCE GUARD
@@ -1472,6 +2475,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
+    app.setFont(QFont("Segoe UI", 9))
     app.setStyleSheet(STYLESHEET)
     if ICON_PATH.exists():
         app.setWindowIcon(QIcon(str(ICON_PATH)))

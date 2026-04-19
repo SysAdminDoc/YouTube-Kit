@@ -3,6 +3,7 @@
 Build AstraDownloader.exe using PyInstaller.
 Outputs to ../AstraDownloader.exe alongside the logo/icon.
 """
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -16,25 +17,47 @@ OUT_EXE = ROOT / "AstraDownloader.exe"
 
 BUILD_DIR = HERE / "build"
 DIST_DIR = HERE / "dist"
+SPEC_DIR = BUILD_DIR / "spec"
+
+
+def assert_inside_workspace(path):
+    resolved = path.resolve()
+    if resolved != HERE and HERE not in resolved.parents:
+        raise SystemExit(f"Refusing to clean path outside astra_downloader: {resolved}")
 
 
 def clean():
     for d in (BUILD_DIR, DIST_DIR):
         if d.exists():
+            assert_inside_workspace(d)
             shutil.rmtree(d, ignore_errors=True)
-    for spec in HERE.glob("*.spec"):
-        spec.unlink(missing_ok=True)
+
+
+def preflight():
+    if not SCRIPT.exists():
+        raise SystemExit(f"Missing entry point: {SCRIPT}")
+    if not ICON.exists():
+        raise SystemExit(f"Missing icon: {ICON}")
+    if importlib.util.find_spec("PyInstaller") is None:
+        raise SystemExit(
+            "PyInstaller is not installed. Install it with: "
+            f"{sys.executable} -m pip install pyinstaller"
+        )
 
 
 def build():
+    preflight()
     clean()
+    SPEC_DIR.mkdir(parents=True, exist_ok=True)
     args = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
+        "--clean",
         "--onefile",
         "--windowed",
         "--name", "AstraDownloader",
         "--icon", str(ICON),
+        "--specpath", str(SPEC_DIR),
         # Required hidden imports
         "--hidden-import", "PyQt6.QtCore",
         "--hidden-import", "PyQt6.QtGui",
