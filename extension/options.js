@@ -93,6 +93,9 @@
         draftSettings: {},
         dirtyKeys: new Set(),
         invalidKeys: new Set(),
+        // Maps invalid keys to a short human explanation (e.g. list parse error)
+        // so the card hint can surface the reason instead of a generic message.
+        invalidReasons: {},
         activeGroup: 'all',
         search: '',
         defaultsLoaded: false,
@@ -731,7 +734,14 @@
             }
 
             const writes = {};
-            if (data.exportVersion >= 3 && data.exportVersion < 100) {
+            // v3 is the current export format. Any forward-compatible v3+
+            // payload uses the same top-level shape (settings / hiddenVideos /
+            // blockedChannels / bookmarks), so future bumps can still import
+            // safely and `applyImportedSettingsVersion` handles newer
+            // `_settingsVersion` values with a console warning rather than a
+            // silent drop. Previously an arbitrary `< 100` cap rejected any
+            // forward-compatible export shipped by a newer build.
+            if (data.exportVersion >= 3) {
                 const filteredVideoPosts = getImportedFilteredVideoPosts(data);
                 if (isPlainObject(data.settings)) writes[STORAGE_KEYS.settings] = applyImportedSettingsVersion(data.settings);
                 if (filteredVideoPosts) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(filteredVideoPosts);
@@ -820,6 +830,7 @@
             state.draftSettings = deepClone(state.resolvedSettings);
             state.dirtyKeys.clear();
             state.invalidKeys.clear();
+            state.invalidReasons = {};
         }
     }
 
@@ -948,7 +959,13 @@
         const hint = card.querySelector('.settings-item-hint');
         if (hint) {
             if (invalid) {
-                hint.textContent = 'Fix this field before saving. Invalid draft values stay local to this editor.';
+                // Render the specific reason when a control captured one
+                // (list/json parse error). Without this the user sees a
+                // generic "Fix this field" with no clue what broke.
+                const detail = state.invalidReasons?.[key];
+                hint.textContent = detail
+                    ? `Fix this field before saving. ${detail}`
+                    : 'Fix this field before saving. Invalid draft values stay local to this editor.';
             } else if (dirty) {
                 if (defaultValue !== undefined && areValuesEqual(currentValue, defaultValue)) {
                     hint.textContent = `Back at the catalog default (${formatValuePreview(defaultValue)}). Save to replace the stored value.`;
@@ -1119,6 +1136,7 @@
         input.addEventListener('input', () => {
             state.draftSettings[key] = input.value;
             state.invalidKeys.delete(key);
+            delete state.invalidReasons[key];
             updateDirtyStateForKey(key);
             updateCardState(card, key);
             updateModalHeaderState();
@@ -1136,13 +1154,16 @@
         input.addEventListener('input', () => {
             if (input.value.trim() === '') {
                 state.invalidKeys.add(key);
+                state.invalidReasons[key] = 'Enter a number.';
             } else {
                 const nextValue = Number(input.value);
                 if (Number.isNaN(nextValue)) {
                     state.invalidKeys.add(key);
+                    state.invalidReasons[key] = 'Not a valid number.';
                 } else {
                     state.draftSettings[key] = nextValue;
                     state.invalidKeys.delete(key);
+                    delete state.invalidReasons[key];
                     updateDirtyStateForKey(key);
                 }
             }
@@ -1167,6 +1188,7 @@
         input.addEventListener('change', () => {
             state.draftSettings[key] = input.checked;
             state.invalidKeys.delete(key);
+            delete state.invalidReasons[key];
             updateDirtyStateForKey(key);
             updateCardState(card, key);
             updateModalHeaderState();
@@ -1185,9 +1207,13 @@
             try {
                 state.draftSettings[key] = parseListInput(textarea.value, value ?? defaultValue);
                 state.invalidKeys.delete(key);
+                delete state.invalidReasons[key];
                 updateDirtyStateForKey(key);
-            } catch {
+            } catch (error) {
                 state.invalidKeys.add(key);
+                state.invalidReasons[key] = error?.message
+                    ? `${error.message} (one value per line).`
+                    : 'Could not parse list (one value per line).';
             }
             updateCardState(card, key);
             updateModalHeaderState();
@@ -1205,13 +1231,18 @@
                 // Guard against replacing an object/array with a primitive
                 if (value != null && typeof value === 'object' && (typeof parsed !== 'object' || parsed === null)) {
                     state.invalidKeys.add(key);
+                    state.invalidReasons[key] = 'Expected an object or array, got a primitive value.';
                 } else {
                     state.draftSettings[key] = parsed;
                     state.invalidKeys.delete(key);
+                    delete state.invalidReasons[key];
                     updateDirtyStateForKey(key);
                 }
-            } catch {
+            } catch (error) {
                 state.invalidKeys.add(key);
+                state.invalidReasons[key] = error?.message
+                    ? `Invalid JSON: ${error.message}.`
+                    : 'Invalid JSON payload.';
             }
             updateCardState(card, key);
             updateModalHeaderState();
@@ -1332,6 +1363,7 @@
             if (defaultValue === undefined) return;
             state.draftSettings[key] = deepClone(defaultValue);
             state.invalidKeys.delete(key);
+            delete state.invalidReasons[key];
             updateDirtyStateForKey(key);
             renderSettingsWorkspace({ preserveScroll: true });
             showModalStatus(`${humanizeKey(key)} restored to its catalog default. Save to apply.`, 'info');
@@ -1507,6 +1539,7 @@
             state.draftSettings = deepClone(state.resolvedSettings);
             state.dirtyKeys.clear();
             state.invalidKeys.clear();
+            state.invalidReasons = {};
 
             renderSettingsWorkspace({ preserveScroll: true });
             await renderStorageInfo();
@@ -1521,6 +1554,7 @@
         state.draftSettings = deepClone(state.resolvedSettings);
         state.dirtyKeys.clear();
         state.invalidKeys.clear();
+        state.invalidReasons = {};
         renderSettingsWorkspace({ preserveScroll: true });
         showModalStatus('Draft discarded. You are back in sync with stored settings.', 'info');
     }
@@ -1533,6 +1567,7 @@
 
         state.draftSettings = applySettingsVersion(deepClone(state.defaultSettings));
         state.invalidKeys.clear();
+        state.invalidReasons = {};
         state.dirtyKeys.clear();
         getSettingKeys().forEach((key) => updateDirtyStateForKey(key));
         renderSettingsWorkspace({ preserveScroll: true });

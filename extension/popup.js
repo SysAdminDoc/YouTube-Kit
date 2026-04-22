@@ -134,21 +134,27 @@ async function loadSettings() {
     return popupState.settings;
 }
 
+// Serialize writes so two toggles clicked in rapid succession can't race
+// the storage read-merge-write cycle. Each toggle click produces a task that
+// waits for the previous one to finish before starting its own merge.
+let _pendingWriteChain = Promise.resolve();
+
 async function writeSetting(key, value) {
-    const items = await storageGet([SETTINGS_STORAGE_KEY, ...QUICK_TOGGLE_KEYS]);
-    const normalized = normalizeStoredSettings(items);
-    const nextSettings = {
-        ...normalized.settings,
-        [key]: value
-    };
-
-    await storageSet({ [SETTINGS_STORAGE_KEY]: nextSettings });
-    if (normalized.legacyKeys.length > 0) {
-        await storageRemove(normalized.legacyKeys);
-    }
-
-    popupState.settings = nextSettings;
-    return nextSettings;
+    const task = _pendingWriteChain.catch(() => undefined).then(async () => {
+        // Merge against the in-memory settings kept fresh by the onChanged
+        // listener and the previous write task. This avoids the classic
+        // read-merge-write race where two concurrent storageGet() calls both
+        // observe pre-write state and the later write clobbers the earlier.
+        const nextSettings = {
+            ...popupState.settings,
+            [key]: value
+        };
+        popupState.settings = nextSettings;
+        await storageSet({ [SETTINGS_STORAGE_KEY]: nextSettings });
+        return nextSettings;
+    });
+    _pendingWriteChain = task;
+    return task;
 }
 
 function isAnyYouTubeUrl(urlString) {
@@ -433,7 +439,42 @@ function render(settings, filter) {
     }
 }
 
+function getWheelScrollTarget(rawTarget) {
+    let el = rawTarget instanceof Element ? rawTarget : rawTarget?.parentElement || null;
+    while (el && el !== document.documentElement) {
+        const style = window.getComputedStyle(el);
+        const canScrollY = /(auto|scroll)/.test(style.overflowY);
+        if (canScrollY && el.scrollHeight > el.clientHeight) return el;
+        el = el.parentElement;
+    }
+    return list;
+}
+
+function normalizeWheelDelta(event, scroller) {
+    if (event.deltaMode === 1) return event.deltaY * 16;
+    if (event.deltaMode === 2) return event.deltaY * Math.max(scroller.clientHeight, 1);
+    return event.deltaY;
+}
+
+function installWheelScrolling() {
+    document.addEventListener('wheel', (event) => {
+        const scroller = getWheelScrollTarget(event.target);
+        if (!scroller || scroller.scrollHeight <= scroller.clientHeight) return;
+
+        const delta = normalizeWheelDelta(event, scroller);
+        if (!Number.isFinite(delta) || delta === 0) return;
+
+        const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
+        const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scroller.scrollTop + delta));
+        if (nextScrollTop === scroller.scrollTop) return;
+
+        event.preventDefault();
+        scroller.scrollTop = nextScrollTop;
+    }, { passive: false });
+}
+
 (async () => {
+    installWheelScrolling();
     renderLoading();
     try {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -451,8 +492,16 @@ function render(settings, filter) {
         showStatus('Quick controls could not be loaded. Try reopening the popup.', 'error', 5000);
     }
 
+    // Debounce search re-renders so fast typers don't rebuild the toggle
+    // list (and re-run every group layout + aria update) on every keystroke.
+    let _searchDebounce = null;
     q.addEventListener('input', () => {
-        render(popupState.settings, q.value);
+        updateSearchState();
+        if (_searchDebounce) clearTimeout(_searchDebounce);
+        _searchDebounce = setTimeout(() => {
+            _searchDebounce = null;
+            render(popupState.settings, q.value);
+        }, 120);
     });
     q.addEventListener('keydown', (event) => {
         // Enter on the search field focuses the first visible toggle so

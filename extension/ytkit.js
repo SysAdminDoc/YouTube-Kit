@@ -442,7 +442,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.16.1';
+    const YTKIT_VERSION = '3.16.2';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -20987,6 +20987,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _barSegments: [],
             _barObserver: null,
             _reloadTimer: null,
+            // Bumped on destroy() so any in-flight _fetchSegments cannot
+            // repopulate _segments/DOM after the feature was torn down.
+            _generation: 0,
 
             _CATEGORY_MAP: {
                 sbCat_sponsor: 'sponsor',
@@ -21055,7 +21058,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._videoId = videoId;
                 this._segments = [];
                 this._clearBarSegments();
-                this._segments = await this._fetchSegments(videoId);
+                const gen = this._generation;
+                const fetched = await this._fetchSegments(videoId);
+                // Guard: if destroy() fired while we were awaiting, the
+                // generation counter was bumped and we must not touch state.
+                if (gen !== this._generation) return;
+                this._segments = fetched;
                 if (this._segments.length) {
                     DebugManager.log('SponsorBlock', `Loaded ${this._segments.length} segments for ${videoId}`);
                     this._renderBarSegments();
@@ -21184,6 +21192,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             destroy() {
+                // Invalidate any in-flight _loadForVideo so late fetches
+                // cannot re-render segments onto the progress bar after the
+                // feature has been disabled.
+                this._generation = (this._generation + 1) | 0;
                 clearTimeout(this._reloadTimer);
                 this._reloadTimer = null;
                 this._clearSchedule();

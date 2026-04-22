@@ -88,6 +88,20 @@ if (bumpType) {
         }
     }
 
+    // Keep package.json in sync — the CI tag-version check validates all
+    // four sources (manifest.json, ytkit.js, YTKit.user.js, package.json)
+    // against the git tag, so a manual bump of the other three would still
+    // break the release if package.json drifted.
+    const pkgPath = path.join(__dirname, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+        const pkgRaw = fs.readFileSync(pkgPath, 'utf8');
+        const updated = pkgRaw.replace(/("version"\s*:\s*")[^"]+(")/, `$1${version}$2`);
+        if (updated !== pkgRaw) {
+            fs.writeFileSync(pkgPath, updated, 'utf8');
+            console.log('Updated package.json version');
+        }
+    }
+
     console.log('Bumped version to ' + version);
 }
 

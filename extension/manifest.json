@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Astra Deck",
-  "version": "3.16.1",
+  "version": "3.16.2",
   "description": "Premium watch-page customization, split layouts, content controls, and local downloads for YouTube.",
   "author": "Matthew Parker",
   "homepage_url": "https://github.com/SysAdminDoc/Astra-Deck",

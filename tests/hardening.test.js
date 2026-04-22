@@ -268,3 +268,82 @@ test('diagnosticLog destroy clears _errors for immediate storage relief', () => 
     assert.match(block, /destroy\s*\(\s*\)/, 'diagnosticLog must expose a destroy hook');
     assert.match(block, /DiagnosticLog\.clear\s*\(\s*\)/, 'destroy must call DiagnosticLog.clear()');
 });
+
+// ── v3.16+ Audit Pass: popup.js serializes toggle writes ──
+
+test('popup.js serializes toggle writes to avoid read-merge-write race', () => {
+    const popupSource = fs.readFileSync(
+        path.join(__dirname, '..', 'extension', 'popup.js'),
+        'utf8'
+    );
+    // The fix chains every writeSetting() call onto a shared promise so two
+    // rapid toggle clicks can't both read pre-write storage and clobber each
+    // other's update.
+    assert.match(
+        popupSource,
+        /_pendingWriteChain/,
+        'popup.js must serialize writeSetting() via a pending-write chain'
+    );
+    // The merge must be against the in-memory popupState.settings, not a
+    // fresh storageGet() round-trip (which was the race source).
+    const fnStart = popupSource.indexOf('async function writeSetting');
+    assert.ok(fnStart > -1, 'writeSetting must exist');
+    const fnBody = popupSource.slice(fnStart, fnStart + 1200);
+    assert.match(fnBody, /\.\.\.\s*popupState\.settings/, 'writeSetting must merge from popupState.settings');
+    assert.doesNotMatch(fnBody, /await\s+storageGet\s*\(/, 'writeSetting must not re-read storage per call');
+});
+
+// ── v3.16+ Audit Pass: options.js import cap removed ──
+
+test('options.js import accepts exportVersion >= 3 without an upper cap', () => {
+    const optSource = fs.readFileSync(
+        path.join(__dirname, '..', 'extension', 'options.js'),
+        'utf8'
+    );
+    assert.doesNotMatch(
+        optSource,
+        /exportVersion\s*>=\s*3\s*&&\s*data\.exportVersion\s*<\s*100/,
+        'Arbitrary `< 100` import cap must be removed — forward-compat payloads are handled by applyImportedSettingsVersion()'
+    );
+});
+
+// ── v3.16+ Audit Pass: invalidReasons surfaces parse errors ──
+
+test('options.js tracks invalidReasons for list / json / number parse errors', () => {
+    const optSource = fs.readFileSync(
+        path.join(__dirname, '..', 'extension', 'options.js'),
+        'utf8'
+    );
+    assert.match(optSource, /invalidReasons:\s*\{\s*\}/, 'state must carry an invalidReasons map');
+    assert.match(optSource, /state\.invalidReasons\[key\]\s*=\s*error\?\.message/, 'list/json parse catch must record the error message');
+    // The card hint must render the captured reason rather than only the
+    // generic "Fix this field" fallback.
+    assert.match(
+        optSource,
+        /state\.invalidReasons\?\.\[key\]/,
+        'updateCardState must render the per-key reason when available'
+    );
+});
+
+// ── v3.16+ Audit Pass: SponsorBlock destroy is race-proof ──
+
+test('sponsorBlock _loadForVideo aborts if destroy runs mid-fetch', () => {
+    const idx = ytkitSource.indexOf("id: 'sponsorBlock'");
+    assert.ok(idx > -1, 'sponsorBlock feature must exist');
+    const end = ytkitSource.indexOf("id: 'sbCat_sponsor'", idx);
+    const block = ytkitSource.slice(idx, end);
+
+    assert.match(block, /_generation:\s*0/, 'sponsorBlock must track a generation counter');
+    assert.match(
+        block,
+        /gen\s*!==\s*this\._generation/,
+        '_loadForVideo must short-circuit when destroy bumped the generation'
+    );
+    // The destroy() hook must bump the counter before clearing other state
+    // so late fetches observe the bump. Match `destroy() {` to skip prose
+    // that mentions destroy() in comments.
+    const destroyIdx = block.search(/destroy\s*\(\s*\)\s*\{/);
+    assert.ok(destroyIdx > -1, 'destroy() method must exist');
+    const destroyBody = block.slice(destroyIdx, destroyIdx + 1800);
+    assert.match(destroyBody, /this\._generation\s*=/, 'destroy must bump _generation');
+});
