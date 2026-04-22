@@ -46,7 +46,6 @@
             'hideCommentActionMenu',
             'condenseComments',
             'hideCommentTeaser',
-            'hidePinnedComments',
             'watchPageRestyle-comments'
         ].forEach((styleId) => {
             root.querySelector(`#yt-suite-style-${styleId}`)?.remove();
@@ -63,7 +62,9 @@
         });
         root.querySelectorAll('.ytkit-replying').forEach((el) => el.classList.remove('ytkit-replying'));
         root.querySelectorAll('ytd-comment-thread-renderer').forEach((thread) => {
-            if (thread instanceof HTMLElement && thread.style.display === 'none') thread.style.display = '';
+            if (thread instanceof HTMLElement && thread.style.display === 'none' && thread.dataset.ytkitPinnedCommentHidden !== '1') {
+                thread.style.display = '';
+            }
         });
     }
 

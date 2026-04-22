@@ -237,6 +237,13 @@
         return sanitized;
     }
 
+    function getImportedFilteredVideoPosts(data) {
+        if (!isPlainObject(data)) return null;
+        if (Array.isArray(data.hiddenVideos)) return data.hiddenVideos;
+        if (Array.isArray(data.filteredVideoPosts)) return data.filteredVideoPosts;
+        return null;
+    }
+
     function sanitizeImportedBlockedChannels(value) {
         if (!Array.isArray(value)) return [];
         const seen = new Set();
@@ -347,9 +354,12 @@
             getLegacySidebarOrder(allStorage)
         );
 
+        const hiddenVideos = sanitizeImportedHiddenVideos(allStorage[STORAGE_KEYS.hiddenVideos]);
+
         return {
             settings: applySettingsVersion(mergedSettings),
-            hiddenVideos: sanitizeImportedHiddenVideos(allStorage[STORAGE_KEYS.hiddenVideos]),
+            hiddenVideos,
+            filteredVideoPosts: hiddenVideos,
             blockedChannels: sanitizeImportedBlockedChannels(allStorage[STORAGE_KEYS.blockedChannels]),
             bookmarks: sanitizeImportedBookmarks(allStorage[STORAGE_KEYS.bookmarks]),
             exportVersion: 3,
@@ -722,13 +732,15 @@
 
             const writes = {};
             if (data.exportVersion >= 3 && data.exportVersion < 100) {
+                const filteredVideoPosts = getImportedFilteredVideoPosts(data);
                 if (isPlainObject(data.settings)) writes[STORAGE_KEYS.settings] = applyImportedSettingsVersion(data.settings);
-                if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(data.hiddenVideos);
+                if (filteredVideoPosts) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(filteredVideoPosts);
                 if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = sanitizeImportedBlockedChannels(data.blockedChannels);
                 if (isPlainObject(data.bookmarks)) writes[STORAGE_KEYS.bookmarks] = sanitizeImportedBookmarks(data.bookmarks);
             } else if (data.exportVersion >= 2) {
+                const filteredVideoPosts = getImportedFilteredVideoPosts(data);
                 if (isPlainObject(data.settings)) writes[STORAGE_KEYS.settings] = applyImportedSettingsVersion(data.settings);
-                if (Array.isArray(data.hiddenVideos)) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(data.hiddenVideos);
+                if (filteredVideoPosts) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(filteredVideoPosts);
                 if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = sanitizeImportedBlockedChannels(data.blockedChannels);
             } else {
                 if (isPlainObject(data)) {

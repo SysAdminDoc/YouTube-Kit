@@ -44,7 +44,7 @@
   "hideAiSummary": true,
   "hideDescriptionExtras": true,
   "hideHashtags": true,
-  "hidePinnedComments": false,
+  "hidePinnedComments": true,
   "hideCommentDislikeButton": false,
   "hideCommentActionMenu": false,
   "condenseComments": false,

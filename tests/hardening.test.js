@@ -112,6 +112,39 @@ test('importSettings routes through applyImportedSettingsVersion, not applySetti
     );
 });
 
+test('settings backups include filtered video posts and import the alias', () => {
+    const optionsExportStart = optionsSource.indexOf('function buildExportData');
+    const optionsExportEnd = optionsSource.indexOf('function summarizeStorage');
+    assert.ok(optionsExportStart > -1 && optionsExportEnd > optionsExportStart, 'options buildExportData should exist');
+    const optionsExportBody = optionsSource.slice(optionsExportStart, optionsExportEnd);
+    assert.match(
+        optionsExportBody,
+        /filteredVideoPosts:\s*hiddenVideos/,
+        'Options-page exports should include filteredVideoPosts beside hiddenVideos'
+    );
+
+    const panelExportStart = ytkitSource.indexOf('exportAllSettings()');
+    const panelExportEnd = ytkitSource.indexOf('importAllSettings(jsonString)');
+    assert.ok(panelExportStart > -1 && panelExportEnd > panelExportStart, 'in-page exportAllSettings should exist');
+    const panelExportBody = ytkitSource.slice(panelExportStart, panelExportEnd);
+    assert.match(
+        panelExportBody,
+        /filteredVideoPosts:\s*hiddenVideosForExport/,
+        'In-page exports should include filteredVideoPosts beside hiddenVideos'
+    );
+
+    assert.ok(
+        optionsSource.includes('function getImportedFilteredVideoPosts') &&
+        ytkitSource.includes('function getImportedFilteredVideoPosts'),
+        'Both import paths should share a filtered-video-posts fallback helper'
+    );
+    assert.ok(
+        optionsSource.includes('data.filteredVideoPosts') &&
+        ytkitSource.includes('data.filteredVideoPosts'),
+        'Imports should restore hidden videos from filteredVideoPosts when hiddenVideos is absent'
+    );
+});
+
 // ── v3.14.0 infrastructure: selectorChain helper ──
 
 test('selectorChain helper exists with label, all:true, and first-miss logging', () => {

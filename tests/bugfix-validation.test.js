@@ -113,6 +113,334 @@ test('customSpeedButtons rebinds to swapped videos and exposes pressed states', 
     assert.ok(block.includes("button.setAttribute('aria-pressed'"), 'customSpeedButtons should expose active preset state via aria-pressed');
 });
 
+test('player quick links edit mode keeps delete buttons on the same row', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf('#ytkit-po-drop .ytkit-ql-row');
+    assert.ok(start > -1, 'player quick links row styles should exist');
+    const block = source.slice(start, start + 2500);
+    assert.match(block, /display:\s*flex\s*!important/, 'player quick links rows should use flex layout');
+    assert.ok(!block.includes('display: block !important'), 'player quick links rows must not stack delete buttons as separate rows');
+    assert.match(block, /#ytkit-po-drop\.ytkit-ql-editing \.ytkit-ql-del[\s\S]*?display:\s*inline-flex\s*!important/,
+        'player quick links edit mode should show compact inline delete buttons');
+});
+
+test('hidePinnedComments defaults on and targets modern pinned comment markup', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const defaults = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extension', 'default-settings.json'), 'utf8'));
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+    const coreStyles = fs.readFileSync(path.join(__dirname, '..', 'extension', 'core', 'styles.js'), 'utf8');
+
+    assert.equal(defaults.hidePinnedComments, true, 'pinned comments should be hidden by default');
+    assert.match(source, /3:\s*\(s\)\s*=>\s*\{[\s\S]*?s\.hidePinnedComments\s*=\s*true;/,
+        'settings migration should enable pinned comment hiding for existing profiles');
+
+    const start = source.indexOf("id: 'hidePinnedComments'");
+    assert.ok(start > -1, 'hidePinnedComments feature should exist');
+    const end = source.indexOf("cssFeature('hideCommentDislikeButton'", start);
+    assert.ok(end > start, 'hidePinnedComments feature should be before hideCommentDislikeButton');
+    const block = source.slice(start, end);
+
+    assert.ok(block.includes("'Comments'"), 'hidePinnedComments should appear in the Comments settings group');
+    assert.ok(block.includes('ytd-comment-view-model[pinned]'), 'hidePinnedComments should target the modern pinned attribute');
+    assert.ok(block.includes('#pinned-comment-badge:not(:empty)'), 'hidePinnedComments should target populated pinned badge containers');
+    assert.ok(block.includes('ytd-pinned-comment-badge-renderer'), 'hidePinnedComments should target the pinned badge renderer');
+    assert.ok(block.includes('data-ytkit-pinned-comment-hidden'), 'hidePinnedComments should add a durable hidden-thread marker');
+    assert.ok(block.includes("thread.style.display = 'none'"), 'hidePinnedComments should hide matched threads directly');
+    assert.ok(block.includes('addMutationRule(this.id'), 'hidePinnedComments should handle newly loaded comments');
+    assert.ok(!coreStyles.includes("'hidePinnedComments'"), 'retired comment cleanup should not remove the active pinned comment style');
+    assert.ok(coreStyles.includes("thread.dataset.ytkitPinnedCommentHidden !== '1'"),
+        'retired comment cleanup should not unhide pinned comments marked by the active feature');
+});
+
+test('split comment replies keep nested cards readable', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+    const theaterSplit = fs.readFileSync(path.join(__dirname, '..', 'theater-split.user.js'), 'utf8');
+
+    assert.ok(source.includes('margin: 9px 0 0 12px !important;'),
+        'extension split replies should use a shallow left offset');
+    assert.ok(source.includes('padding: 10px 40px 10px 10px !important;'),
+        'extension split reply cards should reclaim text width from the action-menu gutter');
+    assert.ok(source.includes('ytd-comment-replies-renderer ytd-comment-replies-renderer'),
+        'extension split replies should handle nested reply indentation separately');
+    assert.ok(source.includes('flex-basis: 28px !important;'),
+        'extension split replies should use smaller avatars to preserve text width');
+
+    assert.ok(theaterSplit.includes('margin: 9px 0 0 12px !important;'),
+        'standalone split replies should use the same shallow left offset');
+    assert.ok(theaterSplit.includes('padding: 10px 40px 10px 10px !important;'),
+        'standalone split reply cards should reclaim text width from the action-menu gutter');
+    assert.ok(theaterSplit.includes('ytd-comment-replies-renderer ytd-comment-replies-renderer'),
+        'standalone split replies should handle nested reply indentation separately');
+});
+
+test('split title header and comment composer stay visually compact', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+    const theaterSplit = fs.readFileSync(path.join(__dirname, '..', 'theater-split.user.js'), 'utf8');
+
+    assert.ok(source.includes('border-left: 2px solid rgba(var(--ytkit-split-accent-rgb), 0.42) !important;'),
+        'extension split title should have a scoped accent edge');
+    assert.ok(source.includes('text-wrap: balance !important;'),
+        'extension split title should balance long titles');
+    assert.ok(source.includes('padding: 9px 10px 7px !important;'),
+        'extension comments header should trim the composer bottom padding');
+    assert.ok(source.includes('min-height: 34px !important;'),
+        'extension split composer placeholder should stay condensed');
+
+    assert.ok(theaterSplit.includes('border-left: 2px solid rgba(var(--ts-accent-rgb), 0.42) !important;'),
+        'standalone split title should have the same accent edge');
+    assert.ok(theaterSplit.includes('padding: 9px 10px 7px !important;'),
+        'standalone comments header should trim the composer bottom padding');
+    assert.ok(theaterSplit.includes('min-height: 34px !important;'),
+        'standalone split composer placeholder should stay condensed');
+});
+
+test('split title header shows upload date and docks quick links beside YouTube logo', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+    const theaterSplit = fs.readFileSync(path.join(__dirname, '..', 'theater-split.user.js'), 'utf8');
+
+    assert.ok(source.includes('_dockSplitHeader()'),
+        'extension split should have a title-header docking routine');
+    assert.ok(source.includes('ytkit-split-youtube-link'),
+        'extension split should inject a YouTube subscriptions link beside the title');
+    assert.ok(source.includes("homeLink.href = 'https://www.youtube.com/feed/subscriptions';"),
+        'extension split YouTube logo should navigate to subscriptions');
+    assert.ok(source.includes('ytkit-split-upload-date'),
+        'extension split should render an upload-date chip in the header');
+    assert.ok(source.includes("microformat?.publishDate"),
+        'extension split upload date should prefer YouTube microformat publishDate');
+    assert.ok(source.includes("actions.appendChild(logoWrap);"),
+        'extension split should move the player quick-link launcher into the title header');
+    assert.ok(source.includes("getFeatureById('stickyVideo')?._dockSplitHeader?.();"),
+        'player quick-link injection should hand off to the split title when split is open');
+    assert.ok(source.includes("logoWrap?.remove();"),
+        'floating launcher cleanup should remove a title-docked launcher when disabled');
+
+    assert.ok(theaterSplit.includes('function dockSplitHeader()'),
+        'standalone split should mirror the title-header docking routine');
+    assert.ok(theaterSplit.includes('ytkit-split-youtube-link'),
+        'standalone split should inject a YouTube subscriptions link beside the title');
+    assert.ok(theaterSplit.includes("homeLink.href = 'https://www.youtube.com/feed/subscriptions';"),
+        'standalone split YouTube logo should navigate to subscriptions');
+    assert.ok(theaterSplit.includes('ytkit-split-upload-date'),
+        'standalone split should render the upload-date chip styling');
+    assert.ok(theaterSplit.includes("actions.appendChild(logoWrap);"),
+        'standalone split should move an existing player quick-link launcher if present');
+});
+
+test('split title and owner cards align while quick links stay above the video', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+    const theaterSplit = fs.readFileSync(path.join(__dirname, '..', 'theater-split.user.js'), 'utf8');
+
+    const blockBetween = (contents, startNeedle, endNeedle, label, { fromStart = false } = {}) => {
+        const start = fromStart ? contents.indexOf(startNeedle) : contents.lastIndexOf(startNeedle);
+        assert.ok(start > -1, `${label} should exist`);
+        const end = contents.indexOf(endNeedle, start);
+        assert.ok(end > start, `${label} should end after it starts`);
+        return contents.slice(start, end);
+    };
+
+    const extensionTopRow = blockBetween(
+        source,
+        '#below[style*="position"] ytd-watch-metadata #top-row',
+        '#below[style*="position"] ytd-watch-metadata #title',
+        'extension split top-row rule'
+    );
+    const extensionOwner = blockBetween(
+        source,
+        '#below[style*="position"] #owner,',
+        '#below[style*="position"] #owner ytd-video-owner-renderer',
+        'extension split owner rule'
+    );
+    const standaloneTopRow = blockBetween(
+        theaterSplit,
+        '#below[style*="position"] ytd-watch-metadata #top-row',
+        '#below[style*="position"] ytd-watch-metadata #title',
+        'standalone split top-row rule',
+        { fromStart: true }
+    );
+    const standaloneOwner = blockBetween(
+        theaterSplit,
+        '#below[style*="position"] #owner,',
+        '#below[style*="position"] #owner ytd-video-owner-renderer',
+        'standalone split owner rule'
+    );
+
+    for (const [block, label] of [
+        [extensionTopRow, 'extension top row'],
+        [extensionOwner, 'extension owner card'],
+        [standaloneTopRow, 'standalone top row'],
+        [standaloneOwner, 'standalone owner card'],
+    ]) {
+        assert.ok(block.includes('width: 100% !important;'), `${label} should span the metadata column`);
+        assert.ok(block.includes('max-width: none !important;'), `${label} should not keep YouTube's narrow card width`);
+        assert.ok(block.includes('justify-self: stretch !important;'), `${label} should align with the title card`);
+    }
+
+    for (const [contents, label] of [
+        [source, 'extension owner card'],
+        [theaterSplit, 'standalone owner card'],
+    ]) {
+        assert.ok(contents.includes('"owner dock page watch"'), `${label} should keep channel identity and actions on one row`);
+        assert.ok(!contents.includes('"owner owner owner owner"'), `${label} should not reserve a full empty row for identity`);
+        assert.ok(contents.includes('justify-items: start !important;'), `${label} should anchor channel text to the avatar`);
+        assert.ok(contents.includes('text-align: left !important;'), `${label} should keep channel metadata left-aligned`);
+    }
+
+    const extensionNotification = blockBetween(
+        source,
+        '#below[style*="position"] #owner #subscribe-button,',
+        '#below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next',
+        'extension owner notification controls'
+    );
+    const standaloneNotification = blockBetween(
+        theaterSplit,
+        '#below[style*="position"] #owner #subscribe-button,',
+        '#below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next',
+        'standalone owner notification controls',
+        { fromStart: true }
+    );
+
+    for (const [block, label] of [
+        [extensionNotification, 'extension notification controls'],
+        [standaloneNotification, 'standalone notification controls'],
+    ]) {
+        assert.ok(block.includes('overflow: visible !important;'), `${label} should not clip the bell dropdown trigger`);
+        assert.ok(block.includes('pointer-events: auto !important;'), `${label} should keep the native bell click target active`);
+        assert.ok(block.includes('z-index: 40 !important;'), `${label} should sit above the owner action dock`);
+        assert.ok(block.includes('#notification-preference-button *'), `${label} should preserve clicks on nested YouTube button parts`);
+    }
+
+    assert.ok(source.includes('html:is(.ytkit-split-active, .ytkit-split-open) ytd-popup-container'),
+        'extension split should raise YouTube popup containers from the polished split layer');
+    assert.ok(source.includes('html.ytkit-split-active ytd-popup-container'),
+        'extension split should raise YouTube popup containers from the early split layer');
+    assert.ok(source.includes('html:is(.ytkit-split-active, .ytkit-split-open) tp-yt-iron-dropdown'),
+        'extension split should raise YouTube iron dropdowns');
+    assert.ok(source.includes('html:is(.ytkit-split-active, .ytkit-split-open) ytd-menu-popup-renderer'),
+        'extension split should raise native menu popup renderers');
+    assert.ok(theaterSplit.includes('body.ts-split ytd-popup-container'),
+        'standalone split should raise YouTube popup containers');
+    assert.ok(theaterSplit.includes('body.ts-split tp-yt-iron-dropdown'),
+        'standalone split should raise YouTube iron dropdowns');
+    assert.ok(theaterSplit.includes('body.ts-split ytd-menu-popup-renderer'),
+        'standalone split should raise native menu popup renderers');
+    const extensionNativePopup = blockBetween(
+        source,
+        'html:is(.ytkit-split-active, .ytkit-split-open) ytd-popup-container',
+        '#below[style*="position"] ytd-watch-metadata',
+        'extension native split popup stack rule'
+    );
+    const standaloneNativePopup = blockBetween(
+        theaterSplit,
+        'body.ts-split ytd-popup-container',
+        'body.ts-split #below[style*="position"] ytd-watch-metadata',
+        'standalone native split popup stack rule',
+        { fromStart: true }
+    );
+    assert.ok(extensionNativePopup.includes('z-index: 2147483647 !important;'),
+        'extension native popup stack should sit above the split player');
+    assert.ok(standaloneNativePopup.includes('z-index: 2147483647 !important;'),
+        'standalone native popup stack should sit above the split player');
+
+    const extensionQuickLinks = blockBetween(
+        source,
+        '#ytkit-po-logo-wrap .ytkit-ql-drop',
+        '#title .ytkit-split-upload-date',
+        'extension split quick links dropdown rule'
+    );
+    const standaloneQuickLinks = blockBetween(
+        theaterSplit,
+        '#ytkit-po-logo-wrap .ytkit-ql-drop',
+        '#title .ytkit-split-upload-date',
+        'standalone split quick links dropdown rule'
+    );
+
+    for (const [contents, block, label] of [
+        [source, extensionQuickLinks, 'extension quick links'],
+        [theaterSplit, standaloneQuickLinks, 'standalone quick links'],
+    ]) {
+        assert.ok(contents.includes('#ytkit-po-logo-wrap.ytkit-ql-open'), `${label} should raise the open launcher`);
+        assert.ok(contents.includes('#title:has(#ytkit-po-logo-wrap.ytkit-ql-open)'), `${label} should raise the title card above sibling controls`);
+        assert.ok(contents.includes('z-index: 2147483646 !important;'), `${label} should lift the open title stack above split cards`);
+        assert.ok(block.includes('right: auto !important;'), `${label} should stop opening behind the video edge`);
+        assert.ok(block.includes('left: 0 !important;'), `${label} should open into the metadata panel`);
+        assert.ok(block.includes('z-index: 2147483647 !important;'), `${label} should stack above the player`);
+        assert.ok(block.includes('max-height: min(440px, calc(100vh - 92px)) !important;'),
+            `${label} should remain scrollable in shorter viewports`);
+    }
+});
+
+test('split theater supports middle-mouse autoscroll in the right column', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+    const theaterSplit = fs.readFileSync(path.join(__dirname, '..', 'theater-split.user.js'), 'utf8');
+
+    assert.ok(source.includes('_middleMouseHandler'),
+        'extension split should keep a removable middle-mouse listener');
+    assert.ok(source.includes('_startSplitAutoscroll(e)'),
+        'extension split should start a custom autoscroll loop');
+    assert.ok(source.includes('e.button !== 1'),
+        'extension autoscroll should only arm from the middle mouse button');
+    assert.ok(source.includes('_shouldIgnoreSplitAutoscroll(e.target)'),
+        'extension autoscroll should skip links and native YouTube controls');
+    assert.ok(source.includes("'a[href]'"),
+        'extension autoscroll ignore list should preserve middle-click-open-new-tab');
+    assert.ok(source.includes('state.scrollEl.scrollTop += velocity * dt'),
+        'extension autoscroll should scroll at a cursor-distance-controlled rate');
+    assert.ok(source.includes('requestAnimationFrame(tick)'),
+        'extension autoscroll should use animation frames instead of timers');
+    assert.ok(source.includes("document.addEventListener('mouseup', state.upHandler, true);"),
+        'extension autoscroll should only run while the middle mouse button is held');
+    assert.ok(source.includes("document.removeEventListener('mouseup', state.upHandler, true);"),
+        'extension autoscroll should clean up the hold-to-scroll mouseup listener');
+    assert.ok(!source.includes('ytkit-split-autoscroll-marker'),
+        'extension autoscroll should not show a custom on-screen marker');
+    assert.ok(source.includes("document.addEventListener('mousedown', this._middleMouseHandler, true);"),
+        'extension split should listen on document capture for fixed-position comment panes');
+    assert.ok(source.includes("document.removeEventListener('mousedown', this._middleMouseHandler, true);"),
+        'extension split should remove the middle-mouse listener on teardown');
+    assert.ok(source.includes('this._stopSplitAutoscroll();'),
+        'extension split should stop autoscroll during collapse and teardown');
+
+    assert.ok(theaterSplit.includes('middleMouseHandler = startSplitAutoscroll;'),
+        'standalone split should keep a removable middle-mouse listener');
+    assert.ok(theaterSplit.includes('function startSplitAutoscroll(e)'),
+        'standalone split should start a custom autoscroll loop');
+    assert.ok(theaterSplit.includes('e.button !== 1'),
+        'standalone autoscroll should only arm from the middle mouse button');
+    assert.ok(theaterSplit.includes('shouldIgnoreSplitAutoscroll(e.target)'),
+        'standalone autoscroll should skip links and native YouTube controls');
+    assert.ok(theaterSplit.includes('state.scrollEl.scrollTop += velocity * dt'),
+        'standalone autoscroll should scroll at a cursor-distance-controlled rate');
+    assert.ok(theaterSplit.includes('requestAnimationFrame(tick)'),
+        'standalone autoscroll should use animation frames instead of timers');
+    assert.ok(theaterSplit.includes("document.addEventListener('mouseup', state.upHandler, true);"),
+        'standalone autoscroll should only run while the middle mouse button is held');
+    assert.ok(theaterSplit.includes("document.removeEventListener('mouseup', state.upHandler, true);"),
+        'standalone autoscroll should clean up the hold-to-scroll mouseup listener');
+    assert.ok(!theaterSplit.includes('ts-autoscroll-marker'),
+        'standalone autoscroll should not show a custom on-screen marker');
+    assert.ok(theaterSplit.includes("document.addEventListener('mousedown', middleMouseHandler, true);"),
+        'standalone split should listen on document capture for fixed-position comment panes');
+    assert.ok(theaterSplit.includes("document.removeEventListener('mousedown', middleMouseHandler, true);"),
+        'standalone split should remove the middle-mouse listener on teardown');
+    assert.ok(theaterSplit.includes('stopSplitAutoscroll();'),
+        'standalone split should stop autoscroll during collapse and teardown');
+});
+
 test('videoScreenshot exposes capture states and mutation-driven reinjection', () => {
     const fs = require('fs');
     const path = require('path');
