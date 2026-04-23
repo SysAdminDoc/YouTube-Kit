@@ -8,6 +8,7 @@
     const {
         addMutationRule,
         addNavigateRule,
+        addScopedMutationRule,
         appendStyleSheet,
         cleanupRetiredCommentUi,
         configureNavigationRuntime,
@@ -31,6 +32,7 @@
         preloadExtensionState,
         removeMutationRule,
         removeNavigateRule,
+        removeScopedMutationRule,
         shouldBuildPrimaryUI,
         storageRead,
         storageReadJSON,
@@ -45,6 +47,7 @@
     if (
         !addMutationRule ||
         !addNavigateRule ||
+        !addScopedMutationRule ||
         !appendStyleSheet ||
         !cleanupRetiredCommentUi ||
         !configureNavigationRuntime ||
@@ -68,6 +71,7 @@
         !PageTypes ||
         !removeMutationRule ||
         !removeNavigateRule ||
+        !removeScopedMutationRule ||
         !shouldBuildPrimaryUI ||
         !storageRead ||
         !storageReadJSON ||
@@ -442,7 +446,7 @@ return response;
     // Settings version for migrations
 
     // ── Version ──
-    const YTKIT_VERSION = '3.16.5';
+    const YTKIT_VERSION = '3.17.0';
     const BRAND = Object.freeze({
         name: 'Astra Deck',
         short: 'Astra',
@@ -14333,15 +14337,43 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             init() {
-                this._interval = setInterval(() => this._update(), 1000);
+                // Event-driven: `timeupdate` fires ~4 Hz during playback (free UI
+                // refresh) and stops firing when paused — no wake-ups for
+                // backgrounded/paused videos. A tiny `ratechange` rebind covers
+                // playback-rate adjustments that change the remaining number.
+                this._handler = () => this._update();
+                this._videoRef = null;
+                this._attach = () => {
+                    const v = getMainVideoElement();
+                    if (!v || v === this._videoRef) return;
+                    // If a previous video element was swapped out by SPA nav,
+                    // listeners on the old element fall off with it; we only
+                    // need to remove them if we still have a live reference.
+                    if (this._videoRef) {
+                        this._videoRef.removeEventListener('timeupdate', this._handler);
+                        this._videoRef.removeEventListener('ratechange', this._handler);
+                    }
+                    this._videoRef = v;
+                    v.addEventListener('timeupdate', this._handler);
+                    v.addEventListener('ratechange', this._handler);
+                    this._update();
+                };
+                this._attach();
                 addNavigateRule('remainTime', () => {
                     this._el = null;
                     this._scheduleUpdate(2000);
+                    this._attach();
                 });
             },
             destroy() {
                 if (this._updateTimer) { clearTimeout(this._updateTimer); this._updateTimer = null; }
-                if (this._interval) { clearInterval(this._interval); this._interval = null; }
+                if (this._videoRef && this._handler) {
+                    this._videoRef.removeEventListener('timeupdate', this._handler);
+                    this._videoRef.removeEventListener('ratechange', this._handler);
+                }
+                this._videoRef = null;
+                this._handler = null;
+                this._attach = null;
                 removeNavigateRule('remainTime');
                 this._el?.remove(); this._el = null;
             }
@@ -14435,11 +14467,38 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
 
             init() {
-                this._interval = setInterval(() => this._update(), 1000);
-                addNavigateRule('tabTitle', () => { this._origTitle = null; });
+                // Event-driven refresh: `timeupdate` already throttles to ~4 Hz
+                // during playback and skips firing while paused. The
+                // `_update()` early-exits on paused anyway (restores original
+                // title), so the old 1 Hz poll was pure overhead off-tab.
+                this._handler = () => this._update();
+                this._videoRef = null;
+                this._attach = () => {
+                    const v = getMainVideoElement();
+                    if (!v || v === this._videoRef) return;
+                    if (this._videoRef) {
+                        this._videoRef.removeEventListener('timeupdate', this._handler);
+                        this._videoRef.removeEventListener('pause', this._handler);
+                    }
+                    this._videoRef = v;
+                    v.addEventListener('timeupdate', this._handler);
+                    v.addEventListener('pause', this._handler);
+                    this._update();
+                };
+                this._attach();
+                addNavigateRule('tabTitle', () => {
+                    this._origTitle = null;
+                    this._attach();
+                });
             },
             destroy() {
-                if (this._interval) { clearInterval(this._interval); this._interval = null; }
+                if (this._videoRef && this._handler) {
+                    this._videoRef.removeEventListener('timeupdate', this._handler);
+                    this._videoRef.removeEventListener('pause', this._handler);
+                }
+                this._videoRef = null;
+                this._handler = null;
+                this._attach = null;
                 removeNavigateRule('tabTitle');
                 if (this._origTitle) document.title = this._origTitle;
             }
@@ -18394,14 +18453,20 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 addNavigateRule('thumbnailQualityUpgrade', () => this._scheduleUpgrade(1500));
-                addMutationRule('thumbnailQualityUpgrade', () => this._scheduleUpgrade(800));
+                // Scoped rule: only fire when a thumbnail-bearing renderer is
+                // actually added, not on every unrelated mutation tick.
+                addScopedMutationRule(
+                    'thumbnailQualityUpgrade',
+                    'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-video-renderer',
+                    () => this._scheduleUpgrade(800)
+                );
                 this._scheduleUpgrade(1500);
             },
             destroy() {
                 if (this._upgradeTimer) clearTimeout(this._upgradeTimer);
                 this._upgradeTimer = null;
                 removeNavigateRule('thumbnailQualityUpgrade');
-                removeMutationRule('thumbnailQualityUpgrade');
+                removeScopedMutationRule('thumbnailQualityUpgrade');
             }
         },
         {
@@ -18563,13 +18628,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 addNavigateRule('watchLaterQuickAdd', () => this._scheduleAddButtons(1500));
-                addMutationRule('watchLaterQuickAdd', () => this._scheduleAddButtons(800));
+                addScopedMutationRule(
+                    'watchLaterQuickAdd',
+                    'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer',
+                    () => this._scheduleAddButtons(800)
+                );
                 this._scheduleAddButtons(1500);
             },
             destroy() {
                 if (this._addButtonsTimer) { clearTimeout(this._addButtonsTimer); this._addButtonsTimer = null; }
                 removeNavigateRule('watchLaterQuickAdd');
-                removeMutationRule('watchLaterQuickAdd');
+                removeScopedMutationRule('watchLaterQuickAdd');
                 document.querySelectorAll('.ytkit-wl-btn').forEach((b) => {
                     if (b._ytkitResetTimer) {
                         clearTimeout(b._ytkitResetTimer);
@@ -19477,13 +19546,17 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             init() {
                 addNavigateRule('videoResolutionBadge', () => this._scheduleAddBadges(1500));
-                addMutationRule('videoResolutionBadge', () => this._scheduleAddBadges(800));
+                addScopedMutationRule(
+                    'videoResolutionBadge',
+                    'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer',
+                    () => this._scheduleAddBadges(800)
+                );
                 this._scheduleAddBadges(1500);
             },
             destroy() {
                 if (this._addBadgesTimer) { clearTimeout(this._addBadgesTimer); this._addBadgesTimer = null; }
                 removeNavigateRule('videoResolutionBadge');
-                removeMutationRule('videoResolutionBadge');
+                removeScopedMutationRule('videoResolutionBadge');
                 document.querySelectorAll('.ytkit-res-badge').forEach(b => b.remove());
                 document.querySelectorAll('.ytkit-res-host').forEach((thumb) => thumb.classList.remove('ytkit-res-host'));
             }
@@ -22886,11 +22959,15 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 `, this.id, true);
                 this._process();
                 this._mutRule = () => this._process();
-                addMutationRule('videoAgeColors', this._mutRule);
+                addScopedMutationRule(
+                    'videoAgeColors',
+                    'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer',
+                    this._mutRule
+                );
                 addNavigateRule('videoAgeColors', this._mutRule);
             },
             destroy() {
-                removeMutationRule('videoAgeColors');
+                removeScopedMutationRule('videoAgeColors');
                 removeNavigateRule('videoAgeColors');
                 this._styleEl?.remove(); this._styleEl = null;
                 document.querySelectorAll('[data-ytkit-age]').forEach(el => {

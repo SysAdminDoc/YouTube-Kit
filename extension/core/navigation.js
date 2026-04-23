@@ -12,12 +12,17 @@
 
     let mutationObserver = null;
     const mutationRules = new Map();
+    const scopedMutationRules = new Map();
     const navigateRules = new Map();
     let isNavigateListenerAttached = false;
     let watchFlexyObserver = null;
     let watchFlexyObservedNode = null;
     let navigateDebounceTimer = null;
     let mutationScheduled = false;
+    // Pending mutation records collected between observer fires, drained in
+    // the rAF dispatch. Scoped rules inspect these to early-exit when no
+    // newly-added node matches their selector.
+    let pendingMutationRecords = [];
 
     function configureNavigationRuntime(options = {}) {
         if (Number.isFinite(options.navDebounce)) {
@@ -201,7 +206,29 @@
         }
     }
 
-    function runMutationRules(targetNode) {
+    // Collect newly-added Element nodes from a mutation record batch so scoped
+    // rules can selector-match once without each rule walking the tree again.
+    function collectAddedElements(records) {
+        const added = [];
+        for (const record of records) {
+            if (record.type !== 'childList') continue;
+            for (const node of record.addedNodes) {
+                if (node && node.nodeType === 1) added.push(node);
+            }
+        }
+        return added;
+    }
+
+    function anyAddedMatchesSelector(addedElements, selector) {
+        if (!addedElements.length) return false;
+        for (const el of addedElements) {
+            if (typeof el.matches === 'function' && el.matches(selector)) return true;
+            if (typeof el.querySelector === 'function' && el.querySelector(selector)) return true;
+        }
+        return false;
+    }
+
+    function runMutationRules(targetNode, records) {
         for (const rule of mutationRules.values()) {
             try {
                 rule(targetNode);
@@ -209,14 +236,34 @@
                 console.error('[YTKit] Mutation rule error:', error);
             }
         }
+
+        if (scopedMutationRules.size === 0) return;
+        const addedElements = collectAddedElements(records);
+        for (const entry of scopedMutationRules.values()) {
+            try {
+                // Fast path: empty batch (observer fired from attribute-only
+                // mutation) — skip the rule entirely.
+                if (!addedElements.length) continue;
+                if (!anyAddedMatchesSelector(addedElements, entry.selector)) continue;
+                entry.ruleFn(targetNode, addedElements);
+            } catch (error) {
+                console.error('[YTKit] Scoped mutation rule error:', error);
+            }
+        }
     }
 
-    function observerCallback() {
+    function observerCallback(records) {
+        if (records && records.length) {
+            // Accumulate records across batches delivered before the rAF drain.
+            for (const record of records) pendingMutationRecords.push(record);
+        }
         if (mutationScheduled) return;
         mutationScheduled = true;
         requestAnimationFrame(() => {
             mutationScheduled = false;
-            runMutationRules(document.body);
+            const drained = pendingMutationRecords;
+            pendingMutationRecords = [];
+            runMutationRules(document.body, drained);
         });
     }
 
@@ -235,11 +282,16 @@
         if (!mutationObserver) return;
         mutationObserver.disconnect();
         mutationObserver = null;
+        pendingMutationRecords = [];
+    }
+
+    function hasAnyMutationRule() {
+        return mutationRules.size > 0 || scopedMutationRules.size > 0;
     }
 
     function addMutationRule(id, ruleFn) {
         if (!id || typeof ruleFn !== 'function') return;
-        if (mutationRules.size === 0) startObserver();
+        if (!hasAnyMutationRule()) startObserver();
         mutationRules.set(id, ruleFn);
         try {
             ruleFn(document.body);
@@ -250,15 +302,41 @@
 
     function removeMutationRule(id) {
         mutationRules.delete(id);
-        if (mutationRules.size === 0) stopObserver();
+        if (!hasAnyMutationRule()) stopObserver();
+    }
+
+    // Scoped mutation rule — only runs when a node matching `selector` is
+    // added anywhere in the observed subtree. Massively cuts per-frame work
+    // for feed-driven features that previously did `document.querySelectorAll`
+    // on every mutation tick.
+    //
+    // `ruleFn` receives `(targetNode, addedElements)` where `addedElements`
+    // is the array of Element nodes inserted in this batch. The rule can
+    // scope its own work to that array instead of the whole document.
+    function addScopedMutationRule(id, selector, ruleFn) {
+        if (!id || typeof selector !== 'string' || typeof ruleFn !== 'function') return;
+        if (!hasAnyMutationRule()) startObserver();
+        scopedMutationRules.set(id, { selector, ruleFn });
+        try {
+            ruleFn(document.body, []);
+        } catch (error) {
+            console.error('[YTKit] Scoped mutation rule error:', error);
+        }
+    }
+
+    function removeScopedMutationRule(id) {
+        scopedMutationRules.delete(id);
+        if (!hasAnyMutationRule()) stopObserver();
     }
 
     Object.assign(core, {
         addMutationRule,
         addNavigateRule,
+        addScopedMutationRule,
         configureNavigationRuntime,
         removeMutationRule,
         removeNavigateRule,
+        removeScopedMutationRule,
         waitForElement,
         waitForPageContent
     });

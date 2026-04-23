@@ -347,3 +347,72 @@ test('sponsorBlock _loadForVideo aborts if destroy runs mid-fetch', () => {
     const destroyBody = block.slice(destroyIdx, destroyIdx + 1800);
     assert.match(destroyBody, /this\._generation\s*=/, 'destroy must bump _generation');
 });
+
+// ── v3.17.0 Perf Pass: scoped mutation rule helper ──
+
+test('addScopedMutationRule exists in core/navigation.js and is selector-filtered', () => {
+    const navSource = fs.readFileSync(
+        path.join(__dirname, '..', 'extension', 'core', 'navigation.js'),
+        'utf8'
+    );
+    // New helper that only fires when an element matching `selector` is added
+    // in the mutation batch. Without it the shared observer fan-out ran all
+    // ~37 rules on every rAF tick.
+    assert.match(navSource, /function\s+addScopedMutationRule\s*\(\s*id\s*,\s*selector\s*,\s*ruleFn\s*\)/,
+        'addScopedMutationRule(id, selector, ruleFn) must exist');
+    assert.match(navSource, /scopedMutationRules/, 'scoped rules must live in a separate Map from addMutationRule rules');
+    // The dispatch path must short-circuit when no added node matches.
+    assert.match(navSource, /anyAddedMatchesSelector/, 'scoped dispatch must use the added-node match helper');
+    // Core must export both the add and remove helpers.
+    assert.match(navSource, /addScopedMutationRule,/, 'addScopedMutationRule must be exported on core');
+    assert.match(navSource, /removeScopedMutationRule/, 'removeScopedMutationRule must be exported on core');
+});
+
+test('hot feed-driven mutation rules are migrated to scoped form', () => {
+    // These four features ran `document.querySelectorAll`/debounced schedulers
+    // on every mutation tick. After the perf pass they only fire when a
+    // thumbnail-bearing renderer is added to the DOM.
+    for (const id of [
+        'thumbnailQualityUpgrade',
+        'watchLaterQuickAdd',
+        'videoResolutionBadge',
+        'videoAgeColors'
+    ]) {
+        assert.ok(
+            ytkitSource.includes(`addScopedMutationRule(\n                    '${id}'`)
+            || ytkitSource.includes(`addScopedMutationRule(\n                    '${id}',`)
+            || new RegExp(`addScopedMutationRule\\(\\s*'${id}'`).test(ytkitSource),
+            `${id} must register via addScopedMutationRule, not addMutationRule`
+        );
+        // And cleanup must use the matching remove helper.
+        assert.ok(
+            new RegExp(`removeScopedMutationRule\\(\\s*'${id}'`).test(ytkitSource),
+            `${id} destroy must call removeScopedMutationRule`
+        );
+    }
+});
+
+// ── v3.17.0 Perf Pass: 1Hz intervals → timeupdate events ──
+
+test('remainingTimeDisplay + showTimeInTabTitle use timeupdate, not setInterval', () => {
+    // These were setInterval(_update, 1000) — waking up once a second even in
+    // background tabs. `timeupdate` is free (fires during playback only) and
+    // stops when the video pauses.
+    const remainIdx = ytkitSource.indexOf("id: 'remainingTimeDisplay'");
+    assert.ok(remainIdx > -1, 'remainingTimeDisplay feature must exist');
+    const nextFeatureIdx = ytkitSource.indexOf("id: 'showTimeInTabTitle'", remainIdx);
+    const remainBlock = ytkitSource.slice(remainIdx, nextFeatureIdx);
+    assert.doesNotMatch(remainBlock, /setInterval\s*\(\s*\(\s*\)\s*=>\s*this\._update/,
+        'remainingTimeDisplay must not wake up once per second via setInterval');
+    assert.match(remainBlock, /addEventListener\('timeupdate'/,
+        'remainingTimeDisplay must bind to the video `timeupdate` event');
+
+    const titleIdx = ytkitSource.indexOf("id: 'showTimeInTabTitle'");
+    assert.ok(titleIdx > -1);
+    const titleEnd = ytkitSource.indexOf("id: 'customProgressBarColor'", titleIdx);
+    const titleBlock = ytkitSource.slice(titleIdx, titleEnd);
+    assert.doesNotMatch(titleBlock, /setInterval\s*\(\s*\(\s*\)\s*=>\s*this\._update/,
+        'showTimeInTabTitle must not wake up once per second via setInterval');
+    assert.match(titleBlock, /addEventListener\('timeupdate'/,
+        'showTimeInTabTitle must bind to the video `timeupdate` event');
+});
