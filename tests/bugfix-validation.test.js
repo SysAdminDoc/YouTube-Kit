@@ -193,6 +193,10 @@ test('split title header and comment composer stay visually compact', () => {
         'extension comments header should trim the composer bottom padding');
     assert.ok(source.includes('min-height: 34px !important;'),
         'extension split composer placeholder should stay condensed');
+    assert.ok(source.includes('ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #thumbnail-input-row'),
+        'extension expanded split composer should hide the stale placeholder row');
+    assert.ok(source.includes('grid-template-columns: minmax(0, 1fr) !important;'),
+        'extension expanded split composer should let the editor take the full width');
 
     assert.ok(theaterSplit.includes('border-left: 2px solid rgba(var(--ts-accent-rgb), 0.42) !important;'),
         'standalone split title should have the same accent edge');
@@ -200,6 +204,10 @@ test('split title header and comment composer stay visually compact', () => {
         'standalone comments header should trim the composer bottom padding');
     assert.ok(theaterSplit.includes('min-height: 34px !important;'),
         'standalone split composer placeholder should stay condensed');
+    assert.ok(theaterSplit.includes('ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #thumbnail-input-row'),
+        'standalone expanded split composer should hide the stale placeholder row');
+    assert.ok(theaterSplit.includes('grid-template-columns: minmax(0, 1fr) !important;'),
+        'standalone expanded split composer should let the editor take the full width');
 });
 
 test('split title header shows upload date and docks quick links beside YouTube logo', () => {
@@ -235,6 +243,87 @@ test('split title header shows upload date and docks quick links beside YouTube 
         'standalone split should render the upload-date chip styling');
     assert.ok(theaterSplit.includes("actions.appendChild(logoWrap);"),
         'standalone split should move an existing player quick-link launcher if present');
+});
+
+test('split live chat gets a video info header and neutral divider hover', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+    const theaterSplit = fs.readFileSync(path.join(__dirname, '..', 'theater-split.user.js'), 'utf8');
+
+    assert.ok(source.includes('_ensureSplitLiveHeader(rightPct)'),
+        'extension split should create a live video info header');
+    assert.ok(source.includes("const type = domType === 'live' ? 'live' : (responseType || domType || 'standard');"),
+        'extension video type detection should let hydrated DOM live signals override stale playerResponse VOD');
+    assert.ok(source.includes("if (chatEl) this._videoType = VideoTypeDetector.refresh();"),
+        'extension split should re-detect chat video type at expand time');
+    assert.ok(source.includes("classList.toggle('ytkit-split-live', type === 'live')"),
+        'extension split should mark live splits distinctly for cleanup and styling');
+    assert.ok(source.includes('ytkit-split-live-header'),
+        'extension live header should use a durable class for cleanup');
+    assert.ok(source.includes("actions.className = 'ytkit-split-live-actions';"),
+        'extension live header should include an actions dock');
+    assert.ok(source.includes('_findSplitSubscribeControl()'),
+        'extension live header should locate the native subscribe/unsubscribe control');
+    assert.ok(source.includes('_pinSplitLiveHeaderActions(controls, actions)'),
+        'extension live header should visually pin native live actions without moving them from YouTube metadata');
+    assert.ok(source.includes("control.dataset.ytkitSplitLivePinned = '1';"),
+        'extension live header should tag pinned native controls for restoration');
+    assert.ok(source.includes("control.style.setProperty('position', 'fixed', 'important');"),
+        'extension live header should place native controls with fixed positioning so native menus keep working');
+    assert.ok(source.includes('calc(100vh - ${liveHeaderTop}px)'),
+        'extension live chat should be offset below the live header');
+    assert.ok(source.includes('background:#0a0d13'),
+        'extension divider base should be opaque enough to prevent accent bleed-through');
+    assert.ok(source.includes("divider.style.background='#111827'"),
+        'extension divider hover should use opaque neutral gray instead of blue-purple');
+    assert.ok(source.includes("pip.style.color='rgba(148,163,184,0.64)'"),
+        'extension divider grip should pin currentColor to neutral gray');
+    assert.ok(!source.includes("divider.style.background='rgba(59,130,246,0.22)'"),
+        'extension divider hover should not use the old blue-purple color');
+
+    assert.ok(theaterSplit.includes('function ensureSplitLiveHeader(rightPct)'),
+        'standalone split should mirror the live video info header');
+    assert.ok(theaterSplit.includes('const liveBadgeActive = liveBadge'),
+        'standalone split should prefer hydrated live badge signals before treating chat as VOD');
+    assert.ok(theaterSplit.includes("document.body.classList.toggle('ts-live', type === 'live')"),
+        'standalone split should mark live splits distinctly for cleanup and styling');
+    assert.ok(theaterSplit.includes('ytkit-split-live-header'),
+        'standalone live header should use the same durable class');
+    assert.ok(theaterSplit.includes("actions.className = 'ytkit-split-live-actions';"),
+        'standalone live header should include an actions dock');
+    assert.ok(theaterSplit.includes('function findSubscribeControl()'),
+        'standalone live header should locate the native subscribe/unsubscribe control');
+    assert.ok(theaterSplit.includes('function pinLiveHeaderActions(controls, actions)'),
+        'standalone live header should visually pin native live actions without moving them from YouTube metadata');
+    assert.ok(theaterSplit.includes("control.dataset.ytkitSplitLivePinned = '1';"),
+        'standalone live header should tag pinned native controls for restoration');
+    assert.ok(theaterSplit.includes("control.style.setProperty('position', 'fixed', 'important');"),
+        'standalone live header should place native controls with fixed positioning so native menus keep working');
+    assert.ok(theaterSplit.includes('calc(100vh - ${liveHeaderTop}px)'),
+        'standalone live chat should be offset below the live header');
+    assert.ok(theaterSplit.includes('background:#0a0d13'),
+        'standalone divider base should be opaque enough to prevent accent bleed-through');
+    assert.ok(theaterSplit.includes("divider.style.background = '#111827'"),
+        'standalone divider hover should use opaque neutral gray instead of blue-purple');
+    assert.ok(theaterSplit.includes("pip.style.color = 'rgba(148,163,184,0.64)'"),
+        'standalone divider grip should pin currentColor to neutral gray');
+    assert.ok(!theaterSplit.includes("divider.style.background = 'rgba(59,130,246,0.22)'"),
+        'standalone divider hover should not use the old blue-purple color');
+
+    const extensionRestoreStart = source.indexOf('_restoreSplitActionDock()');
+    const extensionRestore = source.slice(extensionRestoreStart, source.indexOf('// Bulk set/remove style properties', extensionRestoreStart));
+    assert.ok(extensionRestore.indexOf('this._splitActionDockMoved = null;') < extensionRestore.indexOf('this._removeSplitLiveHeader();'),
+        'extension should restore moved native controls before removing the live header');
+    assert.ok(extensionRestore.indexOf('this._restoreSplitLiveHeaderActionPins();') < extensionRestore.indexOf('this._removeSplitLiveHeader();'),
+        'extension should restore visually pinned native controls before removing the live header');
+
+    const standaloneRestoreStart = theaterSplit.indexOf('function restoreActionDock()');
+    const standaloneRestore = theaterSplit.slice(standaloneRestoreStart, theaterSplit.indexOf('// ── Chat helpers', standaloneRestoreStart));
+    assert.ok(standaloneRestore.indexOf('actionDockMoved = null;') < standaloneRestore.indexOf('removeSplitLiveHeader();'),
+        'standalone should restore moved native controls before removing the live header');
+    assert.ok(standaloneRestore.indexOf('restoreLiveHeaderActionPins();') < standaloneRestore.indexOf('removeSplitLiveHeader();'),
+        'standalone should restore visually pinned native controls before removing the live header');
 });
 
 test('split title and owner cards align while quick links stay above the video', () => {

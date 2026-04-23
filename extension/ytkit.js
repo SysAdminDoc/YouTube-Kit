@@ -4064,7 +4064,9 @@ return response;
         // Force refresh detection
         refresh() {
             const vid = getVideoId();
-            const type = this._fromPlayerResponse() || this._fromDOM();
+            const responseType = this._fromPlayerResponse();
+            const domType = this._fromDOM();
+            const type = domType === 'live' ? 'live' : (responseType || domType || 'standard');
             this._cache = { videoId: vid, type };
             DebugManager.log('VideoType', `Detected: ${type} for ${vid}`);
             return type;
@@ -6629,6 +6631,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _splitActionDockTimer: null,
             _splitHeaderBar: null,
             _splitHeaderMovedLogo: null,
+            _splitLiveHeader: null,
+            _splitLiveActionPinned: null,
+            _liveHeaderHeight: 126,
             _videoType: 'standard',        // 'live' | 'vod' | 'standard'
             _positionedEls: [],            // elements we CSS-positioned over right panel
             _scrollTarget: null,           // which element receives scroll/wheel handlers
@@ -6945,6 +6950,135 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 return `Uploaded ${preferred}`;
             },
 
+            _getSplitVideoTitleText() {
+                const root = this._getBelow() || document;
+                const el = root.querySelector('ytd-watch-metadata h1 yt-formatted-string, h1.ytd-watch-metadata yt-formatted-string, ytd-watch-metadata #title yt-formatted-string')
+                    || document.querySelector('ytd-watch-metadata h1 yt-formatted-string, h1.ytd-watch-metadata yt-formatted-string, ytd-watch-metadata #title yt-formatted-string');
+                const text = (el?.textContent || '').replace(/\s+/g, ' ').trim();
+                if (text) return text;
+                return document.title.replace(/\s+-\s+YouTube\s*$/i, '').trim() || 'Live video';
+            },
+
+            _getSplitChannelText() {
+                const root = this._getBelow() || document;
+                const el = root.querySelector('ytd-video-owner-renderer #channel-name #text, ytd-video-owner-renderer #channel-name yt-formatted-string, #owner #channel-name #text, #owner yt-formatted-string.ytd-channel-name')
+                    || document.querySelector('ytd-video-owner-renderer #channel-name #text, ytd-video-owner-renderer #channel-name yt-formatted-string, #owner #channel-name #text, #owner yt-formatted-string.ytd-channel-name');
+                return (el?.textContent || '').replace(/\s+/g, ' ').trim();
+            },
+
+            _getSplitLiveInfoText() {
+                const root = this._getBelow() || document;
+                const parts = Array.from(root.querySelectorAll(
+                    'ytd-watch-metadata #info-container yt-formatted-string, ytd-watch-metadata #info-text yt-formatted-string, ytd-watch-metadata #owner-sub-count, ytd-watch-metadata #metadata-line span'
+                )).map(el => (el.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+                return parts.find(text => /(?:watching|views|streamed|started|ago|\b\d{4}\b)/i.test(text)) || '';
+            },
+
+            _createSplitLiveHeaderNode() {
+                const header = document.createElement('section');
+                header.className = 'ytkit-split-live-header';
+                header.setAttribute('aria-label', 'Live video information');
+                header.style.cssText = [
+                    'position:fixed',
+                    'top:0',
+                    'right:0',
+                    `height:${this._liveHeaderHeight}px`,
+                    'z-index:10003',
+                    'padding:12px 12px 10px',
+                    'box-sizing:border-box',
+                    'pointer-events:auto',
+                    'color:rgba(245,247,250,0.96)',
+                    'background:linear-gradient(180deg,rgba(9,12,18,0.98),rgba(8,11,17,0.94))',
+                    'border-left:1px solid rgba(255,255,255,0.07)',
+                    'border-bottom:1px solid rgba(255,255,255,0.08)',
+                    'box-shadow:0 16px 30px rgba(0,0,0,0.32)'
+                ].join(';');
+
+                const card = document.createElement('div');
+                card.className = 'ytkit-split-live-card';
+                card.style.cssText = [
+                    'height:100%',
+                    'border-radius:16px',
+                    'border:1px solid rgba(255,255,255,0.10)',
+                    'background:rgba(18,23,32,0.88)',
+                    'box-shadow:inset 0 1px 0 rgba(255,255,255,0.06)',
+                    'display:grid',
+                    'grid-template-columns:minmax(0,1fr) auto',
+                    'grid-template-areas:"kicker actions" "title actions"',
+                    'align-items:center',
+                    'gap:8px 12px',
+                    'padding:14px 16px',
+                    'box-sizing:border-box',
+                    'overflow:visible'
+                ].join(';');
+
+                const top = document.createElement('div');
+                top.className = 'ytkit-split-live-kicker';
+                top.style.cssText = 'grid-area:kicker;display:flex;align-items:center;gap:8px;min-width:0;';
+
+                const liveBadge = document.createElement('span');
+                liveBadge.textContent = 'LIVE';
+                liveBadge.style.cssText = 'font:700 11px/1.2 Arial,sans-serif;letter-spacing:0;color:#fff;background:#dc2626;border-radius:999px;padding:4px 8px;flex:0 0 auto;';
+                top.appendChild(liveBadge);
+
+                const meta = document.createElement('span');
+                meta.className = 'ytkit-split-live-meta';
+                meta.style.cssText = 'font:600 13px/1.35 Arial,sans-serif;color:rgba(229,231,235,0.72);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;';
+                top.appendChild(meta);
+                card.appendChild(top);
+
+                const title = document.createElement('h2');
+                title.className = 'ytkit-split-live-title';
+                title.style.cssText = [
+                    'grid-area:title',
+                    'margin:0',
+                    'font:800 20px/1.22 Arial,sans-serif',
+                    'letter-spacing:0',
+                    'color:rgba(245,247,250,0.98)',
+                    'display:-webkit-box',
+                    '-webkit-line-clamp:2',
+                    '-webkit-box-orient:vertical',
+                    'overflow:hidden'
+                ].join(';');
+                card.appendChild(title);
+
+                const actions = document.createElement('div');
+                actions.className = 'ytkit-split-live-actions';
+                actions.setAttribute('aria-label', 'Live video actions');
+                actions.style.cssText = 'grid-area:actions;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:max-content;max-width:260px;overflow:visible;';
+                card.appendChild(actions);
+
+                header.appendChild(card);
+                return header;
+            },
+
+            _ensureSplitLiveHeader(rightPct) {
+                let header = this._splitLiveHeader;
+                if (!header || !header.isConnected) {
+                    header = this._createSplitLiveHeaderNode();
+                    document.body.appendChild(header);
+                    this._splitLiveHeader = header;
+                }
+
+                header.style.width = `calc(${rightPct}% - 2px)`;
+                const titleEl = header.querySelector('.ytkit-split-live-title');
+                const metaEl = header.querySelector('.ytkit-split-live-meta');
+                const title = this._getSplitVideoTitleText();
+                const channel = this._getSplitChannelText();
+                const dateText = this._getSplitUploadDateText();
+                const infoText = this._getSplitLiveInfoText();
+                const metaParts = [channel, dateText || infoText].filter(Boolean);
+                if (titleEl) titleEl.textContent = title;
+                if (metaEl) metaEl.textContent = metaParts.join('  |  ');
+                this._dockSplitLiveHeaderActions();
+                return this._liveHeaderHeight;
+            },
+
+            _removeSplitLiveHeader() {
+                this._splitLiveHeader?.remove();
+                this._splitLiveHeader = null;
+            },
+
             _dockSplitHeader() {
                 if (!this._isActive || !this._isSplit) return;
 
@@ -7039,6 +7173,21 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 return null;
             },
 
+            _findSplitSubscribeControl() {
+                const root = this._getBelow() || document;
+                const selectors = [
+                    'ytd-watch-metadata #owner #subscribe-button',
+                    'ytd-watch-metadata #owner yt-subscribe-button-view-model',
+                    'ytd-watch-metadata #owner ytd-subscribe-button-renderer'
+                ];
+
+                for (const selector of selectors) {
+                    const el = root.querySelector(selector);
+                    if (el && !el.closest('.ytkit-split-live-actions')) return el;
+                }
+                return null;
+            },
+
             _findSplitDownloadControl() {
                 const root = this._getBelow() || document;
                 const controls = Array.from(root.querySelectorAll(
@@ -7067,8 +7216,146 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 return true;
             },
 
+            _polishSplitLiveHeaderAction(control) {
+                if (!control) return;
+                control.style.setProperty('display', 'inline-flex', 'important');
+                control.style.setProperty('align-items', 'center', 'important');
+                control.style.setProperty('margin', '0', 'important');
+                control.style.setProperty('overflow', 'visible', 'important');
+                control.querySelectorAll('dislike-button-view-model, #segmented-dislike-button, .ytDislikeButtonViewModelHost').forEach(el => {
+                    el.style.setProperty('display', 'none', 'important');
+                });
+                control.querySelectorAll('button, .yt-spec-button-shape-next, .ytSpecButtonShapeNextHost').forEach(button => {
+                    button.style.setProperty('height', '32px', 'important');
+                    button.style.setProperty('min-height', '32px', 'important');
+                    button.style.setProperty('border-radius', '999px', 'important');
+                    button.style.setProperty('white-space', 'nowrap', 'important');
+                });
+            },
+
+            _restoreSplitLiveHeaderActionPin(control, state) {
+                if (!control) return;
+                delete control.dataset.ytkitSplitLivePinned;
+                if (state?.style == null) control.removeAttribute('style');
+                else control.setAttribute('style', state.style);
+            },
+
+            _restoreSplitLiveHeaderActionPins() {
+                const pinned = this._splitLiveActionPinned;
+                if (pinned) {
+                    pinned.forEach((state, control) => this._restoreSplitLiveHeaderActionPin(control, state));
+                    pinned.clear();
+                }
+                this._splitLiveActionPinned = null;
+
+                const actions = this._splitLiveHeader?.querySelector('.ytkit-split-live-actions');
+                if (actions) {
+                    actions.hidden = true;
+                    actions.style.removeProperty('width');
+                    actions.style.removeProperty('min-width');
+                }
+            },
+
+            _setSplitLiveHeaderActionPinsHidden(hidden) {
+                this._splitLiveActionPinned?.forEach((_, control) => {
+                    if (!control?.isConnected) return;
+                    control.style.setProperty('visibility', hidden ? 'hidden' : 'visible', 'important');
+                });
+            },
+
+            _layoutSplitLiveHeaderActions() {
+                const actions = this._splitLiveHeader?.querySelector('.ytkit-split-live-actions');
+                const pinned = this._splitLiveActionPinned;
+                if (!actions || !pinned?.size) return;
+
+                const controls = Array.from(pinned.keys()).filter(control => control?.isConnected);
+                if (!controls.length) {
+                    this._restoreSplitLiveHeaderActionPins();
+                    return;
+                }
+
+                const gap = 8;
+                const metrics = controls.map(control => {
+                    const rect = control.getBoundingClientRect();
+                    return {
+                        control,
+                        width: Math.max(32, Math.ceil(rect.width || control.offsetWidth || 96)),
+                        height: Math.max(32, Math.ceil(rect.height || control.offsetHeight || 32))
+                    };
+                });
+                const totalWidth = metrics.reduce((sum, item) => sum + item.width, 0) + gap * Math.max(0, metrics.length - 1);
+                actions.hidden = false;
+                actions.style.width = `${totalWidth}px`;
+                actions.style.minWidth = `${totalWidth}px`;
+
+                const box = actions.getBoundingClientRect();
+                const topBase = box.top + Math.max(0, (box.height - 32) / 2);
+                let left = box.right - totalWidth;
+
+                metrics.forEach(({ control, width, height }) => {
+                    const top = topBase + Math.max(0, (32 - height) / 2);
+                    control.dataset.ytkitSplitLivePinned = '1';
+                    control.style.setProperty('position', 'fixed', 'important');
+                    control.style.setProperty('left', `${Math.round(left)}px`, 'important');
+                    control.style.setProperty('top', `${Math.round(top)}px`, 'important');
+                    control.style.setProperty('z-index', '10006', 'important');
+                    control.style.setProperty('pointer-events', 'auto', 'important');
+                    control.style.setProperty('visibility', this._fullscreenHidden ? 'hidden' : 'visible', 'important');
+                    control.style.setProperty('transform', 'none', 'important');
+                    control.style.setProperty('max-width', 'none', 'important');
+                    left += width + gap;
+                });
+            },
+
+            _pinSplitLiveHeaderActions(controls, actions) {
+                if (!this._splitLiveActionPinned) this._splitLiveActionPinned = new Map();
+                const current = new Set(controls);
+
+                this._splitLiveActionPinned.forEach((state, control) => {
+                    if (current.has(control) && control.isConnected) return;
+                    this._restoreSplitLiveHeaderActionPin(control, state);
+                    this._splitLiveActionPinned.delete(control);
+                });
+
+                controls.forEach(control => {
+                    if (!this._splitLiveActionPinned.has(control)) {
+                        this._splitLiveActionPinned.set(control, {
+                            style: control.getAttribute('style')
+                        });
+                    }
+                    this._polishSplitLiveHeaderAction(control);
+                });
+
+                actions.hidden = controls.length === 0;
+                if (!controls.length) {
+                    actions.style.removeProperty('width');
+                    actions.style.removeProperty('min-width');
+                    return false;
+                }
+
+                this._layoutSplitLiveHeaderActions();
+                return true;
+            },
+
+            _dockSplitLiveHeaderActions() {
+                const actions = this._splitLiveHeader?.querySelector('.ytkit-split-live-actions');
+                if (!actions) return false;
+
+                const controls = [
+                    this._findSplitLikeControl(),
+                    this._findSplitSubscribeControl()
+                ].filter(Boolean);
+
+                return this._pinSplitLiveHeaderActions(controls, actions);
+            },
+
             _dockSplitActions() {
                 if (!this._isActive || !this._isSplit) return;
+                if (this._videoType === 'live') {
+                    this._dockSplitLiveHeaderActions();
+                    return;
+                }
+                this._restoreSplitLiveHeaderActionPins();
                 this._dockSplitHeader();
 
                 const dock = this._ensureSplitActionDock();
@@ -7089,8 +7376,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _startSplitActionDock() {
                 if (!this._isActive || !this._isSplit) return;
 
-                this._dockSplitHeader();
-                this._dockSplitActions();
+                if (this._videoType === 'live') this._dockSplitLiveHeaderActions();
+                else {
+                    this._dockSplitHeader();
+                    this._dockSplitActions();
+                }
                 if (this._splitActionDockObserver) return;
 
                 const metadata = this._getBelow()?.querySelector('ytd-watch-metadata')
@@ -7121,6 +7411,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     moved.clear();
                 }
                 this._splitActionDockMoved = null;
+                this._restoreSplitLiveHeaderActionPins();
+                this._removeSplitLiveHeader();
 
                 document.querySelectorAll('.ytkit-split-owner-actions').forEach(dock => dock.remove());
                 document.querySelectorAll('[data-ytkit-split-actions-docked]').forEach(row => {
@@ -7174,7 +7466,16 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     if (_chatObs) { _chatObs.disconnect(); _chatObs = null; }
                     self._pendingChatObs = null;
                     if (!self._isSplit || !self._isActive) return;
-                    self._positionOverRight(chatEl, rightPct, topOffset, heightStr);
+                    self._videoType = VideoTypeDetector.refresh();
+                    if (self._videoType === 'standard') self._videoType = 'live';
+                    let chatTop = topOffset;
+                    let chatHeight = heightStr;
+                    if (self._videoType === 'live') {
+                        const liveHeaderTop = self._ensureSplitLiveHeader(rightPct);
+                        chatTop = `${liveHeaderTop}px`;
+                        chatHeight = `calc(100vh - ${liveHeaderTop}px)`;
+                    }
+                    self._positionOverRight(chatEl, rightPct, chatTop, chatHeight);
                     chatEl.removeAttribute('collapsed');
                     chatEl.style.setProperty('width', `calc(${rightPct}% - 2px)`, 'important');
                     chatEl.style.setProperty('padding', '0 8px 0 0', 'important');
@@ -7221,10 +7522,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 // DIVIDER — hidden until split
                 const divider = document.createElement('div');
                 divider.id = 'ytkit-split-divider';
-                divider.style.cssText = `flex:0 0 0;width:0;cursor:col-resize;position:relative;background:rgba(255,255,255,0.04);transition:flex-basis 0.35s cubic-bezier(0.4,0,0.2,1);overflow:hidden;z-index:10;pointer-events:auto;scrollbar-width:none;`;
+                divider.style.cssText = `flex:0 0 0;width:0;cursor:col-resize;position:relative;background:#0a0d13;transition:flex-basis 0.35s cubic-bezier(0.4,0,0.2,1);overflow:hidden;z-index:10;pointer-events:auto;scrollbar-width:none;color:rgba(148,163,184,0.64);`;
                 const pip = document.createElement('div');
                 pip.className = 'ytkit-divider-pip';
-                pip.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:4px;height:40px;border-radius:2px;background:rgba(255,255,255,0.18);pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;`;
+                pip.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:4px;height:40px;border-radius:2px;background:rgba(148,163,184,0.30);pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:rgba(148,163,184,0.64);`;
                 // Three-dot grip pattern — universal drag indicator
                 for (let i = 0; i < 3; i++) {
                     const dot = document.createElement('div');
@@ -7232,8 +7533,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     pip.appendChild(dot);
                 }
                 divider.appendChild(pip);
-                divider.addEventListener('mouseenter', () => { divider.style.background='rgba(59,130,246,0.22)'; pip.style.background='rgba(59,130,246,0.8)'; });
-                divider.addEventListener('mouseleave', () => { divider.style.background='rgba(255,255,255,0.04)'; pip.style.background='rgba(255,255,255,0.18)'; });
+                divider.addEventListener('mouseenter', () => { divider.style.background='#111827'; pip.style.background='rgba(203,213,225,0.52)'; pip.style.color='rgba(226,232,240,0.92)'; });
+                divider.addEventListener('mouseleave', () => { divider.style.background='#0a0d13'; pip.style.background='rgba(148,163,184,0.30)'; pip.style.color='rgba(148,163,184,0.64)'; });
 
                 // RIGHT — collapsed initially
                 const right = document.createElement('div');
@@ -7278,6 +7579,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 positioned.forEach(el => {
                     el.style.setProperty('width', `calc(${newRightPct}% - 2px)`, 'important');
                 });
+                if (this._splitLiveHeader) {
+                    this._splitLiveHeader.style.width = `calc(${newRightPct}% - 2px)`;
+                    this._layoutSplitLiveHeaderActions();
+                }
                 if (strip) strip.style.width = `calc(${newRightPct}% - 2px)`;
                 storageWrite('ytkit_split_ratio', newLeftPct);
             },
@@ -7656,7 +7961,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 document.addEventListener('mousedown', this._middleMouseHandler, true);
 
                 // Re-layout on window resize
-                this._windowResizeHandler = () => { if (this._isActive) this._triggerPlayerResize(); };
+                this._windowResizeHandler = () => {
+                    if (!this._isActive) return;
+                    this._triggerPlayerResize();
+                    this._layoutSplitLiveHeaderActions();
+                };
                 window.addEventListener('resize', this._windowResizeHandler);
 
                 // Escape key collapses split panel (or unmounts if already collapsed)
@@ -7680,6 +7989,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     if (isFS && !this._fullscreenHidden) {
                         this._fullscreenHidden = true;
                         wrapper.style.display = 'none';
+                        if (this._splitLiveHeader) this._splitLiveHeader.style.display = 'none';
+                        this._setSplitLiveHeaderActionPinsHidden(true);
                         // Restore player to natural sizing so fullscreen works
                         const player = this._getPlayer();
                         if (player) {
@@ -7690,6 +8001,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     } else if (!isFS && this._fullscreenHidden) {
                         this._fullscreenHidden = false;
                         wrapper.style.display = 'flex';
+                        if (this._splitLiveHeader) this._splitLiveHeader.style.display = '';
+                        this._setSplitLiveHeaderActionPinsHidden(false);
+                        this._layoutSplitLiveHeaderActions();
                         // Re-fix player in place
                         const player = this._getPlayer();
                         if (player) {
@@ -7729,7 +8043,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const divider = wrapper.querySelector('#ytkit-split-divider');
                 const below   = this._getBelow();
                 const chatEl  = this._getChatEl();
+                if (chatEl) this._videoType = VideoTypeDetector.refresh();
                 const type    = this._videoType;
+                document.documentElement.classList.toggle('ytkit-split-live', type === 'live');
 
                 const closeBtn = wrapper.querySelector('#ytkit-split-close');
                 if (closeBtn) { closeBtn.style.display = 'flex'; closeBtn.style.opacity = '0.3'; }
@@ -7761,7 +8077,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                 // Elements stay in original DOM (no reparenting) so YT's IO works.
                 if (type === 'live') {
-                    this._setupChat(chatEl, rightPct, '0', '100vh');
+                    const liveHeaderTop = this._ensureSplitLiveHeader(rightPct);
+                    this._setupChat(chatEl, rightPct, `${liveHeaderTop}px`, `calc(100vh - ${liveHeaderTop}px)`);
                     this._scrollTarget = chatEl;
                 } else if (type === 'vod') {
                     this._setupChat(chatEl, rightPct, '0', '45vh');
@@ -7890,6 +8207,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 clearTimeout(this._playerResizeDebounceTimer);
                 this._playerResizeDebounceTimer = null;
                 document.documentElement.classList.remove('ytkit-split-open');
+                document.documentElement.classList.remove('ytkit-split-live');
                 document.documentElement.style.removeProperty('--ytkit-split-right-width');
                 this._restoreSplitActionDock();
                 this._stopSplitAutoscroll();
@@ -8052,7 +8370,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._isActive = false;
                 this._dismissed = false;
                 this._videoType = 'standard';
-                document.documentElement.classList.remove('ytkit-split-open');
+                document.documentElement.classList.remove('ytkit-split-open', 'ytkit-split-live');
                 document.documentElement.style.removeProperty('--ytkit-split-right-width');
                 if (!keepClass) document.documentElement.classList.remove('ytkit-split-active');
                 if (!keepClass) document.documentElement.style.removeProperty('--ytd-masthead-height');
@@ -9337,6 +9655,30 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         box-sizing: border-box !important;
                     }
 
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #thumbnail-input-row,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #placeholder-area {
+                        display: none !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #comment-dialog {
+                        display: block !important;
+                        width: 100% !important;
+                        min-width: 0 !important;
+                        max-width: none !important;
+                        grid-column: 1 / -1 !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #comment-dialog ytd-commentbox #thumbnail-input-row {
+                        display: block !important;
+                        grid-template-columns: minmax(0, 1fr) !important;
+                        gap: 0 !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #comment-dialog ytd-commentbox #author-thumbnail,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #comment-dialog ytd-commentbox #avatar {
+                        display: none !important;
+                    }
+
                     html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer > #comment-dialog ytd-commentbox #main,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer > #comment-dialog ytd-commentbox #creation-box,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below #comments ytd-comment-simplebox-renderer > #comment-dialog ytd-commentbox #input-container,
@@ -10217,6 +10559,30 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         min-height: 34px !important;
                         padding: 0 11px !important;
                         border-radius: 12px !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #thumbnail-input-row,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #placeholder-area {
+                        display: none !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #comment-dialog {
+                        display: block !important;
+                        width: 100% !important;
+                        min-width: 0 !important;
+                        max-width: none !important;
+                        grid-column: 1 / -1 !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #comment-dialog ytd-commentbox #thumbnail-input-row {
+                        display: block !important;
+                        grid-template-columns: minmax(0, 1fr) !important;
+                        gap: 0 !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #comment-dialog ytd-commentbox #author-thumbnail,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-simplebox-renderer:has(> #comment-dialog:not([hidden])) > #comment-dialog ytd-commentbox #avatar {
+                        display: none !important;
                     }
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-thread-renderer {
