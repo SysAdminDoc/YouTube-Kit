@@ -156,13 +156,34 @@ test('hidePinnedComments defaults on and targets modern pinned comment markup', 
         'retired comment cleanup should not unhide pinned comments marked by the active feature');
 });
 
+test('commentSearch only restores threads it hid and respects pinned comment hiding', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf("id: 'commentSearch'");
+    const end = source.indexOf("id: 'videoZoom'", start);
+    assert.ok(start > -1 && end > start, 'commentSearch block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes('ytkitCommentSearchHidden'), 'commentSearch should track which threads it hid');
+    assert.ok(block.includes('ytkitCommentSearchDisplay'), 'commentSearch should preserve prior inline display values');
+    assert.ok(block.includes('_restoreSearchHiddenThread(thread)'), 'commentSearch should use a dedicated restore path');
+    assert.ok(block.includes("thread.dataset.ytkitPinnedCommentHidden === '1'"),
+        'commentSearch restore should leave pinned comments hidden');
+    assert.ok(block.includes('ytd-comment-thread-renderer[data-ytkit-comment-search-hidden="1"]'),
+        'commentSearch destroy should only restore threads hidden by the search feature');
+    assert.ok(!block.includes('ytd-comment-thread-renderer[style*="display: none"]'),
+        'commentSearch destroy should not blindly unhide every hidden comment thread');
+});
+
 test('split comment replies keep nested cards readable', () => {
     const fs = require('fs');
     const path = require('path');
     const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
     const theaterSplit = fs.readFileSync(path.join(__dirname, '..', 'theater-split.user.js'), 'utf8');
 
-    assert.ok(source.includes('margin: 9px 0 0 12px !important;'),
+    assert.ok(source.includes('margin: 7px 0 0 12px !important;'),
         'extension split replies should use a shallow left offset');
     assert.ok(source.includes('padding: 10px 40px 10px 10px !important;'),
         'extension split reply cards should reclaim text width from the action-menu gutter');
@@ -170,13 +191,41 @@ test('split comment replies keep nested cards readable', () => {
         'extension split replies should handle nested reply indentation separately');
     assert.ok(source.includes('flex-basis: 28px !important;'),
         'extension split replies should use smaller avatars to preserve text width');
+    assert.ok(source.includes('-webkit-user-select: text !important;'),
+        'extension split comments should allow selecting comment text');
+    assert.ok(source.includes('cursor: text !important;'),
+        'extension split comment text should use a text cursor');
+    assert.ok(source.includes('.thread-hitbox.style-scope.ytd-comment-thread-renderer'),
+        'extension split comments should disable the invisible thread hitbox overlay');
+    assert.ok(source.includes('pointer-events: auto !important;'),
+        'extension split comments should force pointer events onto the actual text containers');
+    assert.ok(source.includes('font-weight: 650 !important;'),
+        'extension split replies toggle should read as a deliberate pill control');
+    assert.ok(source.includes('margin: 6px 0 0 !important;'),
+        'extension split replies toggle should stay visually centered on the guide rail');
+    assert.ok(source.includes('padding: 0 14px !important;'),
+        'extension split replies toggle should have room to breathe');
 
-    assert.ok(theaterSplit.includes('margin: 9px 0 0 12px !important;'),
+    assert.ok(theaterSplit.includes('margin: 7px 0 0 12px !important;'),
         'standalone split replies should use the same shallow left offset');
     assert.ok(theaterSplit.includes('padding: 10px 40px 10px 10px !important;'),
         'standalone split reply cards should reclaim text width from the action-menu gutter');
     assert.ok(theaterSplit.includes('ytd-comment-replies-renderer ytd-comment-replies-renderer'),
         'standalone split replies should handle nested reply indentation separately');
+    assert.ok(theaterSplit.includes('-webkit-user-select: text !important;'),
+        'standalone split comments should allow selecting comment text');
+    assert.ok(theaterSplit.includes('cursor: text !important;'),
+        'standalone split comment text should use a text cursor');
+    assert.ok(theaterSplit.includes('.thread-hitbox.style-scope.ytd-comment-thread-renderer'),
+        'standalone split comments should disable the invisible thread hitbox overlay');
+    assert.ok(theaterSplit.includes('pointer-events: auto !important;'),
+        'standalone split comments should force pointer events onto the actual text containers');
+    assert.ok(theaterSplit.includes('font-weight: 650 !important;'),
+        'standalone split replies toggle should read as a deliberate pill control');
+    assert.ok(theaterSplit.includes('margin: 6px 0 0 !important;'),
+        'standalone split replies toggle should stay visually centered on the guide rail');
+    assert.ok(theaterSplit.includes('padding: 0 14px !important;'),
+        'standalone split replies toggle should have room to breathe');
 });
 
 test('split title header and comment composer stay visually compact', () => {
@@ -189,7 +238,7 @@ test('split title header and comment composer stay visually compact', () => {
         'extension split title should have a scoped accent edge');
     assert.ok(source.includes('text-wrap: balance !important;'),
         'extension split title should balance long titles');
-    assert.ok(source.includes('padding: 9px 10px 7px !important;'),
+    assert.ok(source.includes('padding: 8px 10px 8px !important;'),
         'extension comments header should trim the composer bottom padding');
     assert.ok(source.includes('min-height: 34px !important;'),
         'extension split composer placeholder should stay condensed');
@@ -200,7 +249,7 @@ test('split title header and comment composer stay visually compact', () => {
 
     assert.ok(theaterSplit.includes('border-left: 2px solid rgba(var(--ts-accent-rgb), 0.42) !important;'),
         'standalone split title should have the same accent edge');
-    assert.ok(theaterSplit.includes('padding: 9px 10px 7px !important;'),
+    assert.ok(theaterSplit.includes('padding: 8px 10px 8px !important;'),
         'standalone comments header should trim the composer bottom padding');
     assert.ok(theaterSplit.includes('min-height: 34px !important;'),
         'standalone split composer placeholder should stay condensed');
@@ -382,17 +431,13 @@ test('split title and owner cards align while quick links stay above the video',
         [theaterSplit, 'standalone owner card'],
     ]) {
         assert.ok(contents.includes('"owner dock page watch"'), `${label} should keep channel identity and actions on one row`);
+        assert.ok(contents.includes('"sub dock page watch"'), `${label} should keep the subscribe row visually tied to the docked actions`);
         assert.ok(!contents.includes('"owner owner owner owner"'), `${label} should not reserve a full empty row for identity`);
         assert.ok(contents.includes('justify-items: start !important;'), `${label} should anchor channel text to the avatar`);
         assert.ok(contents.includes('text-align: left !important;'), `${label} should keep channel metadata left-aligned`);
+        assert.ok(contents.includes('min-width: 118px !important;'), `${label} should give the subscribe control an intentional pill width`);
     }
 
-    const extensionNotification = blockBetween(
-        source,
-        '#below[style*="position"] #owner #subscribe-button,',
-        '#below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next',
-        'extension owner notification controls'
-    );
     const standaloneNotification = blockBetween(
         theaterSplit,
         '#below[style*="position"] #owner #subscribe-button,',
@@ -401,10 +446,13 @@ test('split title and owner cards align while quick links stay above the video',
         { fromStart: true }
     );
 
-    for (const [block, label] of [
-        [extensionNotification, 'extension notification controls'],
-        [standaloneNotification, 'standalone notification controls'],
-    ]) {
+    assert.match(
+        source,
+        /#below\[style\*="position"\] #owner #subscribe-button,[\s\S]*?overflow: visible !important;[\s\S]*?pointer-events: auto !important;[\s\S]*?#notification-preference-button \*[\s\S]*?z-index: 40 !important;/,
+        'extension notification controls should not clip or deactivate the bell dropdown'
+    );
+
+    for (const [block, label] of [[standaloneNotification, 'standalone notification controls']]) {
         assert.ok(block.includes('overflow: visible !important;'), `${label} should not clip the bell dropdown trigger`);
         assert.ok(block.includes('pointer-events: auto !important;'), `${label} should keep the native bell click target active`);
         assert.ok(block.includes('z-index: 40 !important;'), `${label} should sit above the owner action dock`);

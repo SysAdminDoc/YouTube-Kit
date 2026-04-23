@@ -9406,10 +9406,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         grid-template-columns: minmax(0, 1fr) auto auto auto !important;
                         grid-template-areas:
                             "owner dock page watch"
-                            "sub sub sub sub" !important;
+                            "sub dock page watch" !important;
                         align-items: center !important;
                         column-gap: 8px !important;
-                        row-gap: 8px !important;
+                        row-gap: 6px !important;
                         overflow: visible !important;
                     }
 
@@ -9418,8 +9418,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         display: inline-flex !important;
                         align-items: center !important;
                         justify-content: flex-start !important;
+                        justify-self: end !important;
+                        align-self: center !important;
                         flex-wrap: wrap !important;
-                        gap: 6px !important;
+                        gap: 7px !important;
                         min-width: 0 !important;
                         margin: 0 !important;
                         position: relative !important;
@@ -9980,9 +9982,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         min-width: 0 !important;
                         justify-self: stretch !important;
                         box-sizing: border-box !important;
-                        gap: 8px !important;
+                        gap: 7px !important;
                         margin: 0 !important;
-                        padding: 10px 12px !important;
+                        padding: 9px 12px 8px !important;
                         border: 1px solid rgba(255, 255, 255, 0.08) !important;
                         border-radius: 16px !important;
                         background:
@@ -10057,6 +10059,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         align-self: center !important;
                         justify-self: start !important;
                         margin: 0 !important;
+                        max-width: 100% !important;
                         overflow: visible !important;
                         pointer-events: auto !important;
                     }
@@ -10071,9 +10074,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         pointer-events: auto !important;
                     }
 
-                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #notification-preference-button .yt-spec-button-shape-next,
-                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner yt-subscribe-button-view-model .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #notification-preference-button button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner ytd-subscription-notification-toggle-button-renderer-next .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner ytd-subscription-notification-toggle-button-renderer-next button,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner > #ytkit-page-btn-watch,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner > #ytkit-watch-btn {
                         min-height: 32px !important;
@@ -10085,11 +10089,63 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
                     }
 
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #subscribe-button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner yt-subscribe-button-view-model,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner ytd-subscribe-button-renderer {
+                        width: fit-content !important;
+                        max-width: 100% !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #subscribe-button button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner yt-subscribe-button-view-model .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner yt-subscribe-button-view-model button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner ytd-subscribe-button-renderer button {
+                        min-height: 34px !important;
+                        height: 34px !important;
+                        min-width: 118px !important;
+                        max-width: 100% !important;
+                        padding: 0 16px !important;
+                        border-radius: 999px !important;
+                        border: 1px solid rgba(var(--ytkit-split-accent-rgb), 0.24) !important;
+                        background:
+                            linear-gradient(180deg, rgba(var(--ytkit-split-accent-rgb), 0.17), rgba(var(--ytkit-split-accent-rgb), 0.075)),
+                            rgba(14, 19, 29, 0.9) !important;
+                        color: rgba(248, 250, 252, 0.98) !important;
+                        font-size: 12px !important;
+                        font-weight: 780 !important;
+                        letter-spacing: 0 !important;
+                        text-transform: none !important;
+                        box-shadow: 0 10px 22px rgba(2, 6, 12, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #subscribe-button button:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner yt-subscribe-button-view-model .yt-spec-button-shape-next:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner yt-subscribe-button-view-model button:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner ytd-subscribe-button-renderer button:hover {
+                        border-color: rgba(var(--ytkit-split-accent-rgb), 0.34) !important;
+                        background:
+                            linear-gradient(180deg, rgba(var(--ytkit-split-accent-rgb), 0.22), rgba(var(--ytkit-split-accent-rgb), 0.1)),
+                            rgba(16, 22, 33, 0.96) !important;
+                        color: rgba(255, 255, 255, 0.99) !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next *,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner #subscribe-button button *,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner yt-subscribe-button-view-model .yt-spec-button-shape-next *,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner yt-subscribe-button-view-model button *,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner ytd-subscribe-button-renderer button * {
+                        color: inherit !important;
+                        font-weight: inherit !important;
+                        letter-spacing: inherit !important;
+                    }
+
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #actions,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #actions.ytd-watch-metadata {
                         display: block !important;
                         width: 100% !important;
-                        margin: 0 0 16px !important;
+                        margin: 0 0 10px !important;
                         padding: 0 !important;
                         overflow: visible !important;
                     }
@@ -10366,6 +10422,55 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         text-decoration: none !important;
                     }
 
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-thread-renderer .thread-hitbox,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-thread-renderer .thread-hitbox.style-scope.ytd-comment-thread-renderer {
+                        display: none !important;
+                        pointer-events: none !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-thread-renderer,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model > #body,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer > #body,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model > #body > #main,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer > #body > #main,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model ytd-expander,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer ytd-expander,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #content,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #content,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #content-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #content-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model .ytAttributedStringHost,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer .ytAttributedStringHost {
+                        pointer-events: auto !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #content-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #content-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #content-text *,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #content-text *,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #author-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #author-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #published-time-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #published-time-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model .ytAttributedStringHost,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer .ytAttributedStringHost {
+                        -webkit-user-select: text !important;
+                        user-select: text !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #content-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #content-text,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string {
+                        cursor: text !important;
+                    }
+
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #action-menu,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #action-menu,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #inline-action-menu,
@@ -10474,8 +10579,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer {
                         position: relative !important;
-                        margin: 9px 0 0 12px !important;
-                        padding: 8px 0 0 7px !important;
+                        margin: 7px 0 0 12px !important;
+                        padding: 4px 0 0 7px !important;
                         border-left: 1px solid rgba(var(--ytkit-split-accent-rgb), 0.18) !important;
                     }
 
@@ -10511,11 +10616,95 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         border-radius: 10px !important;
                     }
 
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread {
+                        margin: 6px 0 0 !important;
+                        padding: 0 !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread button {
+                        display: inline-flex !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                        gap: 8px !important;
+                        min-width: 0 !important;
+                        min-height: 30px !important;
+                        height: 30px !important;
+                        padding: 0 14px !important;
+                        border-radius: 999px !important;
+                        border: 1px solid rgba(148, 163, 184, 0.16) !important;
+                        background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)), rgba(7, 10, 16, 0.62) !important;
+                        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+                        color: rgba(226, 232, 240, 0.9) !important;
+                        font-size: 12.5px !important;
+                        font-weight: 650 !important;
+                        letter-spacing: 0 !important;
+                        text-transform: none !important;
+                        transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease !important;
+                        -webkit-user-select: none !important;
+                        user-select: none !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button button:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies button:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread button:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies button:hover,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread button:hover {
+                        border-color: rgba(var(--ytkit-split-accent-rgb), 0.3) !important;
+                        background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.022)), rgba(var(--ytkit-split-accent-rgb), 0.12) !important;
+                        color: rgba(255, 255, 255, 0.98) !important;
+                        transform: translateY(-1px) !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies button,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread button {
+                        color: rgba(203, 213, 225, 0.74) !important;
+                        background: linear-gradient(180deg, rgba(255, 255, 255, 0.038), rgba(255, 255, 255, 0.015)), rgba(7, 10, 16, 0.52) !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button yt-icon,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button svg,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies yt-icon,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies svg,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread yt-icon,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread svg,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies yt-icon,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies svg,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread yt-icon,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread svg {
+                        display: inline-flex !important;
+                        width: 16px !important;
+                        height: 16px !important;
+                        min-width: 16px !important;
+                        min-height: 16px !important;
+                        color: currentColor !important;
+                        fill: currentColor !important;
+                        opacity: 0.92 !important;
+                        flex-shrink: 0 !important;
+                    }
+
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comments-header-renderer {
-                        gap: 7px !important;
+                        gap: 6px !important;
                         min-height: 0 !important;
-                        margin-bottom: 10px !important;
-                        padding: 9px 10px 7px !important;
+                        margin-bottom: 8px !important;
+                        padding: 8px 10px 8px !important;
                         border-radius: 14px !important;
                         background:
                             linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.014)),
@@ -18973,6 +19162,24 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 }
                 return cached;
             },
+            _hideThreadForSearch(thread) {
+                if (!(thread instanceof HTMLElement)) return;
+                if (thread.dataset.ytkitCommentSearchHidden !== '1') {
+                    thread.dataset.ytkitCommentSearchDisplay = thread.style.display || '';
+                }
+                thread.dataset.ytkitCommentSearchHidden = '1';
+                thread.style.display = 'none';
+            },
+            _restoreSearchHiddenThread(thread) {
+                if (!(thread instanceof HTMLElement) || thread.dataset.ytkitCommentSearchHidden !== '1') return;
+                if (thread.dataset.ytkitPinnedCommentHidden === '1') {
+                    thread.style.display = 'none';
+                } else {
+                    thread.style.display = thread.dataset.ytkitCommentSearchDisplay || '';
+                }
+                delete thread.dataset.ytkitCommentSearchHidden;
+                delete thread.dataset.ytkitCommentSearchDisplay;
+            },
             _clearSearch({ focusInput = false } = {}) {
                 if (!this._input) return;
                 if (this._input.value) this._input.value = '';
@@ -19029,8 +19236,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 threads.forEach(thread => {
                     if (!(thread instanceof HTMLElement)) return;
                     const matches = !loweredQuery || this._getThreadText(thread).includes(loweredQuery);
-                    thread.style.display = matches ? '' : 'none';
-                    if (matches) visible++;
+                    if (matches) this._restoreSearchHiddenThread(thread);
+                    else this._hideThreadForSearch(thread);
+                    if (matches && thread.dataset.ytkitPinnedCommentHidden !== '1' && thread.style.display !== 'none') visible++;
                 });
 
                 this._lastThreadCount = threads.length;
@@ -19213,8 +19421,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._applyTimer = null;
                 removeNavigateRule('commentSearch');
                 removeMutationRule('commentSearch');
-                // Reset any hidden comments
-                document.querySelectorAll('ytd-comment-thread-renderer[style*="display: none"]').forEach(t => t.style.display = '');
+                document.querySelectorAll('ytd-comment-thread-renderer[data-ytkit-comment-search-hidden="1"]').forEach((thread) => {
+                    this._restoreSearchHiddenThread(thread);
+                });
                 const total = document.querySelectorAll('ytd-comment-thread-renderer').length;
                 document.dispatchEvent(new CustomEvent('ytkit-comment-filter', {
                     detail: { query: '', visible: total, total }

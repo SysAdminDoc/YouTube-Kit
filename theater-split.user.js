@@ -300,9 +300,9 @@
             min-width: 0 !important;
             justify-self: stretch !important;
             box-sizing: border-box !important;
-            gap: 8px !important;
+            gap: 7px !important;
             margin: 0 !important;
-            padding: 10px 12px !important;
+            padding: 9px 12px 8px !important;
             border: 1px solid rgba(255, 255, 255, 0.08) !important;
             border-radius: 16px !important;
             background:
@@ -368,6 +368,7 @@
             align-self: center !important;
             justify-self: start !important;
             margin: 0 !important;
+            max-width: 100% !important;
             overflow: visible !important;
             pointer-events: auto !important;
             z-index: 40 !important;
@@ -376,9 +377,10 @@
         body.ts-split #below[style*="position"] #owner ytd-subscription-notification-toggle-button-renderer-next * {
             pointer-events: auto !important;
         }
-        body.ts-split #below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next,
         body.ts-split #below[style*="position"] #owner #notification-preference-button .yt-spec-button-shape-next,
-        body.ts-split #below[style*="position"] #owner yt-subscribe-button-view-model .yt-spec-button-shape-next {
+        body.ts-split #below[style*="position"] #owner #notification-preference-button button,
+        body.ts-split #below[style*="position"] #owner ytd-subscription-notification-toggle-button-renderer-next .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #owner ytd-subscription-notification-toggle-button-renderer-next button {
             min-height: 32px !important;
             height: 32px !important;
             border-radius: 999px !important;
@@ -387,11 +389,59 @@
             color: rgba(248, 250, 252, 0.92) !important;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
         }
+        body.ts-split #below[style*="position"] #owner #subscribe-button,
+        body.ts-split #below[style*="position"] #owner yt-subscribe-button-view-model,
+        body.ts-split #below[style*="position"] #owner ytd-subscribe-button-renderer {
+            width: fit-content !important;
+            max-width: 100% !important;
+        }
+        body.ts-split #below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #owner #subscribe-button button,
+        body.ts-split #below[style*="position"] #owner yt-subscribe-button-view-model .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #owner yt-subscribe-button-view-model button,
+        body.ts-split #below[style*="position"] #owner ytd-subscribe-button-renderer button {
+            min-height: 34px !important;
+            height: 34px !important;
+            min-width: 118px !important;
+            max-width: 100% !important;
+            padding: 0 16px !important;
+            border-radius: 999px !important;
+            border: 1px solid rgba(var(--ts-accent-rgb), 0.24) !important;
+            background:
+                linear-gradient(180deg, rgba(var(--ts-accent-rgb), 0.17), rgba(var(--ts-accent-rgb), 0.075)),
+                rgba(14, 19, 29, 0.9) !important;
+            color: rgba(248, 250, 252, 0.98) !important;
+            font-size: 12px !important;
+            font-weight: 780 !important;
+            letter-spacing: 0 !important;
+            text-transform: none !important;
+            box-shadow: 0 10px 22px rgba(2, 6, 12, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+        }
+        body.ts-split #below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next:hover,
+        body.ts-split #below[style*="position"] #owner #subscribe-button button:hover,
+        body.ts-split #below[style*="position"] #owner yt-subscribe-button-view-model .yt-spec-button-shape-next:hover,
+        body.ts-split #below[style*="position"] #owner yt-subscribe-button-view-model button:hover,
+        body.ts-split #below[style*="position"] #owner ytd-subscribe-button-renderer button:hover {
+            border-color: rgba(var(--ts-accent-rgb), 0.34) !important;
+            background:
+                linear-gradient(180deg, rgba(var(--ts-accent-rgb), 0.22), rgba(var(--ts-accent-rgb), 0.1)),
+                rgba(16, 22, 33, 0.96) !important;
+            color: rgba(255, 255, 255, 0.99) !important;
+        }
+        body.ts-split #below[style*="position"] #owner #subscribe-button .yt-spec-button-shape-next *,
+        body.ts-split #below[style*="position"] #owner #subscribe-button button *,
+        body.ts-split #below[style*="position"] #owner yt-subscribe-button-view-model .yt-spec-button-shape-next *,
+        body.ts-split #below[style*="position"] #owner yt-subscribe-button-view-model button *,
+        body.ts-split #below[style*="position"] #owner ytd-subscribe-button-renderer button * {
+            color: inherit !important;
+            font-weight: inherit !important;
+            letter-spacing: inherit !important;
+        }
         body.ts-split #below[style*="position"] #actions,
         body.ts-split #below[style*="position"] #actions.ytd-watch-metadata {
             display: block !important;
             width: 100% !important;
-            margin: 0 0 16px !important;
+            margin: 0 0 10px !important;
             padding: 0 !important;
             overflow: visible !important;
         }
@@ -440,10 +490,10 @@
             grid-template-columns: minmax(0, 1fr) auto auto auto !important;
             grid-template-areas:
                 "owner dock page watch"
-                "sub sub sub sub" !important;
+                "sub dock page watch" !important;
             align-items: center !important;
             column-gap: 8px !important;
-            row-gap: 8px !important;
+            row-gap: 6px !important;
         }
         body.ts-split #below[style*="position"] #owner:has(.ytkit-split-owner-actions) ytd-video-owner-renderer {
             grid-area: owner !important;
@@ -472,8 +522,10 @@
             display: inline-flex !important;
             align-items: center !important;
             justify-content: flex-start !important;
+            justify-self: end !important;
+            align-self: center !important;
             flex-wrap: wrap !important;
-            gap: 6px !important;
+            gap: 7px !important;
             min-width: 0 !important;
             margin: 0 !important;
             position: relative !important;
@@ -768,6 +820,51 @@
             color: rgba(var(--ts-accent-rgb), 0.92) !important;
             text-decoration: none !important;
         }
+        body.ts-split #below[style*="position"] #comments ytd-comment-thread-renderer .thread-hitbox,
+        body.ts-split #below[style*="position"] #comments ytd-comment-thread-renderer .thread-hitbox.style-scope.ytd-comment-thread-renderer {
+            display: none !important;
+            pointer-events: none !important;
+        }
+        body.ts-split #below[style*="position"] #comments ytd-comment-thread-renderer,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model > #body,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer > #body,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model > #body > #main,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer > #body > #main,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model ytd-expander,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer ytd-expander,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model #content,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer #content,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model #content-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer #content-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model .ytAttributedStringHost,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer .ytAttributedStringHost {
+            pointer-events: auto !important;
+        }
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model #content-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer #content-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model #content-text *,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer #content-text *,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model #author-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer #author-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model #published-time-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer #published-time-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model .ytAttributedStringHost,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer .ytAttributedStringHost {
+            -webkit-user-select: text !important;
+            user-select: text !important;
+        }
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model #content-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer #content-text,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string {
+            cursor: text !important;
+        }
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model #action-menu,
         body.ts-split #below[style*="position"] #comments ytd-comment-renderer #action-menu,
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model #inline-action-menu,
@@ -868,8 +965,8 @@
         }
         body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer {
             position: relative !important;
-            margin: 9px 0 0 12px !important;
-            padding: 8px 0 0 7px !important;
+            margin: 7px 0 0 12px !important;
+            padding: 4px 0 0 7px !important;
             border-left: 1px solid rgba(var(--ts-accent-rgb), 0.18) !important;
         }
         body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer ytd-comment-replies-renderer {
@@ -900,12 +997,91 @@
             height: 28px !important;
             border-radius: 10px !important;
         }
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread {
+            margin: 6px 0 0 !important;
+            padding: 0 !important;
+        }
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button button,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies button,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread button,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies button,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread button {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 8px !important;
+            min-width: 0 !important;
+            min-height: 30px !important;
+            height: 30px !important;
+            padding: 0 14px !important;
+            border-radius: 999px !important;
+            border: 1px solid rgba(148, 163, 184, 0.16) !important;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)), rgba(7, 10, 16, 0.62) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+            color: rgba(226, 232, 240, 0.9) !important;
+            font-size: 12.5px !important;
+            font-weight: 650 !important;
+            letter-spacing: 0 !important;
+            text-transform: none !important;
+            transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease !important;
+            -webkit-user-select: none !important;
+            user-select: none !important;
+        }
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button button:hover,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies .yt-spec-button-shape-next:hover,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread .yt-spec-button-shape-next:hover,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next:hover,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next:hover,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies button:hover,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread button:hover,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies button:hover,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread button:hover {
+            border-color: rgba(var(--ts-accent-rgb), 0.3) !important;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.022)), rgba(var(--ts-accent-rgb), 0.12) !important;
+            color: rgba(255, 255, 255, 0.98) !important;
+            transform: translateY(-1px) !important;
+        }
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread .yt-spec-button-shape-next,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies button,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread button {
+            color: rgba(203, 213, 225, 0.74) !important;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.038), rgba(255, 255, 255, 0.015)), rgba(7, 10, 16, 0.52) !important;
+        }
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button yt-icon,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer .show-replies-button svg,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies yt-icon,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies svg,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread yt-icon,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #more-replies-sub-thread svg,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies yt-icon,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies svg,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread yt-icon,
+        body.ts-split #below[style*="position"] #comments ytd-comment-replies-renderer #less-replies-sub-thread svg {
+            display: inline-flex !important;
+            width: 16px !important;
+            height: 16px !important;
+            min-width: 16px !important;
+            min-height: 16px !important;
+            color: currentColor !important;
+            fill: currentColor !important;
+            opacity: 0.92 !important;
+            flex-shrink: 0 !important;
+        }
 
         body.ts-split #below[style*="position"] #comments ytd-comments-header-renderer {
-            gap: 7px !important;
+            gap: 6px !important;
             min-height: 0 !important;
-            margin-bottom: 10px !important;
-            padding: 9px 10px 7px !important;
+            margin-bottom: 8px !important;
+            padding: 8px 10px 8px !important;
             border-radius: 14px !important;
             background:
                 linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.014)),
