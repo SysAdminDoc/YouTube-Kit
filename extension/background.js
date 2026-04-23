@@ -405,6 +405,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (timer) clearTimeout(timer);
             if (responded) return;
 
+            // SSRF hardening: if redirects followed us to an origin that is NOT
+            // in the allowlist, reject the response before the body leaks back
+            // to the content script. `fetch` defaults to `redirect: 'follow'`,
+            // so an allowlisted origin that 302s to an internal IP or an
+            // arbitrary host would otherwise bypass the origin allowlist.
+            if (resp.url && resp.url !== url && !isUrlAllowed(resp.url)) {
+                responded = true;
+                sendResponse({ error: `Response URL not in allowlist after redirect: ${resp.url}` });
+                try { controller.abort(); } catch (_) {
+                    // reason: controller may already be aborted
+                }
+                return;
+            }
+
             const contentLengthHeader = resp.headers.get('content-length');
             if (contentLengthHeader !== null) {
                 const contentLength = parseInt(contentLengthHeader, 10);

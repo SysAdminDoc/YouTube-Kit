@@ -757,18 +757,23 @@ test('blocked channel avatar initial survives surrogate-pair names', () => {
         'blocked channel avatar initial should iterate by code point, not UTF-16 unit');
 });
 
-test('download progress panel close button stops the poll interval immediately', () => {
+test('download progress panel close button stops the poll loop immediately', () => {
     const fs = require('fs');
     const path = require('path');
     const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
 
-    // The close handler now clears the 1 s poll interval synchronously so we
-    // don't keep hitting the local downloader for a panel the user dismissed.
+    // The close handler synchronously flips `stopped` and clears the pending
+    // setTimeout (via stopPolling()) so we don't keep hitting the local
+    // downloader for a panel the user dismissed. The switch from setInterval
+    // to a self-scheduling setTimeout chain (audit pass) also prevents two
+    // polls from overlapping when the downloader is slow.
     const start = source.indexOf('function showDownloadProgress');
     assert.ok(start > -1, 'showDownloadProgress should exist');
-    const block = source.slice(start, start + 6000);
-    assert.ok(/closeBtn\.addEventListener\('click'[\s\S]*?clearInterval\(pollInterval\)[\s\S]*?panel\.remove\(\)/.test(block),
-        'close button should clearInterval(pollInterval) before removing the panel');
+    const block = source.slice(start, start + 16000);
+    assert.ok(/closeBtn\.addEventListener\('click'[\s\S]*?stopPolling\(\)[\s\S]*?panel\.remove\(\)/.test(block),
+        'close button should call stopPolling() before removing the panel');
+    assert.ok(/const\s+stopPolling\s*=\s*\(\s*\)\s*=>\s*\{[\s\S]*?stopped\s*=\s*true[\s\S]*?clearTimeout\(pollTimer\)/.test(block),
+        'stopPolling must flip the stopped flag and clear any pending setTimeout');
 });
 
 test('handleFileImport guards against oversized files and FileReader errors', () => {

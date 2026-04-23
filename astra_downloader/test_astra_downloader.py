@@ -257,5 +257,90 @@ class ApiSecurityTests(unittest.TestCase):
         self.assertIn("pip install", stderr)
 
 
+class CookieJarTests(unittest.TestCase):
+    """Audit-pass coverage for write_cookies_netscape.
+
+    The extension pushes Chrome cookie objects into the server's /download
+    request and yt-dlp needs them in Netscape cookies.txt format. Regressing
+    the converter would silently break logged-in/age-gated downloads, so each
+    behaviour below is locked down by a dedicated test.
+    """
+
+    def _read(self, path):
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_returns_none_for_empty_or_invalid_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "cookies.txt"
+            self.assertIsNone(ad.write_cookies_netscape(None, target))
+            self.assertIsNone(ad.write_cookies_netscape([], target))
+            self.assertIsNone(ad.write_cookies_netscape("not a list", target))
+            # All entries invalid (missing name/domain) → no jar written.
+            self.assertIsNone(ad.write_cookies_netscape(
+                [{"name": ""}, {"domain": ".youtube.com"}],
+                target,
+            ))
+            self.assertFalse(target.exists())
+
+    def test_writes_netscape_format_with_httponly_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "cookies.txt"
+            cookies = [
+                {
+                    "domain": ".youtube.com", "name": "SID", "value": "abc",
+                    "path": "/", "secure": True, "httpOnly": True,
+                    "expirationDate": 1700000000,
+                },
+                {
+                    "domain": "youtube.com", "name": "PREF", "value": "tz=UTC",
+                    "path": "/", "secure": False, "httpOnly": False,
+                    # Session cookie (no expirationDate) — must serialize as 0
+                    "expirationDate": None,
+                },
+            ]
+            result = ad.write_cookies_netscape(cookies, target)
+            self.assertEqual(result, str(target))
+            body = self._read(target)
+            self.assertIn("# Netscape HTTP Cookie File", body)
+            # httpOnly cookie gets the #HttpOnly_ prefix yt-dlp expects.
+            self.assertIn("#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1700000000\tSID\tabc", body)
+            self.assertIn("youtube.com\tFALSE\t/\tFALSE\t0\tPREF\ttz=UTC", body)
+
+    def test_strips_control_chars_that_would_corrupt_tsv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "cookies.txt"
+            cookies = [
+                # Tabs/newlines in a value would shift columns in the TSV and
+                # make yt-dlp fail to parse the jar. Control-char stripping
+                # produces a well-formed single-line value.
+                {"domain": ".youtube.com", "name": "X", "value": "a\tb\nc"},
+                {"domain": ".youtube.com", "name": "Y", "value": "ok"},
+            ]
+            self.assertEqual(ad.write_cookies_netscape(cookies, target), str(target))
+            body = self._read(target)
+            # The line for X must end with a clean value containing no raw
+            # tabs or newlines beyond the column separator.
+            x_line = [line for line in body.splitlines() if "\tX\t" in line][0]
+            self.assertTrue(x_line.endswith("abc"))
+            self.assertEqual(x_line.count("\t"), 6)  # 7 columns → 6 separators
+            self.assertIn("Y\tok", body)
+
+    def test_rejects_malformed_expiration_without_failing_whole_jar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "cookies.txt"
+            cookies = [
+                {"domain": ".youtube.com", "name": "A", "value": "a", "expirationDate": "bogus"},
+                {"domain": ".youtube.com", "name": "B", "value": "b", "expirationDate": -42},
+                {"domain": ".youtube.com", "name": "C", "value": "c", "expirationDate": 100},
+            ]
+            self.assertEqual(ad.write_cookies_netscape(cookies, target), str(target))
+            body = self._read(target)
+            self.assertIn("\tA\ta", body)  # bogus → 0
+            self.assertIn("\t0\tA\ta", body)
+            self.assertIn("\t0\tB\tb", body)  # negative → 0
+            self.assertIn("\t100\tC\tc", body)
+
+
 if __name__ == "__main__":
     unittest.main()

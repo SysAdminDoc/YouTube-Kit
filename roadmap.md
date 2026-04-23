@@ -120,6 +120,17 @@ Risks that materialized (or were pre-mitigated) during v3.7.0–v3.10.0.
 | URL param stripping breaks YouTube Music's `si=` linking | Mitigated | `stripTrackingParams` scoped to `www.youtube.com` only; skips `music.youtube.com`. |
 | `credentials: 'omit'` breaks RYD's user-vote attribution | Mitigated | RYD public endpoints don't require auth. |
 
+### Audit-Pass Open Items (2026-04-23)
+
+Follow-ups surfaced during the end-to-end audit. Not scheduled work — logged so they aren't forgotten. The critical findings from the same pass (SSRF post-redirect, storage retry storm, download poll races, cookie passthrough to yt-dlp) shipped in the same audit and are locked down by `tests/hardening.test.js` / `astra_downloader/test_astra_downloader.py`.
+
+- **MV3 `_pendingReveals` Set is in-memory only** (`extension/background.js`). If the service worker is terminated between `chrome.downloads.download()` returning and the `state: 'complete'` transition, the "show in folder" reveal is silently dropped. Persist pending IDs to `chrome.storage.session` so they survive SW restart.
+- **SponsorBlock POI category semantics** (`extension/ytkit.js` `sponsorBlock._checkSkip`). `poi_highlight` is currently treated like any other skip segment (`currentTime = end`), but the API intends POI as a highlight/jump-to marker. Segment filter already rejects zero-length entries so most POI data is dropped on arrival, but if the category is ever re-enabled by default this needs rework.
+- **`normalize_output_dir` accepts any absolute path** (`astra_downloader/astra_downloader.py`). Gated by the auth token, but a leaked token would let a caller point yt-dlp's output into arbitrary user-writable directories. Defence-in-depth: restrict to user-profile roots (Downloads/Videos/Desktop + configured DownloadPath).
+- **Dead code in `_run_download`** (`astra_downloader/astra_downloader.py:~1022`). `re.search(r'\[download\] Downloading video …', line)` matches but the result is never assigned. Safe to delete on the next pass through that function.
+- **`ytkit.js` monolith (~34K lines)** still harbours uncovered code paths — DeArrow cache lifetime, theater-split cleanup on fast SPA navigations, Wave-8/9 restored features. A targeted audit per area is better value than another pass at this size.
+- **Extension cookie `expirationDate: c.expirationDate || 0`** (`extension/ytkit.js` `_mediaDLSendDownload`). Correct for the Netscape-format writer on the server side (0 = session cookie), but fragile if a future transport expects `null`/`undefined` for session cookies. Keep in mind before changing the server's cookie wire format.
+
 ---
 
 ## Cross-Project Ecosystem Integration
@@ -188,3 +199,35 @@ Still applied on every release.
 ---
 
 *Last updated: 2026-04-14 — forward-looking feature backlog removed per user direction after v3.10.0 shipped.*
+
+## Open-Source Research (Round 2)
+
+### Related OSS Projects
+- **SponsorBlock** — https://github.com/ajayyy/SponsorBlock — crowd-sourced skip segments; database and API are public, integration layer for any client
+- **DeArrow** — https://github.com/ajayyy/DeArrow — crowd-sourced titles/thumbnails replacement, same submission pipeline as SponsorBlock
+- **Return YouTube Dislike** — https://github.com/Anarios/return-youtube-dislike — dislike count revival, REST API + browser extension
+- **Enhancer for YouTube** — https://github.com/Maximilianos/enhancer-for-youtube — volume >100%, speed stepping, cinema mode, mouse-wheel volume; massive feature surface to audit for gaps
+- **iSponsorBlockTV** — https://github.com/dmunozv04/iSponsorBlockTV — applies SponsorBlock server-side via MITM on YouTube TV app; proves sidecar service pattern
+- **FreeTube** — https://github.com/FreeTubeApp/FreeTube — desktop YouTube client; subscription management, SponsorBlock built-in, history/playlists fully local
+- **ytdl-sub** — https://github.com/jmbannon/ytdl-sub — declarative YAML playlist→library subscription tool (feeds Plex/Jellyfin)
+- **NewPipe (Android)** — https://github.com/TeamNewPipe/NewPipe — channel groups, local feed, no Google services; inspiration for the library/downloader UX
+- **Piped** — https://github.com/TeamPiped/Piped — alternative frontend/backend; proxies YT APIs, exposes subscriptions + history server-side
+
+### Features to Borrow
+- Segment submission/voting pipeline UX with instant undo and contribution stats (SponsorBlock)
+- Auto-mute vs skip vs "show warning" tri-state per category (SponsorBlock)
+- Replace clickbait thumbnails/titles using crowd data (DeArrow) — drop-in for the existing recommendations feed
+- Channel-level opt-out for return-dislike API calls (RYD) to reduce requests
+- Volume boost >100% via WebAudio GainNode; mouse-wheel over player adjusts volume (Enhancer for YouTube)
+- Playback-speed presets and fine-grain stepping (0.05x) with keyboard shortcuts (Enhancer)
+- Declarative YAML subscriptions that produce a local library (ytdl-sub)
+- Channel groups and a local "feed" that re-ranks by freshness (NewPipe)
+- Cinema-mode that fades the entire page except the player (Enhancer)
+- Pop-out player that persists across tab navigations (NewPipe-adjacent)
+
+### Patterns & Architectures Worth Studying
+- Crowd-sourced segment database with public SQL dumps — monetization-resistant, forkable (SponsorBlock)
+- Sidecar server that intercepts and rewrites responses for platforms where extensions don't run (iSponsorBlockTV)
+- Isolated/MAIN world split: SponsorBlock uses `chrome.scripting.executeScript` with `world:"MAIN"` for player API access — extend Astra-Deck's existing split-context pattern for SponsorBlock parity
+- Offline-first subscription sync pattern (NewPipe) — IndexedDB persistence with rsync-style delta sync to a user's own server
+- Declarative config → cron/systemd runner (ytdl-sub) — pattern for Astra-Deck's downloader daemon

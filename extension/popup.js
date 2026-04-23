@@ -19,6 +19,56 @@ const QUICK_TOGGLES = [
     { key: 'debugMode',              group: 'Utilities',         name: 'Debug Mode',             desc: 'Verbose console logging' },
 ];
 
+// Lucide-style 16×16 stroke icons per group. Each entry is an array of
+// SVG element specs so the popup can build them via DOM APIs (satisfies
+// MV3 CSP — no innerHTML). Paths are intentionally minimal to read at
+// tiny sizes against the darker popup surface.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const GROUP_ICONS = {
+    'Feed Cleanup': [
+        { tag: 'polygon', attrs: { points: '2 4 14 4 10 9 10 14 6 12 6 9' } },
+    ],
+    'Watch Flow': [
+        { tag: 'circle',  attrs: { cx: '8', cy: '8', r: '6' } },
+        { tag: 'polygon', attrs: { points: '7 5.5 11 8 7 10.5' } },
+    ],
+    'Playback': [
+        { tag: 'polygon', attrs: { points: '3 3 8 8 3 13' } },
+        { tag: 'polygon', attrs: { points: '8 3 13 8 8 13' } },
+    ],
+    'Focus': [
+        { tag: 'path',    attrs: { d: 'M13 9.5A5.5 5.5 0 1 1 6.5 3a4 4 0 0 0 6.5 6.5z' } },
+    ],
+    'Utilities': [
+        { tag: 'path',    attrs: { d: 'M11 2l3 3-1.5 1.5a2.5 2.5 0 0 1-3.5 0 2.5 2.5 0 0 1 0-3.5L11 2z' } },
+        { tag: 'line',    attrs: { x1: '9.5', y1: '6.5', x2: '3', y2: '13' } },
+    ],
+};
+
+function createGroupIcon(groupName) {
+    const spec = GROUP_ICONS[groupName];
+    if (!spec) return null;
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'toggle-group-icon');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.6');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const { tag, attrs } of spec) {
+        const el = document.createElementNS(SVG_NS, tag);
+        for (const [name, value] of Object.entries(attrs)) {
+            el.setAttribute(name, value);
+        }
+        svg.appendChild(el);
+    }
+    return svg;
+}
+
 const SETTINGS_STORAGE_KEY = 'ytSuiteSettings';
 const PANEL_OPEN_MESSAGE = 'YTKIT_OPEN_PANEL';
 const QUICK_TOGGLE_KEYS = QUICK_TOGGLES.map((toggle) => toggle.key);
@@ -374,20 +424,31 @@ function render(settings, filter) {
         const sectionId = `toggle-group-${groupName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
         section.setAttribute('aria-labelledby', sectionId);
 
+        const groupEnabled = groupItems.reduce((count, item) => count + (settings[item.key] ? 1 : 0), 0);
+        // Promote the group header when any of its toggles are enabled —
+        // gives the user a scannable cue about where they've customized.
+        section.dataset.active = groupEnabled > 0 ? 'true' : 'false';
+
         const groupHead = document.createElement('div');
         groupHead.className = 'toggle-group-head';
+
+        const groupTitleWrap = document.createElement('div');
+        groupTitleWrap.className = 'toggle-group-title-wrap';
+
+        const icon = createGroupIcon(groupName);
+        if (icon) groupTitleWrap.appendChild(icon);
 
         const groupTitle = document.createElement('h2');
         groupTitle.className = 'toggle-group-title';
         groupTitle.id = sectionId;
         groupTitle.textContent = groupName;
+        groupTitleWrap.appendChild(groupTitle);
 
         const groupCount = document.createElement('span');
         groupCount.className = 'toggle-group-count';
-        const groupEnabled = groupItems.reduce((count, item) => count + (settings[item.key] ? 1 : 0), 0);
-        groupCount.textContent = `${groupEnabled}/${groupItems.length} on`;
+        groupCount.textContent = `${groupEnabled}/${groupItems.length}`;
 
-        groupHead.appendChild(groupTitle);
+        groupHead.appendChild(groupTitleWrap);
         groupHead.appendChild(groupCount);
         section.appendChild(groupHead);
 

@@ -30,18 +30,81 @@
         totalBytes: 4.5 * 1024 * 1024
     });
 
+    // Lucide-style 14×14 stroke icons per group. Element specs (not strings)
+    // so the renderer can build them with DOM APIs — MV3 options page runs
+    // under `script-src 'self'` so innerHTML would trip TrustedTypes on some
+    // browsers and would require a policy dance for zero win here.
+    const SVG_NS = 'http://www.w3.org/2000/svg';
     const GROUPS = [
-        { id: 'all', label: 'All Settings' },
-        { id: 'interface', label: 'Interface' },
-        { id: 'watch', label: 'Watch Page' },
-        { id: 'player', label: 'Video Player' },
-        { id: 'comments', label: 'Comments' },
-        { id: 'chat', label: 'Live Chat' },
-        { id: 'downloads', label: 'Downloads' },
-        { id: 'content', label: 'Content Rules' },
-        { id: 'behavior', label: 'Behavior' },
-        { id: 'advanced', label: 'Advanced' }
+        { id: 'all',        label: 'All Settings',  icon: [
+            { tag: 'rect', attrs: { x: '2', y: '2',  width: '5', height: '5', rx: '1' } },
+            { tag: 'rect', attrs: { x: '9', y: '2',  width: '5', height: '5', rx: '1' } },
+            { tag: 'rect', attrs: { x: '2', y: '9',  width: '5', height: '5', rx: '1' } },
+            { tag: 'rect', attrs: { x: '9', y: '9',  width: '5', height: '5', rx: '1' } },
+        ] },
+        { id: 'interface',  label: 'Interface',     icon: [
+            { tag: 'rect', attrs: { x: '2', y: '2',  width: '12', height: '12', rx: '2' } },
+            { tag: 'line', attrs: { x1: '2', y1: '6',  x2: '14', y2: '6' } },
+            { tag: 'line', attrs: { x1: '6', y1: '6',  x2: '6',  y2: '14' } },
+        ] },
+        { id: 'watch',      label: 'Watch Page',    icon: [
+            { tag: 'rect',     attrs: { x: '2', y: '3', width: '12', height: '9', rx: '1.5' } },
+            { tag: 'polygon',  attrs: { points: '7 6 10.5 7.5 7 9' } },
+        ] },
+        { id: 'player',     label: 'Video Player',  icon: [
+            { tag: 'circle',   attrs: { cx: '8', cy: '8', r: '6' } },
+            { tag: 'polygon',  attrs: { points: '7 5.5 11 8 7 10.5' } },
+        ] },
+        { id: 'comments',   label: 'Comments',      icon: [
+            { tag: 'path',  attrs: { d: 'M3 4h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 3v-3H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z' } },
+        ] },
+        { id: 'chat',       label: 'Live Chat',     icon: [
+            { tag: 'path', attrs: { d: 'M2.5 4.5A1.5 1.5 0 0 1 4 3h8a1.5 1.5 0 0 1 1.5 1.5v5A1.5 1.5 0 0 1 12 11H7l-3 2.5V11a1.5 1.5 0 0 1-1.5-1.5v-5z' } },
+            { tag: 'line', attrs: { x1: '5.5', y1: '7',  x2: '10.5', y2: '7' } },
+        ] },
+        { id: 'downloads',  label: 'Downloads',     icon: [
+            { tag: 'line',    attrs: { x1: '8', y1: '2', x2: '8', y2: '10' } },
+            { tag: 'polyline', attrs: { points: '4.5 7 8 10.5 11.5 7' } },
+            { tag: 'line',    attrs: { x1: '2.5', y1: '13.5', x2: '13.5', y2: '13.5' } },
+        ] },
+        { id: 'content',    label: 'Content Rules', icon: [
+            { tag: 'rect', attrs: { x: '2.5', y: '2.5', width: '11', height: '11', rx: '1.5' } },
+            { tag: 'line', attrs: { x1: '5', y1: '6',  x2: '11', y2: '6' } },
+            { tag: 'line', attrs: { x1: '5', y1: '9',  x2: '11', y2: '9' } },
+            { tag: 'line', attrs: { x1: '5', y1: '12', x2: '9',  y2: '12' } },
+        ] },
+        { id: 'behavior',   label: 'Behavior',      icon: [
+            { tag: 'path',   attrs: { d: 'M3 10.5a5 5 0 1 0 5-8.5' } },
+            { tag: 'polyline', attrs: { points: '5 2 8 2 8 5' } },
+        ] },
+        { id: 'advanced',   label: 'Advanced',      icon: [
+            { tag: 'circle', attrs: { cx: '8', cy: '8', r: '2.4' } },
+            { tag: 'path',   attrs: { d: 'M8 1.5v2.2M8 12.3v2.2M1.5 8h2.2M12.3 8h2.2M3.3 3.3l1.55 1.55M11.15 11.15l1.55 1.55M3.3 12.7l1.55-1.55M11.15 4.85l1.55-1.55' } },
+        ] },
     ];
+
+    function createGroupIcon(spec) {
+        if (!Array.isArray(spec) || spec.length === 0) return null;
+        const svg = document.createElementNS(SVG_NS, 'svg');
+        svg.setAttribute('class', 'settings-group-icon');
+        svg.setAttribute('viewBox', '0 0 16 16');
+        svg.setAttribute('width', '14');
+        svg.setAttribute('height', '14');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '1.55');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        for (const { tag, attrs } of spec) {
+            const el = document.createElementNS(SVG_NS, tag);
+            for (const [name, value] of Object.entries(attrs)) {
+                el.setAttribute(name, value);
+            }
+            svg.appendChild(el);
+        }
+        return svg;
+    }
 
     const manifest = chrome.runtime.getManifest();
     const elements = {
@@ -1105,14 +1168,22 @@
                 button.removeAttribute('aria-current');
             }
 
+            const leading = document.createElement('span');
+            leading.className = 'settings-group-button-lead';
+
+            const icon = createGroupIcon(group.icon);
+            if (icon) leading.appendChild(icon);
+
             const label = document.createElement('span');
+            label.className = 'settings-group-button-label';
             label.textContent = group.label;
+            leading.appendChild(label);
 
             const count = document.createElement('span');
             count.className = 'settings-group-count';
             count.textContent = String(counts.get(group.id) || 0);
 
-            button.appendChild(label);
+            button.appendChild(leading);
             button.appendChild(count);
             button.addEventListener('click', () => {
                 state.activeGroup = group.id;

@@ -12,6 +12,14 @@
     let storageChangeListenerInstalled = false;
     let storageFlushGuardsInstalled = false;
     const STORAGE_WRITE_DEBOUNCE_MS = 140;
+    // Exponential backoff on persistent storage failures (e.g. QUOTA_BYTES
+    // exceeded, corrupted profile). Without a backoff, a single quota error
+    // would retry every 140 ms forever, saturating the SW IPC channel and
+    // flooding the console.
+    const STORAGE_FLUSH_MIN_BACKOFF_MS = 500;
+    const STORAGE_FLUSH_MAX_BACKOFF_MS = 60000;
+    let storageFlushBackoffMs = 0;
+    let storageFlushFailureCount = 0;
 
     function emitStorageUpdate(changes, source = 'chrome-storage') {
         try {
@@ -55,10 +63,11 @@
 
     function schedulePendingStorageFlush() {
         if (pendingStorageFlush || !core.hasExtensionContext() || !hasPendingStorageWrites()) return;
+        const delay = Math.max(STORAGE_WRITE_DEBOUNCE_MS, storageFlushBackoffMs);
         pendingStorageFlush = setTimeout(() => {
             pendingStorageFlush = null;
             void flushPendingStorageWrites();
-        }, STORAGE_WRITE_DEBOUNCE_MS);
+        }, delay);
     }
 
     function flushPendingStorageWrites() {
@@ -73,7 +82,12 @@
         const writes = pendingStorageWrites;
         pendingStorageWrites = Object.create(null);
 
-        return chrome.storage.local.set(writes).catch((error) => {
+        return chrome.storage.local.set(writes).then(() => {
+            // Success — clear any backoff so the next flush runs on the
+            // normal debounce schedule instead of the failure cadence.
+            storageFlushBackoffMs = 0;
+            storageFlushFailureCount = 0;
+        }).catch((error) => {
             console.warn('[YTKit] Storage flush failed:', error);
             // Merge back onto a prototype-less target so retries cannot
             // inherit Object.prototype entries. Newer pending writes that
@@ -83,6 +97,13 @@
             Object.assign(merged, writes);
             Object.assign(merged, pendingStorageWrites);
             pendingStorageWrites = merged;
+            // Exponential backoff so persistent failures (QUOTA_BYTES,
+            // corrupted profile) do not retry every 140 ms forever.
+            storageFlushFailureCount += 1;
+            storageFlushBackoffMs = Math.min(
+                STORAGE_FLUSH_MAX_BACKOFF_MS,
+                STORAGE_FLUSH_MIN_BACKOFF_MS * Math.pow(2, Math.min(storageFlushFailureCount - 1, 8))
+            );
             schedulePendingStorageFlush();
         });
     }

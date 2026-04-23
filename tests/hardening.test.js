@@ -416,3 +416,101 @@ test('remainingTimeDisplay + showTimeInTabTitle use timeupdate, not setInterval'
     assert.match(titleBlock, /addEventListener\('timeupdate'/,
         'showTimeInTabTitle must bind to the video `timeupdate` event');
 });
+
+// ── Audit pass: EXT_FETCH SSRF post-redirect validation ──
+
+test('EXT_FETCH rejects responses whose final URL escapes the origin allowlist', () => {
+    // A 30x from an allowed origin (e.g. api.openai.com) to an internal IP
+    // would otherwise smuggle an arbitrary host into the response because
+    // fetch() defaults to `redirect: 'follow'`. The guard must re-check
+    // `resp.url` against isUrlAllowed before the body is streamed back.
+    assert.match(
+        backgroundSource,
+        /resp\.url\s*!==\s*url\s*&&\s*!isUrlAllowed\(resp\.url\)/,
+        'background.js must re-check the post-redirect URL against the allowlist'
+    );
+    assert.match(
+        backgroundSource,
+        /Response URL not in allowlist after redirect/,
+        'Rejection must carry a descriptive error so callers can surface it'
+    );
+});
+
+// ── Audit pass: storage write backoff prevents retry storms ──
+
+test('core/storage.js applies exponential backoff on persistent write failures', () => {
+    const storageSource = fs.readFileSync(
+        path.join(__dirname, '..', 'extension', 'core', 'storage.js'),
+        'utf8'
+    );
+    // Without a backoff, a QUOTA_BYTES failure would retry every 140ms
+    // forever, saturating the SW IPC channel and flooding the console.
+    assert.match(
+        storageSource,
+        /storageFlushBackoffMs/,
+        'Storage flush must track a backoff value on failure'
+    );
+    assert.match(
+        storageSource,
+        /storageFlushFailureCount/,
+        'Storage flush must track consecutive failure count for backoff'
+    );
+    assert.match(
+        storageSource,
+        /STORAGE_FLUSH_MAX_BACKOFF_MS/,
+        'Storage flush must cap the backoff so it cannot diverge'
+    );
+    // Success path must reset the backoff — a sticky backoff would keep
+    // penalising writes long after the transient error cleared.
+    const flushFn = storageSource.slice(
+        storageSource.indexOf('function flushPendingStorageWrites')
+    );
+    const successBody = flushFn.slice(0, flushFn.indexOf('.catch('));
+    assert.match(
+        successBody,
+        /storageFlushBackoffMs\s*=\s*0/,
+        'Success path must reset backoff'
+    );
+    assert.match(
+        successBody,
+        /storageFlushFailureCount\s*=\s*0/,
+        'Success path must reset failure count'
+    );
+});
+
+// ── Audit pass: download progress poll is resilient and non-overlapping ──
+
+test('showDownloadProgress uses self-scheduling poll with consecutive-error budget', () => {
+    const progressStart = ytkitSource.indexOf('function showDownloadProgress(');
+    assert.ok(progressStart > -1, 'showDownloadProgress must exist');
+    // Grab from the function start up to the matching `}` — the function is
+    // ~14 KB with all the DOM scaffolding so this generous capture covers
+    // the whole poll loop without overshooting into neighbours.
+    const progressBody = ytkitSource.slice(progressStart, progressStart + 16000);
+
+    // setInterval would allow a slow poll to overlap itself, doubling load
+    // on the downloader when yt-dlp is busy merging or extracting audio.
+    assert.doesNotMatch(
+        progressBody,
+        /setInterval\s*\(\s*poll/,
+        'showDownloadProgress must not drive its poll loop with setInterval'
+    );
+    // Tolerate a small streak of transient failures before tearing down the
+    // panel so a single network blip doesn't kill an otherwise healthy
+    // download.
+    assert.match(
+        progressBody,
+        /consecutiveErrors/,
+        'Poll loop must track consecutive errors for graceful retry'
+    );
+    assert.match(
+        progressBody,
+        /MAX_CONSECUTIVE_ERRORS/,
+        'Poll loop must cap consecutive errors before giving up'
+    );
+    assert.match(
+        progressBody,
+        /pollTimer\s*=\s*setTimeout\(poll/,
+        'Poll loop must reschedule itself with setTimeout, not setInterval'
+    );
+});

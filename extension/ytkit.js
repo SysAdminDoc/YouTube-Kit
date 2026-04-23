@@ -1574,16 +1574,18 @@ return response;
             gap: 12px;
             width: min(620px, calc(100vw - 24px));
             min-height: 56px;
-            padding: 12px 14px;
+            padding: 12px 14px 12px 16px;
             border-radius: 16px;
-            border: 1px solid rgba(var(--ytkit-toast-rgb, 34,197,94),0.24);
+            border: 1px solid rgba(var(--ytkit-toast-rgb, 53,199,127),0.26);
             background:
-                radial-gradient(circle at top right, rgba(var(--ytkit-toast-rgb, 34,197,94),0.18), transparent 42%),
+                radial-gradient(circle at top right, rgba(var(--ytkit-toast-rgb, 53,199,127),0.18), transparent 42%),
                 linear-gradient(180deg, rgba(18,24,34,0.98), rgba(8,11,16,0.98));
             color: #fff;
             font-family: var(--ytkit-font, "Segoe UI", "SF Pro Text", "Helvetica Neue", Arial, sans-serif);
             z-index: var(--ytkit-toast-z, 2147483646);
-            box-shadow: 0 22px 48px rgba(0,0,0,0.34);
+            box-shadow:
+                0 22px 48px rgba(0,0,0,0.38),
+                inset 0 1px 0 rgba(255,255,255,0.045);
             opacity: 0;
             pointer-events: none;
             overscroll-behavior: contain;
@@ -1600,29 +1602,48 @@ return response;
         }
 
         .ytkit-global-toast[data-tone="error"] {
-            box-shadow: 0 22px 52px rgba(120, 20, 20, 0.28);
+            box-shadow:
+                0 22px 52px rgba(120, 20, 20, 0.28),
+                inset 0 1px 0 rgba(255,255,255,0.045);
         }
 
         .ytkit-global-toast[data-tone="warning"] {
-            box-shadow: 0 22px 52px rgba(120, 72, 20, 0.24);
+            box-shadow:
+                0 22px 52px rgba(120, 72, 20, 0.24),
+                inset 0 1px 0 rgba(255,255,255,0.045);
         }
 
         .ytkit-toast-badge {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            min-width: 74px;
+            gap: 6px;
+            min-width: 78px;
             min-height: 28px;
-            padding: 0 10px;
+            padding: 0 11px;
             border-radius: 999px;
-            border: 1px solid rgba(var(--ytkit-toast-rgb, 34,197,94),0.24);
-            background: rgba(var(--ytkit-toast-rgb, 34,197,94),0.14);
+            border: 1px solid rgba(var(--ytkit-toast-rgb, 53,199,127),0.26);
+            background: rgba(var(--ytkit-toast-rgb, 53,199,127),0.14);
             color: rgba(255,255,255,0.96);
             font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
+            font-weight: 800;
+            letter-spacing: 0.1em;
             text-transform: uppercase;
             white-space: nowrap;
+            line-height: 1;
+        }
+
+        /* Leading tone dot so the badge reads at a glance even for users
+           who aren't color-sensitive. Lives on the badge text's left side
+           via ::before so it never collides with action buttons. */
+        .ytkit-toast-badge::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: rgba(var(--ytkit-toast-rgb, 53,199,127), 1);
+            box-shadow: 0 0 0 3px rgba(var(--ytkit-toast-rgb, 53,199,127), 0.22);
+            flex-shrink: 0;
         }
 
         .ytkit-toast-body {
@@ -1741,13 +1762,17 @@ return response;
         return 'success';
     }
 
+    // Toast tone → RGB. Values are the product's brand palette (popup.css
+    // + options.html tokens) so toasts, banners, pills, and cards all share
+    // the same semantic color language. Previously these were Tailwind
+    // defaults which drifted from the rest of the UI.
     function getToastRgb(tone) {
         switch (tone) {
-            case 'error': return '239,68,68';
-            case 'warning': return '245,158,11';
-            case 'info': return '59,130,246';
-            case 'neutral': return '107,114,128';
-            default: return '34,197,94';
+            case 'error':   return '255,116,128'; // --error  #ff7480
+            case 'warning': return '255,190,122'; // --warning #ffbe7a
+            case 'info':    return '106,169,255'; // --info   #6aa9ff
+            case 'neutral': return '139,151,171'; // --text-muted
+            default:        return '53,199,127';  // --success #35c77f
         }
     }
 
@@ -2009,17 +2034,37 @@ return response;
         panel.appendChild(actions);
         document.body.appendChild(panel);
 
-        let pollInterval = null;
+        // Self-scheduling poll loop (setTimeout chain) prevents overlap when a
+        // single poll exceeds the poll interval — setInterval would have fired
+        // a second poll while the first was still awaiting, doubling load on
+        // the local downloader. `stopped` is an explicit kill switch so error
+        // branches, success branches, and the close button all short-circuit
+        // future work.
+        let pollTimer = null;
+        let stopped = false;
+        // Transient errors (server doing heavy CPU work, yt-dlp brief stall,
+        // quick network blip) previously tore down the progress UI on the very
+        // first failure. Tolerate a small streak before declaring the download
+        // disconnected so real downloads don't disappear on a momentary hiccup.
+        let consecutiveErrors = 0;
+        const MAX_CONSECUTIVE_ERRORS = 5;
+
+        const stopPolling = () => {
+            stopped = true;
+            if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+        };
+
         closeBtn.addEventListener('click', () => {
             // Stop polling immediately when the user closes the panel so we
-            // don't keep hitting the local downloader every second for a UI
-            // that is already gone.
-            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+            // don't keep hitting the local downloader for a UI that is gone.
+            stopPolling();
             panel.remove();
         });
 
         async function poll() {
-            if (!panel.isConnected) { clearInterval(pollInterval); return; }
+            pollTimer = null;
+            if (stopped) return;
+            if (!panel.isConnected) { stopPolling(); return; }
             try {
                 const { data } = await extensionFetchJson({
                     method: 'GET',
@@ -2027,7 +2072,8 @@ return response;
                     headers: { 'X-Auth-Token': token },
                     timeout: 3000
                 });
-                if (!fill.isConnected) { clearInterval(pollInterval); return; }
+                if (stopped || !fill.isConnected) { stopPolling(); return; }
+                consecutiveErrors = 0;
 
                 if (data.title) title.textContent = data.title;
                 const p = Math.min(data.progress || 0, 100);
@@ -2044,7 +2090,7 @@ return response;
                 );
 
                 if (data.status === 'done' || data.status === 'complete') {
-                    clearInterval(pollInterval);
+                    stopPolling();
                     fill.style.width = '100%';
                     fill.classList.remove('is-error');
                     fill.classList.add('is-success');
@@ -2053,8 +2099,10 @@ return response;
                     eta.textContent = 'Ready';
                     setProgressState('success', 'Complete', 'The local downloader finished successfully.');
                     setTimeout(() => panel.remove(), 4000);
-                } else if (data.status === 'error' || data.status === 'failed' || data.status === 'cancelled') {
-                    clearInterval(pollInterval);
+                    return;
+                }
+                if (data.status === 'error' || data.status === 'failed' || data.status === 'cancelled') {
+                    stopPolling();
                     const failureReason = data.error || 'Local downloader failed';
                     fill.classList.remove('is-success');
                     fill.classList.add('is-error');
@@ -2068,23 +2116,40 @@ return response;
                     if (needsRepair) {
                         MediaDLManager.showInstallPrompt('retry');
                     }
+                    return;
                 }
             } catch (err) {
-                DebugManager.log('Download', 'Poll failed: ' + err.message);
-                clearInterval(pollInterval);
-                // Show error state on the progress panel so user knows the download died
-                fill.classList.remove('is-success');
-                fill.classList.add('is-error');
-                title.textContent = 'Connection to downloader lost';
-                pct.textContent = 'Error';
-                spd.textContent = '';
-                eta.textContent = '';
-                setProgressState('error', 'Connection Lost', 'Astra Deck lost contact with the local downloader. Choose Repair downloader to recover.', true);
-                showToast('Lost contact with the local downloader.', '#ef4444', { duration: 5 });
+                consecutiveErrors += 1;
+                DebugManager.log(
+                    'Download',
+                    `Poll failed (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${err.message}`
+                );
+                if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                    stopPolling();
+                    fill.classList.remove('is-success');
+                    fill.classList.add('is-error');
+                    title.textContent = 'Connection to downloader lost';
+                    pct.textContent = 'Error';
+                    spd.textContent = '';
+                    eta.textContent = '';
+                    setProgressState('error', 'Connection Lost', 'Astra Deck lost contact with the local downloader. Choose Repair downloader to recover.', true);
+                    showToast('Lost contact with the local downloader.', '#ef4444', { duration: 5 });
+                    return;
+                }
+                // Transient error — surface a gentle status update but keep polling.
+                setProgressState(
+                    'active',
+                    'Reconnecting',
+                    'Momentary hiccup with the local downloader — retrying automatically.'
+                );
+            }
+            if (!stopped && panel.isConnected) {
+                // Slight backoff on errors so we don't hammer a struggling server.
+                const nextDelay = consecutiveErrors > 0 ? 1500 : 750;
+                pollTimer = setTimeout(poll, nextDelay);
             }
         }
 
-        pollInterval = setInterval(poll, 750);
         poll();
     }
 
@@ -31062,77 +31127,110 @@ body.ytkit-panel-open #ytkit-settings-panel {
             position: fixed;
             right: 18px;
             bottom: 78px;
-            width: min(372px, calc(100vw - 20px));
-            padding: 16px;
+            width: min(380px, calc(100vw - 20px));
+            padding: 18px;
             border-radius: 18px;
             border: 1px solid rgba(255,255,255,0.08);
             background:
                 radial-gradient(circle at top right, rgba(var(--ytkit-accent-rgb),0.14), transparent 42%),
                 linear-gradient(180deg, rgba(20,25,34,0.98), rgba(9,12,18,0.98));
             color: rgba(255,255,255,0.94);
-            box-shadow: 0 28px 60px rgba(0,0,0,0.42);
+            box-shadow:
+                0 28px 60px rgba(0,0,0,0.42),
+                inset 0 1px 0 rgba(255,255,255,0.05);
             z-index: 2147483647;
             animation: ytkit-slide-in 320ms var(--ytkit-ease-out);
             overscroll-behavior: contain;
         }
 
         #ytkit-mediadl-install-prompt[data-state="warning"] {
-            border-color: rgba(245,158,11,0.2);
+            border-color: rgba(245,158,11,0.22);
             background:
-                radial-gradient(circle at top right, rgba(245,158,11,0.15), transparent 42%),
+                radial-gradient(circle at top right, rgba(245,158,11,0.16), transparent 42%),
                 linear-gradient(180deg, rgba(22,24,32,0.98), rgba(11,12,18,0.98));
         }
 
         #ytkit-mediadl-install-prompt[data-state="success"] {
-            border-color: rgba(34,197,94,0.22);
+            border-color: rgba(53,199,127,0.26);
             background:
-                radial-gradient(circle at top right, rgba(34,197,94,0.16), transparent 42%),
+                radial-gradient(circle at top right, rgba(53,199,127,0.16), transparent 42%),
                 linear-gradient(180deg, rgba(17,25,22,0.98), rgba(8,12,10,0.98));
         }
 
         #ytkit-mediadl-install-prompt[data-state="error"] {
-            border-color: rgba(239,68,68,0.24);
+            border-color: rgba(255,116,128,0.26);
             background:
-                radial-gradient(circle at top right, rgba(239,68,68,0.16), transparent 42%),
+                radial-gradient(circle at top right, rgba(255,116,128,0.16), transparent 42%),
                 linear-gradient(180deg, rgba(27,19,24,0.98), rgba(13,9,12,0.98));
         }
 
         .ytkit-install-prompt__header {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: space-between;
             gap: 12px;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
 
         .ytkit-install-prompt__heading {
             min-width: 0;
             display: grid;
-            gap: 4px;
+            gap: 6px;
         }
 
         .ytkit-install-prompt__eyebrow {
             display: inline-flex;
             align-items: center;
+            gap: 7px;
             width: fit-content;
             min-height: 22px;
-            padding: 0 8px;
+            padding: 0 9px;
             border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.08);
-            background: rgba(255,255,255,0.05);
-            color: rgba(255,255,255,0.62);
+            border: 1px solid rgba(255,107,74,0.22);
+            background: rgba(255,107,74,0.08);
+            color: #ffb59f;
             font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 0.06em;
+            font-weight: 800;
+            letter-spacing: 0.12em;
             text-transform: uppercase;
+            line-height: 1;
+        }
+
+        .ytkit-install-prompt__eyebrow::before {
+            content: "";
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 0 3px rgba(255,107,74,0.18);
+            opacity: 0.85;
+        }
+
+        #ytkit-mediadl-install-prompt[data-state="warning"] .ytkit-install-prompt__eyebrow {
+            border-color: rgba(245,158,11,0.28);
+            background: rgba(245,158,11,0.1);
+            color: #ffd69a;
+        }
+
+        #ytkit-mediadl-install-prompt[data-state="success"] .ytkit-install-prompt__eyebrow {
+            border-color: rgba(53,199,127,0.3);
+            background: rgba(53,199,127,0.1);
+            color: #b8f5d5;
+        }
+
+        #ytkit-mediadl-install-prompt[data-state="error"] .ytkit-install-prompt__eyebrow {
+            border-color: rgba(255,116,128,0.3);
+            background: rgba(255,116,128,0.1);
+            color: #ffd4d9;
         }
 
         .ytkit-install-prompt__title {
-            font-size: 14px;
-            font-weight: 700;
-            letter-spacing: -0.01em;
-            color: rgba(226,255,236,0.96);
+            font-size: 15px;
+            font-weight: 800;
+            letter-spacing: -0.025em;
+            color: #f4f6fb;
             text-wrap: balance;
+            line-height: 1.2;
         }
 
         .ytkit-install-prompt__close {
@@ -31286,36 +31384,73 @@ body.ytkit-panel-open #ytkit-settings-panel {
             cursor: wait;
         }
 
+        /* Primary = "Start service" / retry — subtle brand-accented button,
+           still a ghost-with-color so the Accent (main recommended action)
+           can carry the glossy flame CTA treatment below. */
         .ytkit-install-prompt__btn--primary {
-            background: rgba(59,130,246,0.18);
-            border-color: rgba(59,130,246,0.3);
-            color: #fff;
+            background: rgba(255,107,74,0.14);
+            border-color: rgba(255,107,74,0.3);
+            color: #ffd8cc;
         }
 
         .ytkit-install-prompt__btn--primary:hover {
-            background: rgba(59,130,246,0.24);
-            border-color: rgba(59,130,246,0.38);
+            background: rgba(255,107,74,0.2);
+            border-color: rgba(255,107,74,0.4);
+            color: #ffe5db;
         }
 
+        /* Accent = "Download setup" — the recommended path, so it gets the
+           same tactile primary treatment as the popup footer CTA and
+           options.cta-button. */
         .ytkit-install-prompt__btn--accent {
-            background: rgba(34,197,94,0.16);
-            border-color: rgba(34,197,94,0.28);
-            color: #f4fff7;
+            position: relative;
+            background: linear-gradient(135deg, #ff8a64 0%, #ff5f4a 100%);
+            border-color: rgba(255,130,100,0.5);
+            color: #1a0b06;
+            font-weight: 800;
+            box-shadow:
+                0 8px 22px rgba(255,95,74,0.22),
+                inset 0 1px 0 rgba(255,255,255,0.25);
+            overflow: hidden;
+        }
+
+        .ytkit-install-prompt__btn--accent::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(180deg, rgba(255,255,255,0.25), transparent 55%);
+            pointer-events: none;
+            mix-blend-mode: overlay;
+            opacity: 0.9;
         }
 
         .ytkit-install-prompt__btn--accent:hover {
-            background: rgba(34,197,94,0.22);
-            border-color: rgba(34,197,94,0.34);
+            box-shadow:
+                0 10px 26px rgba(255,95,74,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.3);
+            border-color: rgba(255,160,135,0.6);
+        }
+
+        .ytkit-install-prompt__btn--accent:active:not(:disabled) {
+            box-shadow:
+                0 4px 10px rgba(255,95,74,0.2),
+                inset 0 1px 0 rgba(255,255,255,0.18);
+        }
+
+        .ytkit-install-prompt__btn--accent .ytkit-install-prompt__btn-meta {
+            color: rgba(26,11,6,0.62);
+            font-weight: 600;
         }
 
         .ytkit-install-prompt__btn--ghost {
-            color: rgba(255,255,255,0.7);
+            color: rgba(255,255,255,0.74);
         }
 
         .ytkit-install-prompt__btn--quiet {
             justify-content: center;
             min-height: 34px;
-            color: rgba(255,255,255,0.46);
+            color: rgba(255,255,255,0.5);
             background: transparent;
             border-color: transparent;
             align-items: center;
@@ -31325,23 +31460,25 @@ body.ytkit-panel-open #ytkit-settings-panel {
         .ytkit-install-prompt__btn--quiet:hover {
             background: rgba(255,255,255,0.04);
             border-color: rgba(255,255,255,0.08);
-            color: rgba(255,255,255,0.72);
+            color: rgba(255,255,255,0.76);
         }
 
         .ytkit-install-prompt__btn--quiet .ytkit-install-prompt__btn-meta {
             display: none;
         }
 
+        /* Feedback states — brand-aligned success/danger tint, replacing
+           the legacy SponsorBlock green / destructive red. */
         .ytkit-install-prompt__btn.is-success {
-            background: rgba(22,163,74,0.18);
-            border-color: rgba(34,197,94,0.3);
-            color: #f4fff7;
+            background: rgba(53,199,127,0.14);
+            border-color: rgba(53,199,127,0.32);
+            color: #d7ffe8;
         }
 
         .ytkit-install-prompt__btn.is-danger {
-            background: rgba(239,68,68,0.16);
-            border-color: rgba(239,68,68,0.28);
-            color: #fff;
+            background: rgba(255,116,128,0.14);
+            border-color: rgba(255,116,128,0.3);
+            color: #ffdde0;
         }
 
         .ytkit-dl-progress {
@@ -31475,9 +31612,12 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
         .ytkit-dl-progress__bar {
             height: 7px;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
             border-radius: 999px;
-            background: rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.06);
+            box-shadow:
+                inset 0 1px 1px rgba(0,0,0,0.3),
+                inset 0 0 0 1px rgba(255,255,255,0.03);
             overflow: hidden;
         }
 
@@ -31543,13 +31683,14 @@ body.ytkit-panel-open #ytkit-settings-panel {
             display: inline-flex;
             align-items: center;
             min-height: 24px;
-            padding: 0 8px;
+            padding: 0 9px;
             border-radius: 999px;
             border: 1px solid rgba(255,255,255,0.08);
             background: rgba(255,255,255,0.04);
-            color: rgba(255,255,255,0.62);
+            color: rgba(255,255,255,0.72);
             font-size: 11px;
-            font-weight: 600;
+            font-weight: 700;
+            letter-spacing: 0.01em;
             font-variant-numeric: tabular-nums;
         }
 
@@ -31596,30 +31737,36 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
         .ytkit-dl-popup {
             position: fixed;
-            width: 320px;
+            width: 330px;
             padding: 0;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.1);
-            background: linear-gradient(180deg, rgba(18,22,30,0.98), rgba(10,13,18,0.98));
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background:
+                radial-gradient(90% 60% at 0% 0%, rgba(255,107,74,0.06), transparent 55%),
+                linear-gradient(180deg, rgba(18,22,30,0.98), rgba(10,13,18,0.98));
             color: rgba(255,255,255,0.94);
-            box-shadow: 0 24px 48px rgba(0,0,0,0.45);
+            box-shadow:
+                0 28px 56px rgba(0,0,0,0.45),
+                inset 0 1px 0 rgba(255,255,255,0.045);
             z-index: 2147483647;
-            animation: ytkit-slide-in 200ms var(--ytkit-ease-out);
+            animation: ytkit-slide-in 220ms var(--ytkit-ease-out);
             overflow: hidden;
             backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
         }
 
         .ytkit-dl-popup__header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 12px 14px 0;
+            padding: 14px 16px 0;
         }
 
         .ytkit-dl-popup__title {
             font-size: 14px;
             font-weight: 700;
-            color: rgba(255,255,255,0.94);
+            letter-spacing: -0.02em;
+            color: rgba(255,255,255,0.96);
         }
 
         .ytkit-dl-popup__close {
@@ -31634,30 +31781,35 @@ body.ytkit-panel-open #ytkit-settings-panel {
             border-radius: 999px;
             border: 1px solid rgba(255,255,255,0.08);
             background: rgba(255,255,255,0.04);
-            color: rgba(255,255,255,0.6);
+            color: rgba(255,255,255,0.64);
             cursor: pointer;
-            transition: background 150ms, color 150ms;
+            transition:
+                background-color 160ms var(--ytkit-ease-out),
+                border-color 160ms var(--ytkit-ease-out),
+                color 160ms var(--ytkit-ease-out);
             outline: none;
         }
 
         .ytkit-dl-popup__close:hover {
             background: rgba(255,255,255,0.08);
+            border-color: rgba(255,255,255,0.14);
             color: #fff;
         }
 
+        /* Brand-aligned focus ring (was SponsorBlock green). */
         .ytkit-dl-popup__close:focus-visible,
         .ytkit-dl-popup__tab:focus-visible,
         .ytkit-dl-popup__chip:focus-visible,
         .ytkit-dl-popup__dir-btn:focus-visible,
         .ytkit-dl-popup__go:focus-visible {
-            box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(34,197,94,0.22);
+            box-shadow: 0 0 0 2px rgba(8,11,16,0.92), 0 0 0 4px rgba(255,107,74,0.5);
         }
 
         .ytkit-dl-popup__tabs {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 4px;
-            padding: 10px 14px 0;
+            gap: 6px;
+            padding: 12px 16px 0;
         }
 
         .ytkit-dl-popup__tab {
@@ -31665,169 +31817,219 @@ body.ytkit-panel-open #ytkit-settings-panel {
             -webkit-appearance: none;
             min-height: 34px;
             padding: 7px 0;
-            border-radius: 8px;
+            border-radius: 9px;
             border: 1px solid rgba(255,255,255,0.06);
             background: rgba(255,255,255,0.03);
-            color: rgba(255,255,255,0.5);
+            color: rgba(255,255,255,0.55);
             font-size: 12px;
-            font-weight: 600;
+            font-weight: 650;
+            letter-spacing: -0.005em;
             cursor: pointer;
-            transition: background 150ms, color 150ms, border-color 150ms;
+            transition:
+                background-color 160ms var(--ytkit-ease-out),
+                color 160ms var(--ytkit-ease-out),
+                border-color 160ms var(--ytkit-ease-out);
             outline: none;
             touch-action: manipulation;
         }
 
         .ytkit-dl-popup__tab:hover {
             background: rgba(255,255,255,0.06);
-            color: rgba(255,255,255,0.7);
+            color: rgba(255,255,255,0.76);
         }
 
         .ytkit-dl-popup__tab.is-active,
         .ytkit-dl-popup__tab[aria-selected="true"] {
-            background: rgba(34,197,94,0.14);
-            border-color: rgba(34,197,94,0.28);
-            color: #4ade80;
+            background:
+                linear-gradient(135deg, rgba(255,107,74,0.14), rgba(255,107,74,0.05) 70%),
+                rgba(255,255,255,0.03);
+            border-color: rgba(255,107,74,0.32);
+            color: #ffd8cc;
         }
 
         .ytkit-dl-popup__body {
-            padding: 12px 14px 6px;
+            padding: 14px 16px 8px;
             display: grid;
-            gap: 12px;
+            gap: 14px;
         }
 
         .ytkit-dl-popup__row {
             display: grid;
-            gap: 6px;
+            gap: 7px;
         }
 
         .ytkit-dl-popup__label {
             font-size: 10px;
-            font-weight: 700;
+            font-weight: 800;
             text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: rgba(255,255,255,0.45);
+            letter-spacing: 0.1em;
+            color: rgba(255,255,255,0.5);
+            line-height: 1;
         }
 
         .ytkit-dl-popup__chips {
             display: flex;
             flex-wrap: wrap;
-            gap: 5px;
+            gap: 6px;
         }
 
         .ytkit-dl-popup__chip {
             appearance: none;
             -webkit-appearance: none;
             min-height: 30px;
-            padding: 5px 10px;
-            border-radius: 7px;
+            padding: 5px 11px;
+            border-radius: 8px;
             border: 1px solid rgba(255,255,255,0.08);
             background: rgba(255,255,255,0.04);
-            color: rgba(255,255,255,0.6);
-            font-size: 11px;
-            font-weight: 600;
+            color: rgba(255,255,255,0.7);
+            font-size: 11.5px;
+            font-weight: 650;
+            letter-spacing: -0.005em;
             cursor: pointer;
-            transition: background 150ms, color 150ms, border-color 150ms;
+            transition:
+                background-color 160ms var(--ytkit-ease-out),
+                color 160ms var(--ytkit-ease-out),
+                border-color 160ms var(--ytkit-ease-out);
             outline: none;
             touch-action: manipulation;
         }
 
         .ytkit-dl-popup__chip:hover {
             background: rgba(255,255,255,0.08);
-            color: rgba(255,255,255,0.8);
+            color: rgba(255,255,255,0.9);
+            border-color: rgba(255,255,255,0.14);
         }
 
         .ytkit-dl-popup__chip.is-active,
         .ytkit-dl-popup__chip[aria-pressed="true"] {
-            background: rgba(34,197,94,0.16);
-            border-color: rgba(34,197,94,0.32);
-            color: #4ade80;
+            background:
+                linear-gradient(135deg, rgba(255,107,74,0.18), rgba(255,107,74,0.06) 70%),
+                rgba(255,255,255,0.03);
+            border-color: rgba(255,107,74,0.36);
+            color: #ffd8cc;
         }
 
         .ytkit-dl-popup__dir-wrap {
             display: flex;
             align-items: center;
             gap: 8px;
-            min-height: 30px;
+            min-height: 32px;
         }
 
         .ytkit-dl-popup__dir-path {
             flex: 1;
             min-width: 0;
-            font-size: 11px;
-            color: rgba(255,255,255,0.55);
+            font-size: 11.5px;
+            color: rgba(255,255,255,0.62);
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            font-family: "SF Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
         }
 
         .ytkit-dl-popup__dir-input {
             flex: 1;
             min-width: 0;
-            padding: 5px 8px;
-            border-radius: 6px;
+            padding: 6px 10px;
+            border-radius: 7px;
             border: 1px solid rgba(255,255,255,0.12);
-            background: rgba(255,255,255,0.04);
-            color: rgba(255,255,255,0.9);
-            font-size: 11px;
-            font-family: var(--ytkit-font);
+            background: rgba(6,9,13,0.7);
+            color: rgba(255,255,255,0.92);
+            font-size: 11.5px;
+            font-family: "SF Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
+            box-shadow: inset 0 1px 0 rgba(0,0,0,0.2);
             outline: none;
+            transition: border-color 160ms var(--ytkit-ease-out),
+                        box-shadow 160ms var(--ytkit-ease-out);
         }
 
         .ytkit-dl-popup__dir-input:focus,
         .ytkit-dl-popup__dir-input:focus-visible {
-            border-color: rgba(34,197,94,0.4);
-            box-shadow: 0 0 0 3px rgba(34,197,94,0.14);
+            border-color: rgba(255,107,74,0.4);
+            box-shadow: inset 0 1px 0 rgba(0,0,0,0.2),
+                        0 0 0 3px rgba(255,107,74,0.14);
         }
 
         .ytkit-dl-popup__dir-btn {
             appearance: none;
             -webkit-appearance: none;
-            padding: 4px 10px;
-            border-radius: 6px;
+            padding: 4px 11px;
+            border-radius: 7px;
             border: 1px solid rgba(255,255,255,0.1);
             background: rgba(255,255,255,0.04);
-            color: rgba(255,255,255,0.6);
-            font-size: 10px;
-            font-weight: 600;
+            color: rgba(255,255,255,0.66);
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
             cursor: pointer;
             flex-shrink: 0;
-            transition: background 150ms, color 150ms;
+            transition:
+                background-color 160ms var(--ytkit-ease-out),
+                color 160ms var(--ytkit-ease-out),
+                border-color 160ms var(--ytkit-ease-out);
             outline: none;
             touch-action: manipulation;
         }
 
         .ytkit-dl-popup__dir-btn:hover {
             background: rgba(255,255,255,0.08);
-            color: rgba(255,255,255,0.8);
+            color: rgba(255,255,255,0.88);
+            border-color: rgba(255,255,255,0.18);
         }
 
         .ytkit-dl-popup__footer {
-            padding: 8px 14px 12px;
+            padding: 10px 16px 14px;
         }
 
         .ytkit-dl-popup__go {
             appearance: none;
             -webkit-appearance: none;
+            position: relative;
             width: 100%;
-            padding: 10px 0;
-            border-radius: 10px;
-            border: none;
-            background: linear-gradient(135deg, #22c55e, #16a34a);
-            color: #fff;
+            padding: 11px 0;
+            border-radius: 11px;
+            border: 1px solid rgba(255,130,100,0.5);
+            background: linear-gradient(135deg, #ff8a64 0%, #ff5f4a 100%);
+            color: #1a0b06;
             font-size: 13px;
-            font-weight: 700;
+            font-weight: 800;
+            letter-spacing: -0.015em;
             cursor: pointer;
-            transition: filter 150ms, transform 150ms;
+            box-shadow:
+                0 8px 22px rgba(255, 95, 74, 0.22),
+                inset 0 1px 0 rgba(255, 255, 255, 0.25);
+            transition:
+                box-shadow 200ms var(--ytkit-ease-out),
+                border-color 200ms var(--ytkit-ease-out),
+                transform 140ms var(--ytkit-ease-out);
             outline: none;
             touch-action: manipulation;
+            overflow: hidden;
+        }
+
+        .ytkit-dl-popup__go::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(180deg, rgba(255,255,255,0.25), transparent 55%);
+            pointer-events: none;
+            mix-blend-mode: overlay;
+            opacity: 0.9;
         }
 
         .ytkit-dl-popup__go:hover {
-            filter: brightness(1.1);
+            box-shadow:
+                0 10px 26px rgba(255, 95, 74, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.3);
+            border-color: rgba(255,160,135,0.6);
         }
 
         .ytkit-dl-popup__go:active {
-            transform: scale(0.98);
+            transform: scale(0.99);
+            box-shadow:
+                0 4px 10px rgba(255, 95, 74, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.18);
         }
 
         #ytkit-subs-load-banner {
