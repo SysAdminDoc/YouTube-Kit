@@ -723,3 +723,75 @@ them up as a regression canary.
   `npm run build:fixtures` and commit the updated token files. The
   diff shows exactly which selectors entered/left YouTube's DOM
   since the last refresh.
+
+### H4 — Popup surfaces the TrustedTypes diagnostic signal
+
+H1 captured `TT_POLICY_FAIL` / `TT_UNAVAILABLE` in the diagnostic ring
+buffer but the signal was only visible to users who deliberately
+dumped the full diagnostic JSON. That meant a peer-extension
+policy-name collision would silently degrade the userscript and
+never surface in a bug report.
+
+The toolbar popup now reads `ytSuiteSettings._errors` on render,
+filters entries tagged `ctx === 'trusted-types'`, and paints a
+conditional warning-toned banner between the storage grid and the
+data-management actions row. The banner stays `hidden` on the happy
+path; when ≥1 event exists it shows the event count and the latest
+(already URL-redacted) reason message. A Copy button drops a
+structured payload on the clipboard — event count, ISO timestamp of
+the latest event, and the reason string — so a user filing a bug
+report pastes the precise reason code instead of "something broke."
+
+Implementation details:
+
+- Banner element is `role="status"` with `aria-live="polite"` so
+  screen readers announce it non-intrusively when it materializes.
+- `healthCopyPayload` is reset to the empty string on every null /
+  zero-count render, so a stale payload can never reach the
+  clipboard on a later click.
+- Clipboard fallback logs the payload to the console if
+  `navigator.clipboard.writeText` throws (e.g. popup loaded over
+  `file://` during development).
+- Amber palette (not red) — this is a "fallback active" notice,
+  not a destructive state. Existing features continue to work via
+  the DOMParser path.
+
+Four regressions in `tests/hardening.test.js` pin the HTML scaffold,
+the `ctx === 'trusted-types'` filter predicate, the hidden-on-empty
+guard (including payload reset), and the CSS + focus-visible
+coverage for the Copy button.
+
+### H5 — storageQuotaLRU swept a nonexistent key for a year
+
+The `storageQuotaLRU` feature's cap list included
+`['deArrowCache', 1000]`, iterated against
+`appState.settings.deArrowCache`. That key has never existed —
+DeArrow's branding cache is stored under the top-level
+`chrome.storage.local` key `da_branding_cache`, written via
+`storageWriteJSON('da_branding_cache', …)`, not inside the
+settings object. The cap never matched anything regardless of
+whether DeArrow was running.
+
+Dead code by itself is a readability problem. Worse, the feature
+description claimed to cover "deArrowCache," misleading anyone
+auditing the quota story into thinking DeArrow's persisted cache
+was bounded by the voluntary LRU sweep. It was — by DeArrow's own
+`_schedulePersist` which caps at 2000 on every write — but the
+external sweep was doing nothing.
+
+Fix:
+
+- Remove the dead `['deArrowCache', 1000]` entry from the in-settings
+  cap list.
+- Add a belt-and-suspenders sweep on the real `da_branding_cache`
+  top-level key: read via `storageReadJSON`, sort entries by
+  descending `_ts`, slice to 2000 most-recent, write back via
+  `storageWriteJSON`. Triggers only when the on-disk set has
+  drifted past 2000 entries (shouldn't happen under DeArrow's own
+  cap, but catches any future regression that skips the persist
+  path).
+- Update the feature description to name `da_branding_cache` so a
+  user auditing the quota feature sees what actually gets swept.
+
+Two regressions in `tests/hardening.test.js` pin the absence of the
+dead reference AND the presence of the real-key sweep.

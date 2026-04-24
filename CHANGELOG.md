@@ -19,6 +19,14 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
   message has `http(s)://…` URLs redacted before logging. Logging is
   lazy (first `setHTML` / `create` call) so `appState.settings` is
   guaranteed ready. Four regressions in `tests/hardening.test.js`.
+- **Toolbar popup now surfaces the TrustedTypes diagnostic signal.**
+  The popup reads `ytSuiteSettings._errors` on render, filters for
+  entries tagged `ctx === 'trusted-types'`, and paints a conditional
+  warning-toned banner with event count + latest URL-redacted message.
+  A Copy button drops a structured payload on the clipboard so bug
+  reports include the precise reason code rather than a vague "it
+  broke." Banner stays hidden on the happy path (role=status,
+  aria-live=polite). Four regressions in `tests/hardening.test.js`.
 
 ### Hardening
 
@@ -27,6 +35,14 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
   `waitress>=3.0.0,<4`. Prevents silent major-version bumps in dev/CI
   pip resolves from landing on PyQt7 / Flask 4 / requests 3 without
   a deliberate migration. Rationale per-dep in `HARDENING.md` H2.
+- **`storageQuotaLRU` stale `deArrowCache` reference removed.** The
+  prune loop iterated `appState.settings.deArrowCache` — a key that
+  never existed. DeArrow's branding cache lives under the top-level
+  `chrome.storage.local` key `da_branding_cache`, not inside the
+  settings object. The dead cap entry is gone; the loop now also
+  sweeps the real top-level key (belt-and-suspenders over DeArrow's
+  internal 2000-entry cap) and the feature description names the
+  actual key. Two regressions in `tests/hardening.test.js`.
 
 ### Tests / Tooling
 
