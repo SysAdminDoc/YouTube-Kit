@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Theater Split v1.0.5
+// @name         Theater Split v1.0.6
 // @namespace    https://github.com/SysAdminDoc/Astra-Deck
 // @version      1.0.6
 // @updateURL      https://raw.githubusercontent.com/SysAdminDoc/Astra-Deck/main/theater-split.user.js
@@ -840,6 +840,8 @@
         body.ts-split #below[style*="position"] #comments ytd-comment-renderer #content-text,
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
         body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-core-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-core-attributed-string,
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model .ytAttributedStringHost,
         body.ts-split #below[style*="position"] #comments ytd-comment-renderer .ytAttributedStringHost {
             pointer-events: auto !important;
@@ -854,6 +856,8 @@
         body.ts-split #below[style*="position"] #comments ytd-comment-renderer #published-time-text,
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
         body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-core-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-core-attributed-string,
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model .ytAttributedStringHost,
         body.ts-split #below[style*="position"] #comments ytd-comment-renderer .ytAttributedStringHost {
             -webkit-user-select: text !important;
@@ -862,7 +866,9 @@
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model #content-text,
         body.ts-split #below[style*="position"] #comments ytd-comment-renderer #content-text,
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
-        body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string {
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-view-model yt-core-attributed-string,
+        body.ts-split #below[style*="position"] #comments ytd-comment-renderer yt-core-attributed-string {
             cursor: text !important;
         }
         body.ts-split #below[style*="position"] #comments ytd-comment-view-model #action-menu,
@@ -1218,6 +1224,8 @@
     let scrollTarget = null;
     let wheelHandler = null;
     let middleMouseHandler = null;
+    let commentSelectionMouseDownHandler = null;
+    let commentSelectionSelectStartHandler = null;
     let autoscrollState = null;
     let touchHandler = null;
     let touchMoveHandler = null;
@@ -1391,6 +1399,38 @@
 
     function isSplitScrollable(el) {
         return !!(el && el.scrollHeight > el.clientHeight + 1);
+    }
+
+    function isSplitCommentTextTarget(target) {
+        if (!isActive || !isSplit) return false;
+        const node = target instanceof Element ? target : target?.parentElement;
+        if (!node) return false;
+    const thread = node.closest('ytd-comment-thread-renderer');
+    if (!thread || !thread.closest('#below[style*="position"] #comments')) return false;
+    if (node.closest([
+        'button',
+        '[role="button"]',
+        'yt-icon-button',
+            'tp-yt-paper-button',
+            'ytd-button-renderer',
+            'ytd-menu-renderer',
+            'ytd-toggle-button-renderer',
+            '#action-menu',
+            '#inline-action-menu',
+            '#reply-button-end',
+            '#creator-heart',
+            '#more-replies',
+            '#more-replies-sub-thread',
+            '#less-replies',
+            '#less-replies-sub-thread'
+        ].join(','))) return false;
+        return !!node.closest([
+            '#content',
+            '#content-text',
+            'yt-attributed-string',
+            '.ytAttributedStringHost',
+            'yt-core-attributed-string'
+        ].join(','));
     }
 
     function shouldIgnoreSplitAutoscroll(target) {
@@ -2445,6 +2485,12 @@
         splitWrapper.addEventListener('touchmove', touchMoveHandler, { passive: true, capture: true });
         middleMouseHandler = startSplitAutoscroll;
         document.addEventListener('mousedown', middleMouseHandler, true);
+        commentSelectionSelectStartHandler = (e) => {
+            if (!isSplitCommentTextTarget(e.target)) return;
+            e.stopImmediatePropagation?.();
+            e.stopPropagation();
+        };
+        window.addEventListener('selectstart', commentSelectionSelectStartHandler, true);
 
         windowResizeHandler = () => {
             if (!isActive) return;
@@ -2655,6 +2701,10 @@
         if (middleMouseHandler) {
             document.removeEventListener('mousedown', middleMouseHandler, true);
             middleMouseHandler = null;
+        }
+        if (commentSelectionSelectStartHandler) {
+            window.removeEventListener('selectstart', commentSelectionSelectStartHandler, true);
+            commentSelectionSelectStartHandler = null;
         }
 
         if (splitWrapper) { splitWrapper.remove(); splitWrapper = null; }
