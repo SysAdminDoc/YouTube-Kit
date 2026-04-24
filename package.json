@@ -15,6 +15,7 @@
   "scripts": {
     "build": "node build-extension.js",
     "build:userscript": "node build-extension.js --with-userscript",
+    "build:fixtures": "node scripts/build-selector-fixtures.js",
     "check": "node scripts/check-syntax.js",
     "test": "node --test tests/*.test.js"
   },
