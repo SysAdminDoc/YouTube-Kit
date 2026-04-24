@@ -6,6 +6,12 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ## [Unreleased]
 
+## [3.20.2] - Hardening Pass 9 - 2026-04-24
+
+Follow-on audit pass from the factory-loop run. No user-visible
+feature changes — charter remains "no further features planned."
+This pass closes three observability gaps and one dead-code finding:
+
 ### Security / Observability
 
 - **TrustedTypes `createPolicy()` failures are now surfaced to
