@@ -812,3 +812,64 @@ test('TrustedTypes fallback uses DOMParser + replaceChildren (no raw innerHTML c
     assert.doesNotMatch(iifeBody, /element\.innerHTML\s*=\s*['"]{2}/,
         'Fallback must NOT use innerHTML = "" to clear — trips strict-CSP TrustedHTML sinks');
 });
+
+// ── v3.20.2 H4: popup surfaces TrustedTypes diagnostic signal ──
+//
+// The signal written by H1 only has value if a user sees it. The popup
+// gains a conditional "health banner" that reads ytSuiteSettings._errors,
+// filters for ctx === 'trusted-types', and surfaces the latest event
+// with a Copy-to-clipboard payload so users filing bug reports include
+// the reason code instead of a vague "something broke."
+
+test('popup.html carries a hidden health-banner scaffold', () => {
+    assert.match(popupHtmlSource, /id="health-banner"[^>]*hidden/,
+        'Health banner must be rendered hidden by default so the happy path is quiet');
+    assert.match(popupHtmlSource, /id="health-detail"/,
+        'Banner must expose a detail slot so popup.js can fill the message in');
+    assert.match(popupHtmlSource, /id="health-copy-btn"/,
+        'Banner must include a Copy button to dump the diagnostic payload to clipboard');
+    assert.match(popupHtmlSource, /role="status"[^>]*aria-live="polite"/,
+        'Banner must be an aria-live polite status region so screen readers announce it non-intrusively');
+});
+
+test('popup.js filters trusted-types diagnostics from _errors and renders a count', () => {
+    // Pin the filter predicate so a rename of ctx ('trusted-types' is the
+    // tag ytkit.js uses when logging) breaks the test immediately.
+    assert.match(popupSource, /entry\.ctx\s*===\s*'trusted-types'/,
+        'summarizeDiagnostics must filter _errors entries where ctx === "trusted-types"');
+    // Pin the shape returned so renderHealthBanner can rely on it.
+    assert.match(popupSource, /trustedTypes:\s*\{[\s\S]*?count:/,
+        'Diagnostic summary must expose trustedTypes.count so the banner can show an event total');
+    assert.match(popupSource, /latestMessage:/,
+        'Diagnostic summary must include the latest message verbatim (already URL-redacted at capture site)');
+});
+
+test('popup.js health banner stays hidden when no trusted-types events exist', () => {
+    // The render path takes either null (no diagnostics) OR an object
+    // whose trustedTypes.count is zero and must keep the banner hidden.
+    const renderStart = popupSource.indexOf('function renderHealthBanner');
+    assert.ok(renderStart > -1, 'renderHealthBanner must exist');
+    const renderEnd = popupSource.indexOf('\nif (healthCopyBtn)', renderStart);
+    assert.ok(renderEnd > renderStart, 'renderHealthBanner must have an identifiable end boundary');
+    const renderBody = popupSource.slice(renderStart, renderEnd);
+
+    assert.match(renderBody, /healthBanner\.hidden\s*=\s*true/,
+        'Null / zero-count path must hide the banner');
+    assert.match(renderBody, /!tt\s*\|\|\s*tt\.count\s*<=\s*0/,
+        'Null / zero-count guard must match the trustedTypes.count shape');
+    assert.match(renderBody, /healthCopyPayload\s*=\s*['"]{2}/,
+        'Null path must reset the copy payload so a stale payload never reaches the clipboard on a later click');
+});
+
+test('popup.css styles the health banner with a warning-toned palette and focus-visible outline', () => {
+    const cssSource = fs.readFileSync(
+        path.join(__dirname, '..', 'extension', 'popup.css'),
+        'utf8'
+    );
+    assert.match(cssSource, /\.health-banner\s*\{/,
+        'health-banner CSS rule must exist');
+    assert.match(cssSource, /\.health-banner\[hidden\]\s*\{\s*display:\s*none/,
+        'Banner must honor the [hidden] attribute (avoid grid-layout peek)');
+    assert.match(cssSource, /\.health-copy-btn:focus-visible/,
+        'Copy button must carry a focus-visible outline for keyboard users');
+});

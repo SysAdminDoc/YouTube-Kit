@@ -127,6 +127,13 @@ const statHidden = $('#stat-hidden-videos');
 const statBlocked = $('#stat-blocked-channels');
 const statBookmarks = $('#stat-bookmarks');
 
+const healthBanner = $('#health-banner');
+const healthDetail = $('#health-detail');
+const healthCopyBtn = $('#health-copy-btn');
+// Captured so the Copy button can drop the full diagnostic payload on the
+// clipboard without rebuilding it from DOM text.
+let healthCopyPayload = '';
+
 function getVersion() {
     try { return (chrome.runtime.getManifest().version || '—'); } catch { return '—'; }
 }
@@ -557,7 +564,34 @@ function summarizeStorage(allStorage) {
     const bookmarks = countObjectEntries(allStorage[STORAGE_KEYS.bookmarks]);
     const keys = Object.keys(allStorage).length;
     const sizeBytes = new Blob([JSON.stringify(allStorage)]).size;
-    return { hiddenVideos, blockedChannels, bookmarks, keys, sizeBytes, sizeText: formatBytes(sizeBytes) };
+    const diagnostics = summarizeDiagnostics(allStorage[SETTINGS_STORAGE_KEY]);
+    return {
+        hiddenVideos, blockedChannels, bookmarks, keys,
+        sizeBytes, sizeText: formatBytes(sizeBytes),
+        diagnostics
+    };
+}
+
+// v3.20.2: extract the TrustedTypes diagnostic signal written by
+// ytkit.js TrustedHTML IIFE. We look for entries in the ring buffer
+// (appState.settings._errors) tagged with ctx === 'trusted-types'.
+// Returns a compact summary or null if nothing to surface.
+function summarizeDiagnostics(settings) {
+    if (!isPlainObject(settings) || !Array.isArray(settings._errors)) return null;
+    const ttEntries = settings._errors.filter(
+        (entry) => isPlainObject(entry) && entry.ctx === 'trusted-types'
+    );
+    if (ttEntries.length === 0) return null;
+    // Newest-first for "most recent failure" copy-to-clipboard payload.
+    ttEntries.sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+    const latest = ttEntries[0];
+    return {
+        trustedTypes: {
+            count: ttEntries.length,
+            latestMessage: String(latest.msg || '').slice(0, 200),
+            latestTs: Number(latest.ts) || 0
+        }
+    };
 }
 
 async function renderStorageInfo() {
@@ -569,14 +603,49 @@ async function renderStorageInfo() {
         statHidden.textContent = String(summary.hiddenVideos);
         statBlocked.textContent = String(summary.blockedChannels);
         statBookmarks.textContent = String(summary.bookmarks);
+        renderHealthBanner(summary.diagnostics);
     } catch (error) {
         statKeys.textContent = '0';
         statSize.textContent = '0 B';
         statHidden.textContent = '0';
         statBlocked.textContent = '0';
         statBookmarks.textContent = '0';
+        renderHealthBanner(null);
         showStatus('Storage read failed: ' + error.message, 'error', 4200);
     }
+}
+
+function renderHealthBanner(diagnostics) {
+    if (!healthBanner || !healthDetail) return;
+    const tt = diagnostics && diagnostics.trustedTypes;
+    if (!tt || tt.count <= 0) {
+        healthBanner.hidden = true;
+        healthCopyPayload = '';
+        return;
+    }
+    const countLabel = tt.count === 1 ? '1 event' : tt.count + ' events';
+    // Message was already URL-redacted at the ytkit.js capture site.
+    healthDetail.textContent = 'TrustedTypes fallback active — ' + countLabel + '. ' + tt.latestMessage;
+    healthBanner.hidden = false;
+    const tsText = tt.latestTs ? new Date(tt.latestTs).toISOString() : 'unknown-time';
+    healthCopyPayload =
+        '[Astra Deck diagnostic] TrustedTypes fallback\n' +
+        'Events: ' + tt.count + '\n' +
+        'Latest-at: ' + tsText + '\n' +
+        'Latest-msg: ' + tt.latestMessage + '\n';
+}
+
+if (healthCopyBtn) {
+    healthCopyBtn.addEventListener('click', async () => {
+        if (!healthCopyPayload) return;
+        try {
+            await navigator.clipboard.writeText(healthCopyPayload);
+            showStatus('Diagnostic copied to clipboard.', 'ok', 2400);
+        } catch (_) {
+            showStatus('Clipboard unavailable — see browser console.', 'error', 3600);
+            console.error('[Astra Deck popup] health-copy payload:\n' + healthCopyPayload);
+        }
+    });
 }
 
 // ── Import sanitizers (ported from options.js) ──

@@ -358,6 +358,91 @@ body {
   line-height: 1;
 }
 
+/* ── Health banner (TrustedTypes / diagnostic alerts) ── */
+/* Rendered only when diagnosticLog entries with ctx=trusted-types exist.
+   Amber tone — a soft warning, not a destructive red. */
+
+.health-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 169, 58, 0.35);
+  background:
+    linear-gradient(180deg, rgba(255, 169, 58, 0.06), rgba(255, 169, 58, 0.02)),
+    rgba(24, 18, 10, 0.82);
+  color: #ffd9a8;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.health-banner[hidden] { display: none; }
+
+.health-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(255, 169, 58, 0.16);
+  color: #ffb84d;
+  font-weight: 900;
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.health-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.health-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ffb84d;
+}
+
+.health-detail {
+  font-size: 12px;
+  color: #ffd9a8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-copy-btn {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 169, 58, 0.45);
+  background: rgba(255, 169, 58, 0.08);
+  color: #ffd9a8;
+  cursor: pointer;
+  transition: background-color var(--dur-quick) var(--ease-out),
+              border-color var(--dur-quick) var(--ease-out);
+}
+
+.health-copy-btn:hover {
+  background: rgba(255, 169, 58, 0.15);
+  border-color: rgba(255, 169, 58, 0.65);
+}
+
+.health-copy-btn:focus-visible {
+  outline: 2px solid rgba(255, 169, 58, 0.75);
+  outline-offset: 2px;
+}
+
 /* ── Main Action (CTA) ── */
 
 .main-action { margin: 0; }
