@@ -337,6 +337,25 @@ if (chrome.downloads?.onChanged?.addListener) {
     });
 }
 
+// v3.20.1: onErased prunes _pendingReveals if the user clears a download from
+// history before it reaches a terminal state (cancel → erase, or crash-recovery
+// wipe). Without this the id would persist in the Set across the SW restart
+// and leak a slot in the session mirror. Delete is idempotent so a normal
+// complete→erase sequence is a safe no-op on the second fire.
+if (chrome.downloads?.onErased?.addListener) {
+    chrome.downloads.onErased.addListener((downloadId) => {
+        if (typeof downloadId !== 'number') return;
+        void (async () => {
+            try { await _pendingRevealsReady; } catch (_) {
+                // reason: hydration already logged; fall through to in-memory check
+            }
+            if (!_pendingReveals.has(downloadId)) return;
+            _pendingReveals.delete(downloadId);
+            _persistPendingReveals();
+        })();
+    });
+}
+
 chrome.commands.onCommand.addListener((command) => {
     void (async () => {
         if (command !== 'toggle-control-center') return;

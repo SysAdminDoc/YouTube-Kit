@@ -570,6 +570,46 @@ test('_pendingReveals is mirrored to chrome.storage.session for SW-restart survi
     );
 });
 
+test('_pendingReveals is pruned when a tracked download is erased from history', () => {
+    // Pass 8 closes the Pass 7 LOW security finding: without onErased, a
+    // download that is cancelled + erased (or wiped on crash recovery)
+    // before reaching `state.complete` / `state.interrupted` would leave
+    // its id in `_pendingReveals` forever — both in memory and in the
+    // session mirror.
+    assert.match(
+        backgroundSource,
+        /chrome\.downloads\?\.onErased\?\.addListener/,
+        'onErased listener must exist (guarded for older Firefox builds)'
+    );
+    const erasedStart = backgroundSource.indexOf('chrome.downloads.onErased.addListener');
+    assert.ok(erasedStart > -1, 'onErased listener must be registered');
+    // Bound the slice to the closing brace of this addListener() call so
+    // growth elsewhere in the file can't satisfy these assertions.
+    const erasedEnd = backgroundSource.indexOf('\n}', erasedStart);
+    assert.ok(erasedEnd > erasedStart, 'onErased listener must have a closing brace');
+    const erasedBody = backgroundSource.slice(erasedStart, erasedEnd);
+    assert.match(
+        erasedBody,
+        /await\s+_pendingRevealsReady/,
+        'onErased listener must await the hydration promise before mutating the Set'
+    );
+    assert.match(
+        erasedBody,
+        /_pendingReveals\.delete\s*\(\s*downloadId\s*\)/,
+        'onErased listener must drop the id from the in-memory Set'
+    );
+    assert.match(
+        erasedBody,
+        /_persistPendingReveals\s*\(\s*\)/,
+        'onErased listener must mirror the delete into chrome.storage.session'
+    );
+    assert.match(
+        erasedBody,
+        /_pendingReveals\.has\s*\(\s*downloadId\s*\)/,
+        'onErased listener must no-op on ids we never tracked (e.g. unrelated downloads)'
+    );
+});
+
 test('manifest declares unlimitedStorage to exceed the 10 MB default quota', () => {
     // Watch history, DeArrow cache, and storageQuotaLRU can collectively
     // push chrome.storage.local past the 10 MB default quota for long-term
@@ -633,6 +673,36 @@ test('Firefox build rewrites Ctrl+Shift+Y (reserved by Firefox Downloads) to Ctr
         ffManifest.commands?.['toggle-control-center']?.suggested_key?.default,
         'Ctrl+Alt+Y',
         'Patch must be idempotent — a second application must not flip the shortcut back'
+    );
+});
+
+test('SponsorBlock never auto-skips poi_highlight (API contract: marker, not skip)', () => {
+    // Pass 8 closes the Pass 7 POI correctness finding. The SponsorBlock
+    // API defines poi_highlight as a jump-to marker. Previously we skipped
+    // past it like any other segment. Both the skip check and the
+    // scheduler now exclude it explicitly, while the progress-bar render
+    // still paints the marker.
+    // Match method DEFINITIONS (leading whitespace + name, not call sites).
+    const checkStart = ytkitSource.search(/\n\s+_checkSkip\(\)\s*\{/);
+    assert.ok(checkStart > -1, '_checkSkip method definition must exist');
+    const checkEnd = ytkitSource.indexOf('            },', checkStart);
+    assert.ok(checkEnd > checkStart, '_checkSkip must have a closing brace');
+    const checkBody = ytkitSource.slice(checkStart, checkEnd);
+    assert.match(
+        checkBody,
+        /seg\.category\s*===\s*'poi_highlight'/,
+        '_checkSkip must explicitly skip the poi_highlight category'
+    );
+
+    const schedStart = ytkitSource.search(/\n\s+_scheduleNextSkip\(\)\s*\{/);
+    assert.ok(schedStart > -1, '_scheduleNextSkip method definition must exist');
+    const schedEnd = ytkitSource.indexOf('            },', schedStart);
+    assert.ok(schedEnd > schedStart, '_scheduleNextSkip must have a closing brace');
+    const schedBody = ytkitSource.slice(schedStart, schedEnd);
+    assert.match(
+        schedBody,
+        /seg\.category\s*===\s*'poi_highlight'/,
+        '_scheduleNextSkip must also exclude poi_highlight so no skip timer fires for it'
     );
 });
 

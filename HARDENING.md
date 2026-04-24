@@ -570,3 +570,68 @@ Regression: `Firefox build rewrites Ctrl+Shift+Y (reserved by Firefox Downloads)
 - **Extension cookie `expirationDate || 0` fragility** — correct for
   the current Netscape-format server-side writer; flagged for
   re-review if the cookie wire format ever changes.
+
+---
+
+## Hardening Pass 8 (v3.20.1 — 2026-04-24)
+
+Audit-only follow-up to Pass 7. Closes the two remaining roadmap
+audit-pass items that had concrete, bounded fixes; leaves the
+`ytkit.js` monolith audit and the extension-cookie expiration
+fragility open (both are watchlist items, not active bugs).
+
+### Real Issues (addressed in this pass)
+
+**P8-1 — `_pendingReveals` had no prune path for erased downloads** (LOW security finding)
+Pass 7's session-mirror guaranteed reveals survived a service-worker
+restart, but an id could still outlive the download it referenced.
+Specifically, if the user cancelled + erased a download (or crash
+recovery wiped the row) before the download reached
+`state.complete` / `state.interrupted`, the id stayed in both the
+in-memory `Set` and the session mirror forever. Over a long browser
+session with many interrupted downloads, the Set grew
+unboundedly — bounded by session lifetime but not by anything
+stronger.
+
+Fix: new `chrome.downloads.onErased` listener that awaits the same
+`_pendingRevealsReady` hydration promise as `onChanged`, calls
+`_pendingReveals.delete(downloadId)`, and persists the delete via
+`_persistPendingReveals()`. `Set.delete` is idempotent, so a normal
+complete → erase sequence is a safe no-op on the second fire.
+Listener is guarded behind `chrome.downloads?.onErased?.addListener`
+so older Firefox builds (which didn't ship `onErased` until
+129+) don't throw at load time.
+
+Regression: `_pendingReveals is pruned when a tracked download is erased from history`.
+
+**P8-2 — SponsorBlock `poi_highlight` auto-skipped instead of rendering as marker** (correctness)
+The SponsorBlock API defines `poi_highlight` as a jump-to highlight
+reference (the user can seek TO it), not a segment to skip PAST.
+Both `sponsorBlock._checkSkip()` and `sponsorBlock._scheduleNextSkip()`
+iterated the category list and treated every segment the same way:
+if `currentTime >= start && currentTime < end - 0.3` set
+`video.currentTime = end`. A user who enabled `sbCat_poi_highlight`
+from the settings UI (off by default) would find the player
+fast-forwarding past every highlight marker — exactly the opposite
+of what the category is for.
+
+Fix: both methods now `continue` past any segment whose `category`
+is `poi_highlight`. The progress-bar renderer (`_renderBarSegments`)
+is untouched and continues to paint the marker in its existing
+`#ff1684` colour.
+
+Mitigations that were already in place (and remain): zero-length
+segments are rejected on ingest, the category is off by default,
+and the enabled-category allowlist controls whether any logic
+fires at all.
+
+Regression: `SponsorBlock never auto-skips poi_highlight (API contract: marker, not skip)`.
+
+### Still Open (deferred to Pass 9)
+
+- **`ytkit.js` monolith uncovered paths** — DeArrow cache lifetime,
+  theater-split cleanup on fast SPA navigations, Wave-8/9 restored
+  features. Per-area audits rather than another whole-file pass.
+- **Extension cookie `expirationDate || 0` fragility** — correct for
+  the current Netscape-format server-side writer; flagged for
+  re-review if the cookie wire format ever changes.

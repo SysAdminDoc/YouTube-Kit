@@ -22680,6 +22680,11 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const enabledCats = this._getEnabledCategories();
                 for (const seg of this._segments) {
                     if (!enabledCats.includes(seg.category)) continue;
+                    // v3.20.1: poi_highlight is a jump-to marker per the
+                    // SponsorBlock API spec, not a skip segment. Render it
+                    // on the progress bar (handled by _renderBarSegments),
+                    // but never auto-advance past it.
+                    if (seg.category === 'poi_highlight') continue;
                     const [start, end] = seg.segment;
                     if (currentTime >= start && currentTime < end - 0.3) {
                         video.currentTime = end;
@@ -22705,6 +22710,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 let minDelay = Infinity;
                 for (const seg of this._segments) {
                     if (!enabledCats.includes(seg.category)) continue;
+                    // v3.20.1: poi_highlight is a marker, never an auto-skip
+                    // target. Excluding here mirrors _checkSkip so we don't
+                    // schedule timers that get immediately rejected.
+                    if (seg.category === 'poi_highlight') continue;
                     const [start, end] = seg.segment;
                     if (currentTime >= start && currentTime < end - 0.3) {
                         // Already inside a segment — skip immediately

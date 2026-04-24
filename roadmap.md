@@ -129,8 +129,11 @@ Follow-ups surfaced during the end-to-end audit. Not scheduled work — logged s
 - ~~**Dead code in `_run_download`**~~ — **shipped**. The assigned-but-unused `re.search(r'\[download\] Downloading video …', line)` was removed; filename detection keeps its matches, which was the only meaningful path through that block. Regression: "`_run_download no longer contains the dead "Downloading video" regex match`".
 - ~~**`normalize_output_dir` accepts any absolute path**~~ — **shipped in downloader v1.2.0** (before this audit line was triaged). `normalize_output_dir(..., allowed_roots=…)` now confines client-supplied output dirs to `allowed_output_roots(self.config)` (Downloads / Videos / Desktop / configured `DownloadPath`). Gate stays token-authenticated for defence-in-depth.
 
+#### Shipped in Hardening Pass 8 (v3.20.1, 2026-04-24)
+- ~~**`_pendingReveals` had no prune path for erased downloads**~~ — **shipped**. New `chrome.downloads.onErased` listener awaits `_pendingRevealsReady`, removes the id from the Set, and persists the delete via `_persistPendingReveals()`. Guarded by `chrome.downloads?.onErased?.addListener` for older Firefox builds. Closes the Pass 7 LOW security finding on unbounded Set growth when downloads are cancelled + erased before reaching a terminal state. Regression: "`_pendingReveals is pruned when a tracked download is erased from history`".
+- ~~**SponsorBlock POI category semantics**~~ — **shipped**. Both `sponsorBlock._checkSkip()` and `_scheduleNextSkip()` now `continue` past `poi_highlight` segments. Progress-bar renderer still paints the marker in `#ff1684`. The API-defined jump-to-marker behaviour is restored; enabling `sbCat_poi_highlight` no longer fast-forwards through highlights. Regression: "`SponsorBlock never auto-skips poi_highlight (API contract: marker, not skip)`".
+
 #### Still open
-- **SponsorBlock POI category semantics** (`extension/ytkit.js` `sponsorBlock._checkSkip`). `poi_highlight` is currently treated like any other skip segment (`currentTime = end`), but the API intends POI as a highlight/jump-to marker. Segment filter already rejects zero-length entries so most POI data is dropped on arrival, but if the category is ever re-enabled by default this needs rework.
 - **`ytkit.js` monolith (~34K lines)** still harbours uncovered code paths — DeArrow cache lifetime, theater-split cleanup on fast SPA navigations, Wave-8/9 restored features. A targeted audit per area is better value than another pass at this size.
 - **Extension cookie `expirationDate: c.expirationDate || 0`** (`extension/ytkit.js` `_mediaDLSendDownload`). Correct for the Netscape-format writer on the server side (0 = session cookie), but fragile if a future transport expects `null`/`undefined` for session cookies. Keep in mind before changing the server's cookie wire format.
 
@@ -201,7 +204,7 @@ Still applied on every release.
 
 ---
 
-*Last updated: 2026-04-24 — Hardening Pass 7 (v3.20.0): retired the three audit-pass items it closed (`_pendingReveals` persistence, `normalize_output_dir` root confinement, dead-regex in `_run_download`); flagged `unlimitedStorage` as shipped alongside `storageQuotaLRU`.*
+*Last updated: 2026-04-24 — Hardening Pass 8 (v3.20.1): retired the remaining two audit-pass items it closed (`_pendingReveals` onErased prune for LOW security finding; `poi_highlight` marker-vs-skip correctness). `ytkit.js` monolith audit and expirationDate fragility remain watchlist items only — not active bugs.*
 
 ## Open-Source Research (Round 2)
 

@@ -4,6 +4,38 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [Unreleased] - Hardening Pass 8
+
+Audit-only follow-up to Pass 7. Closes the two remaining roadmap
+audit-pass items that had concrete, bounded fixes: the LOW security
+finding on `_pendingReveals` lifetime, and the SponsorBlock POI
+category correctness note.
+
+### Fixed
+
+- **`_pendingReveals` pruned on `chrome.downloads.onErased`.** The
+  Pass 7 session mirror guaranteed reveals survived a service-worker
+  restart, but a download that was cancelled + erased (or wiped by
+  crash recovery) before reaching `state.complete` / `state.interrupted`
+  left its id in the `Set` and the session mirror forever. The new
+  `onErased` listener awaits the same hydration promise as `onChanged`,
+  removes the id, and persists the delete. `Set.delete` is idempotent,
+  so a normal complete → erase sequence is a safe no-op on the second
+  fire. Listener is guarded behind `chrome.downloads?.onErased?.addListener`
+  for older Firefox builds. Regression in `tests/hardening.test.js`.
+- **SponsorBlock `poi_highlight` is a marker, never an auto-skip target.**
+  Per the SponsorBlock API, `poi_highlight` is a jump-to reference, not
+  a segment to scrub past. The previous code path treated it identically
+  to `sponsor` / `selfpromo` / `interaction` — `video.currentTime = end`.
+  Both `sponsorBlock._checkSkip` and `_scheduleNextSkip` now short-circuit
+  the category explicitly; the progress-bar renderer continues to paint
+  the marker. The category is still off by default (`sbCat_poi_highlight: false`),
+  and zero-length POI entries are still dropped on ingest, but enabling
+  the toggle from the settings UI no longer fast-forwards through the
+  highlight. Regression in `tests/hardening.test.js`.
+
+---
+
 ## [3.20.0] - Hardening Pass 7
 
 Audit-only release. Closes three of the open items from the 2026-04-23
