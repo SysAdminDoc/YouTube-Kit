@@ -695,3 +695,31 @@ Rationale for the specific caps:
   urllib3 2.x defaults; needs a deliberate migration pass.
 - **waitress<4** — Waitress is a WSGI server; a major bump on a
   localhost listener is not worth absorbing without review.
+
+### H3 — Selector-drift canary via MHTML token signatures
+
+YouTube rolls out A/B selector renames without notice. Previously
+the only signal was a user-filed bug "feature X stopped working."
+The `mhtml/` directory has held reference snapshots of the home and
+watch pages for a while but wasn't wired into tests. v3.20.x lights
+them up as a regression canary.
+
+- `scripts/build-selector-fixtures.js` decodes the quoted-printable
+  HTML body out of each `mhtml/*.mhtml` capture (the raw 5 MB files
+  are gitignored) and writes one token signature per page to
+  `tests/fixtures/*.tokens.txt`. Tokens harvested: `ytd-*`, `ytp-*`,
+  `yt-*`, `html5-*`, `movie_player`, and a handful of YT layout ids
+  (`primary`, `secondary`, `contents`, `masthead-container`).
+- `tests/selector-regression.test.js` maintains a 9-entry list of
+  critical selectors (layout, player, feed grid, comments) and
+  asserts each one appears in BOTH the fixture signatures AND
+  `extension/ytkit.js`. The two-sided assertion catches both
+  YouTube-side renames (when the fixture is refreshed and the
+  selector drops) and our-side refactor loss (when ytkit.js stops
+  referencing a selector we still canary).
+- Refresh cycle: when YouTube A/B drift is suspected, recapture
+  `mhtml/YouTube.mhtml` + `mhtml/WatchPage.mhtml` via Chrome
+  "Save As → Webpage, Single File", then run
+  `npm run build:fixtures` and commit the updated token files. The
+  diff shows exactly which selectors entered/left YouTube's DOM
+  since the last refresh.

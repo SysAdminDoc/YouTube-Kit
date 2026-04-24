@@ -6,6 +6,48 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ## [Unreleased]
 
+### Security / Observability
+
+- **TrustedTypes `createPolicy()` failures are now surfaced to
+  DiagnosticLog.** The TrustedHTML IIFE in `extension/ytkit.js` used
+  to swallow `createPolicy('ytkit-policy', …)` throws silently, so
+  peer-extension collisions on the policy name and CSP-forbidden
+  policy creation were invisible in the field — the userscript fell
+  back to DOMParser with no signal in the ring buffer. Failures are
+  tagged `TT_UNAVAILABLE` (Firefox / no TrustedTypes) or
+  `TT_POLICY_FAIL: <ErrorName>: <message>` (policy throw); the error
+  message has `http(s)://…` URLs redacted before logging. Logging is
+  lazy (first `setHTML` / `create` call) so `appState.settings` is
+  guaranteed ready. Four regressions in `tests/hardening.test.js`.
+
+### Hardening
+
+- **Python deps upper-bounded.** `astra_downloader/requirements.txt`
+  now pins `PyQt6>=6.6.0,<7`, `flask>=3.0.0,<4`, `requests>=2.31.0,<3`,
+  `waitress>=3.0.0,<4`. Prevents silent major-version bumps in dev/CI
+  pip resolves from landing on PyQt7 / Flask 4 / requests 3 without
+  a deliberate migration. Rationale per-dep in `HARDENING.md` H2.
+
+### Tests / Tooling
+
+- **Selector-drift canary added.** `scripts/build-selector-fixtures.js`
+  decodes the gitignored `mhtml/` reference captures into compact
+  token fixtures under `tests/fixtures/*.tokens.txt` (~15 KB total).
+  `tests/selector-regression.test.js` asserts that 9 critical YT
+  selectors (`ytd-app`, `ytd-watch-flexy`, `movie_player`,
+  `html5-video-container`, `ytp-chrome-bottom`, `ytp-progress-bar`,
+  `ytd-rich-grid-renderer`, `ytd-rich-item-renderer`,
+  `ytd-comment-thread-renderer`) appear in BOTH the fixtures AND
+  `extension/ytkit.js`. Two-sided assertion means a YouTube DOM
+  rename OR an internal refactor regression surface here before
+  shipping. Run `npm run build:fixtures` after refreshing `mhtml/`.
+
+### Chore
+
+- `.gitignore` now covers `.claude/`, `.codex/`, `.factory/`,
+  `docs/research/`, and the underscore spelling of
+  `CODEX_CHANGELOG.md` alongside the existing dashed form.
+
 ## [3.20.1] - Hardening Pass 8 - 2026-04-24
 
 Audit-only follow-up to Pass 7. Closes the two remaining roadmap
