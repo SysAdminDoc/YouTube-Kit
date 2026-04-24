@@ -720,3 +720,95 @@ test('_run_download no longer contains the dead "Downloading video" regex match'
         'Dead "Downloading video" regex must remain removed from _run_download'
     );
 });
+
+// ── v3.20.2 H1: TrustedTypes createPolicy fallback is observable ──
+//
+// Previously the catch block at ytkit.js:~640 swallowed createPolicy()
+// failures silently, so peer-extension policy-name collisions were
+// invisible in field diagnostics — the userscript fell back to DOMParser
+// with no signal in the ring buffer. H1 routes the fallback reason through
+// DiagnosticLog so users can surface it via the diagnostic dump if another
+// extension squats the 'ytkit-policy' name.
+
+test('TrustedTypes IIFE captures a fallbackReason for DiagnosticLog', () => {
+    const iifeStart = ytkitSource.indexOf('const TrustedHTML = (() => {');
+    assert.ok(iifeStart > -1, 'TrustedHTML IIFE must still exist');
+    const iifeEnd = ytkitSource.indexOf('})();', iifeStart);
+    assert.ok(iifeEnd > iifeStart, 'TrustedHTML IIFE must close');
+    const iifeBody = ytkitSource.slice(iifeStart, iifeEnd);
+
+    assert.match(
+        iifeBody,
+        /let\s+fallbackReason\s*=\s*null/,
+        'IIFE must declare a fallbackReason variable to capture the failure mode'
+    );
+    assert.match(
+        iifeBody,
+        /let\s+fallbackLogged\s*=/,
+        'IIFE must debounce logging with a fallbackLogged flag so it records once'
+    );
+    assert.match(
+        iifeBody,
+        /TT_UNAVAILABLE/,
+        'Firefox / older-browser path must be tagged TT_UNAVAILABLE so field logs distinguish it from policy collisions'
+    );
+    assert.match(
+        iifeBody,
+        /TT_POLICY_FAIL/,
+        'createPolicy throw path must be tagged TT_POLICY_FAIL so field logs can distinguish it from TT_UNAVAILABLE'
+    );
+});
+
+test('TrustedTypes createPolicy catch redacts URLs before logging', () => {
+    const iifeStart = ytkitSource.indexOf('const TrustedHTML = (() => {');
+    const iifeEnd = ytkitSource.indexOf('})();', iifeStart);
+    const iifeBody = ytkitSource.slice(iifeStart, iifeEnd);
+
+    // The raw error message can contain the offending page URL. Redacting
+    // before it lands in DiagnosticLog prevents page-URL leakage in
+    // diagnostic dumps that users send to us.
+    assert.match(
+        iifeBody,
+        /replace\(\s*\/https\?:\\\/\\\/\[\^\\s\)\]\+\/g/,
+        'createPolicy catch must redact http(s)://… URLs from the logged message'
+    );
+});
+
+test('TrustedTypes setHTML and create both trigger lazy fallback log', () => {
+    const iifeStart = ytkitSource.indexOf('const TrustedHTML = (() => {');
+    const iifeEnd = ytkitSource.indexOf('})();', iifeStart);
+    const iifeBody = ytkitSource.slice(iifeStart, iifeEnd);
+
+    // setHTML runs before appState.settings is guaranteed ready, so the
+    // log call must be deferred into the first public-method invocation.
+    // Both setHTML and create are public entry points; both must call
+    // logFallbackOnce so whichever fires first surfaces the signal.
+    const setHTMLStart = iifeBody.indexOf('setHTML(element, html)');
+    const createStart = iifeBody.indexOf('create(html)');
+    assert.ok(setHTMLStart > -1 && createStart > -1, 'Both public methods must exist');
+
+    const setHTMLBody = iifeBody.slice(setHTMLStart, createStart);
+    const createBody = iifeBody.slice(createStart);
+
+    assert.match(setHTMLBody, /logFallbackOnce\(\)/,
+        'setHTML must call logFallbackOnce so the first render records the signal');
+    assert.match(createBody, /logFallbackOnce\(\)/,
+        'create must call logFallbackOnce in case it fires before any setHTML call');
+});
+
+test('TrustedTypes fallback uses DOMParser + replaceChildren (no raw innerHTML clear)', () => {
+    const iifeStart = ytkitSource.indexOf('const TrustedHTML = (() => {');
+    const iifeEnd = ytkitSource.indexOf('})();', iifeStart);
+    const iifeBody = ytkitSource.slice(iifeStart, iifeEnd);
+
+    // The fallback path for non-TrustedTypes browsers (Firefox) must not
+    // use `innerHTML = ''` even for clearing — that's still a TrustedHTML
+    // sink on strict-CSP pages. replaceChildren() + DOMParser template
+    // extraction is the correct pattern.
+    assert.match(iifeBody, /new DOMParser\(\)/,
+        'Fallback must parse via DOMParser to avoid innerHTML sink');
+    assert.match(iifeBody, /element\.replaceChildren\(\);/,
+        'Fallback must clear via replaceChildren, not innerHTML = ""');
+    assert.doesNotMatch(iifeBody, /element\.innerHTML\s*=\s*['"]{2}/,
+        'Fallback must NOT use innerHTML = "" to clear — trips strict-CSP TrustedHTML sinks');
+});

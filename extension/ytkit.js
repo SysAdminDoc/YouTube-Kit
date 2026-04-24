@@ -632,18 +632,50 @@ return response;
     // and actively harmful (breaks SVG data URIs, attribute patterns, etc.).
     const TrustedHTML = (() => {
         let policy = null;
-        if (typeof window.trustedTypes !== 'undefined' && window.trustedTypes.createPolicy) {
+        // v3.20.2: capture the reason TrustedTypes is unavailable so field
+        // diagnostics can tell "Firefox, no TT" apart from "policy name taken
+        // by a peer extension". Historically this was a silent catch which
+        // hid peer-extension collisions — the userscript/extension would
+        // quietly fall back to DOMParser with no signal in the diagnostic
+        // ring buffer. Logging happens lazily on first setHTML/create so
+        // appState.settings is guaranteed to be loaded.
+        let fallbackReason = null;
+        let fallbackLogged = false;
+
+        if (typeof window.trustedTypes === 'undefined' || !window.trustedTypes.createPolicy) {
+            fallbackReason = 'TT_UNAVAILABLE'; // Firefox / older browsers
+        } else {
             try {
                 policy = window.trustedTypes.createPolicy('ytkit-policy', {
                     createHTML: (string) => string
                 });
             } catch (e) {
-                // Policy already exists or can't be created
+                // Policy name already taken by a peer extension, or CSP forbids
+                // policy creation on this page. Keep the error name to
+                // distinguish in field logs; redact any URLs so diagnostic
+                // exports don't leak page context.
+                const rawMsg = String(e && e.message || '');
+                const redacted = rawMsg.replace(/https?:\/\/[^\s)]+/g, '<url>').slice(0, 200);
+                fallbackReason = 'TT_POLICY_FAIL: ' + (e && e.name || 'Error') + ': ' + redacted;
+                console.warn('[YTKit] TrustedTypes policy unavailable, DOMParser fallback active:', e && e.name);
             }
         }
 
+        const logFallbackOnce = () => {
+            if (fallbackLogged || !fallbackReason) return;
+            try {
+                if (typeof DiagnosticLog !== 'undefined' && DiagnosticLog && typeof DiagnosticLog.record === 'function') {
+                    DiagnosticLog.record('trusted-types', fallbackReason);
+                    fallbackLogged = true;
+                }
+            } catch (_) {
+                // DiagnosticLog not ready yet — retry on next setHTML/create call.
+            }
+        };
+
         return {
             setHTML(element, html) {
+                logFallbackOnce();
                 if (policy) {
                     element.innerHTML = policy.createHTML(html);
                 } else {
@@ -661,6 +693,7 @@ return response;
                 }
             },
             create(html) {
+                logFallbackOnce();
                 return policy ? policy.createHTML(html) : html;
             }
         };
