@@ -635,3 +635,63 @@ Regression: `SponsorBlock never auto-skips poi_highlight (API contract: marker, 
 - **Extension cookie `expirationDate || 0` fragility** — correct for
   the current Netscape-format server-side writer; flagged for
   re-review if the cookie wire format ever changes.
+
+## Ongoing Hardening (Unreleased)
+
+### H1 — TrustedTypes createPolicy failures are now observable
+
+`extension/ytkit.js` formerly swallowed `createPolicy('ytkit-policy', …)`
+throws in a silent catch block. Peer-extension collisions on the
+policy name and CSP-forbidden policy creation were therefore invisible
+in the field: the userscript fell back to DOMParser with no signal in
+the diagnostic ring buffer.
+
+The fallback reason is now captured at IIFE init and lazy-logged to
+`DiagnosticLog` on the first `setHTML`/`create` call (after
+`appState.settings` has loaded so `DiagnosticLog.record` is safe).
+Two distinct tags make field logs diagnosable:
+
+- `TT_UNAVAILABLE` — TrustedTypes API missing entirely (Firefox, older
+  browsers).
+- `TT_POLICY_FAIL: <ErrorName>: <message>` — `createPolicy` threw,
+  either because another extension already claimed `'ytkit-policy'`
+  or because CSP on the page disallows policy creation. `http(s)://`
+  URLs in the error message are redacted to `<url>` before logging
+  so diagnostic dumps do not leak page context.
+
+The DOMParser + `replaceChildren()` fallback path is unchanged. Four
+regressions in `tests/hardening.test.js` pin the observability
+behaviour.
+
+### H2 — Python dependency upper-major bounds
+
+`astra_downloader/requirements.txt` now carries both lower and upper
+bounds on every dep:
+
+```
+PyQt6>=6.6.0,<7
+flask>=3.0.0,<4
+requests>=2.31.0,<3
+waitress>=3.0.0,<4
+```
+
+The downloader ships as a PyInstaller-frozen exe to users, but the
+repo's own test/dev workflow resolves against whatever `pip install
+-r requirements.txt` returns at that moment. Without upper bounds a
+silent major-version bump (PyQt7, Flask 4.x, requests 3, waitress 4)
+would surface first on a contributor's machine or in CI, never
+having run against the downloader's tests. The bounds keep the
+resolver inside the majors we have exercised; patch + minor bumps
+still flow in automatically.
+
+Rationale for the specific caps:
+
+- **PyQt6<7** — Qt 7 is the next major binding rewrite; API breakage
+  on signal/slot/QVariant is likely.
+- **flask<4** — Flask's async handler surface has been churning;
+  a major bump on a frozen companion app is not a place to discover
+  that.
+- **requests<3** — requests 3 is planned to drop chardet + shift to
+  urllib3 2.x defaults; needs a deliberate migration pass.
+- **waitress<4** — Waitress is a WSGI server; a major bump on a
+  localhost listener is not worth absorbing without review.
