@@ -7,40 +7,103 @@
 <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-<div class="wrap">
-  <header class="hero">
-    <div class="hero-lockup">
-      <div class="hero-mark-shell" aria-hidden="true">
-        <img class="hero-mark" src="icons/32.png" alt="" width="20" height="20">
+<div class="page-shell">
+
+  <header class="app-bar">
+    <div class="app-brand">
+      <div class="brand-icon-shell" aria-hidden="true">
+        <img class="brand-icon" src="icons/32.png" alt="" width="20" height="20">
       </div>
-      <div class="hero-copy">
-        <div class="eyebrow-row">
-          <span class="eyebrow">Astra Deck</span>
-          <span class="sub" id="version">v—</span>
+      <span class="brand-name">Astra Deck</span>
+      <span class="brand-version" id="version">v—</span>
+    </div>
+    <div class="app-status" id="contextState" aria-label="Tab context">Local</div>
+  </header>
+
+  <main class="options-workspace" aria-labelledby="options-title">
+    <section class="workspace-command">
+      <div class="workspace-copy">
+        <span class="workspace-eyebrow">Settings workspace</span>
+        <h1 class="workspace-title" id="options-title">Controls and local data</h1>
+        <p id="supportNote">Changes sync to open YouTube tabs automatically.</p>
+      </div>
+      <div class="main-action">
+        <button id="openPanel" class="cta-button" type="button">Open Full Settings</button>
+      </div>
+    </section>
+
+    <section class="storage-overview" aria-label="Storage statistics">
+      <div class="stat-card">
+        <strong class="stat-card-value" id="stat-keys">—</strong>
+        <span class="stat-card-label">Keys</span>
+      </div>
+      <div class="stat-card">
+        <strong class="stat-card-value" id="stat-size">—</strong>
+        <span class="stat-card-label">Storage</span>
+      </div>
+      <div class="stat-card">
+        <strong class="stat-card-value" id="stat-hidden-videos">—</strong>
+        <span class="stat-card-label">Hidden</span>
+      </div>
+      <div class="stat-card">
+        <strong class="stat-card-value" id="stat-blocked-channels">—</strong>
+        <span class="stat-card-label">Blocked</span>
+      </div>
+      <div class="stat-card">
+        <strong class="stat-card-value" id="stat-bookmarks">—</strong>
+        <span class="stat-card-label">Bookmarks</span>
+      </div>
+    </section>
+
+    <nav class="actions-row" aria-label="Data management">
+      <div class="button-row">
+        <button id="export-btn" type="button">Export</button>
+        <button id="import-btn" type="button">Import</button>
+        <input type="file" id="import-file" accept=".json,application/json" hidden>
+      </div>
+      <div class="actions-end">
+        <button id="reset-btn" class="danger" type="button">Reset</button>
+      </div>
+    </nav>
+
+    <div class="status" id="status" aria-live="polite"></div>
+
+    <section class="quick-toggles-section" aria-labelledby="quick-toggles-title">
+      <div class="section-head">
+        <div class="section-head-copy">
+          <span class="section-eyebrow">Quick toggles</span>
+          <h2 class="section-title" id="quick-toggles-title"><strong id="enabledCount">0</strong> enabled · <span id="resultsState">15 controls</span></h2>
         </div>
       </div>
-    </div>
-    <div class="hero-pills" aria-label="Popup summary">
-      <span class="pill"><strong id="enabledCount">0</strong> enabled</span>
-      <span class="pill" id="contextState">Checking tab…</span>
-    </div>
-  </header>
-  <div class="toolbar">
-    <div class="search-row">
-      <label class="sr-only" for="q">Filter quick toggles</label>
-      <svg class="search-icon" aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input id="q" name="quick-toggle-filter" type="search" placeholder="Filter toggles…" aria-label="Filter quick toggles" autocomplete="off" spellcheck="false" autofocus>
-      <button id="clearSearch" class="clear-search" type="button" aria-label="Clear quick toggle filter" hidden>&times;</button>
-    </div>
-    <p class="support-note" id="supportNote">Changes sync to open YouTube tabs automatically.</p>
-    <div class="status-banner" id="status" aria-live="polite"></div>
-  </div>
-  <section id="toggles" class="toggles" aria-label="Quick toggles"></section>
-  <footer>
-    <button id="openPanel" class="primary" type="button">Open Full Settings</button>
-    <button id="openOptions" class="ghost" type="button">Options</button>
-  </footer>
+
+      <div class="search-row">
+        <label class="sr-only" for="q">Filter quick toggles</label>
+        <svg class="search-icon" aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="q" name="quick-toggle-filter" type="search" placeholder="Filter toggles…" aria-label="Filter quick toggles" autocomplete="off" spellcheck="false">
+        <button id="clearSearch" class="clear-search" type="button" aria-label="Clear quick toggle filter" hidden>&times;</button>
+      </div>
+
+      <div id="toggles" class="toggles" aria-label="Quick toggles"></div>
+    </section>
+  </main>
+
 </div>
+
+<!-- Inline confirmation dialog — avoids native confirm() and matches the
+     rest of the popup's theme. -->
+<div class="confirm-shell" id="confirm-shell" hidden>
+  <div class="confirm-backdrop" data-close-confirm></div>
+  <section class="confirm-dialog" id="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-copy">
+    <span class="confirm-eyebrow" id="confirm-eyebrow">Confirm</span>
+    <h2 class="confirm-title" id="confirm-title"></h2>
+    <p class="confirm-copy" id="confirm-copy"></p>
+    <div class="confirm-actions">
+      <button type="button" id="confirm-cancel-btn"></button>
+      <button type="button" id="confirm-accept-btn"></button>
+    </div>
+  </section>
+</div>
+
 <script src="popup.js"></script>
 </body>
 </html>

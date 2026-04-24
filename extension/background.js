@@ -259,10 +259,14 @@ function sendTabMessage(tabId, message) {
 async function togglePanelForTab(tabId) {
     const delivered = await sendTabMessage(tabId, { type: PANEL_MESSAGE.toggle });
     if (!delivered) {
+        // v3.19.0: the standalone options page was removed; full settings now
+        // live in the toolbar popup and the in-page workspace. If the current
+        // tab can't receive the toggle (non-YouTube), open YouTube so the user
+        // has somewhere to land.
         try {
-            await chrome.runtime.openOptionsPage();
+            await chrome.tabs.create({ url: 'https://www.youtube.com/' });
         } catch (_) {
-            // reason: options page may not be available in some browser contexts
+            // reason: tab creation may be blocked in some browser contexts
         }
     }
 }

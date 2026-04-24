@@ -1,5 +1,7 @@
 // Astra Deck — Toolbar Popup
-// Quick-toggle 15 of the most-used features without opening the full panel.
+// Quick-toggle 15 most-used features plus full data management
+// (export, import, reset, storage stats) previously hosted by the
+// standalone options page.
 
 const QUICK_TOGGLES = [
     { key: 'removeAllShorts',        group: 'Feed Cleanup',      name: 'Hide Shorts',            desc: 'Remove Shorts from feeds' },
@@ -19,10 +21,6 @@ const QUICK_TOGGLES = [
     { key: 'debugMode',              group: 'Utilities',         name: 'Debug Mode',             desc: 'Verbose console logging' },
 ];
 
-// Lucide-style 16×16 stroke icons per group. Each entry is an array of
-// SVG element specs so the popup can build them via DOM APIs (satisfies
-// MV3 CSP — no innerHTML). Paths are intentionally minimal to read at
-// tiny sizes against the darker popup surface.
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const GROUP_ICONS = {
     'Feed Cleanup': [
@@ -51,8 +49,8 @@ function createGroupIcon(groupName) {
     const svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('class', 'toggle-group-icon');
     svg.setAttribute('viewBox', '0 0 16 16');
-    svg.setAttribute('width', '13');
-    svg.setAttribute('height', '13');
+    svg.setAttribute('width', '12');
+    svg.setAttribute('height', '12');
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
     svg.setAttribute('stroke-width', '1.6');
@@ -69,10 +67,30 @@ function createGroupIcon(groupName) {
     return svg;
 }
 
+const BRAND_NAME = 'Astra Deck';
 const SETTINGS_STORAGE_KEY = 'ytSuiteSettings';
 const PANEL_OPEN_MESSAGE = 'YTKIT_OPEN_PANEL';
 const QUICK_TOGGLE_KEYS = QUICK_TOGGLES.map((toggle) => toggle.key);
 const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+const STORAGE_KEYS = {
+    settings: 'ytSuiteSettings',
+    hiddenVideos: 'ytkit-hidden-videos',
+    blockedChannels: 'ytkit-blocked-channels',
+    bookmarks: 'ytkit-bookmarks',
+    legacySidebarOrder: 'ytkit_sidebar_order'
+};
+
+const VIDEO_ID_PATTERN = /^[a-zA-Z0-9_-]{11}$/;
+const IMPORT_LIMITS = Object.freeze({
+    hiddenVideos: 5000,
+    blockedChannels: 2000,
+    bookmarkVideos: 400,
+    bookmarksPerVideo: 100,
+    bookmarkNoteChars: 500,
+    totalBytes: 4.5 * 1024 * 1024
+});
+
 const YOUTUBE_TAB_URLS = [
     '*://youtube.com/*',
     '*://*.youtube.com/*',
@@ -80,6 +98,7 @@ const YOUTUBE_TAB_URLS = [
     '*://*.youtube-nocookie.com/*',
     '*://youtu.be/*'
 ];
+
 const popupState = {
     settings: {},
     activeTab: null,
@@ -87,34 +106,45 @@ const popupState = {
 };
 
 const $ = (s) => document.querySelector(s);
+
+// ── Element refs ──
 const list = $('#toggles');
 const q = $('#q');
 const enabledCount = $('#enabledCount');
 const contextState = $('#contextState');
 const supportNote = $('#supportNote');
+const resultsState = $('#resultsState');
 const statusBanner = $('#status');
 const clearSearchButton = $('#clearSearch');
 const openPanelButton = $('#openPanel');
-const openOptionsButton = $('#openOptions');
+const exportButton = $('#export-btn');
+const importButton = $('#import-btn');
+const importFileInput = $('#import-file');
+const resetButton = $('#reset-btn');
+const statKeys = $('#stat-keys');
+const statSize = $('#stat-size');
+const statHidden = $('#stat-hidden-videos');
+const statBlocked = $('#stat-blocked-channels');
+const statBookmarks = $('#stat-bookmarks');
 
 function getVersion() {
     try { return (chrome.runtime.getManifest().version || '—'); } catch { return '—'; }
 }
+
 const versionEl = $('#version');
-const resolvedVersion = getVersion();
-versionEl.textContent = 'v' + resolvedVersion;
-versionEl.title = resolvedVersion === '—'
-    ? 'Astra Deck version unavailable'
-    : `Astra Deck v${resolvedVersion}`;
+const manifestVersion = getVersion();
+versionEl.textContent = 'v' + manifestVersion;
+versionEl.title = manifestVersion === '—'
+    ? `${BRAND_NAME} version unavailable`
+    : `${BRAND_NAME} v${manifestVersion}`;
+
+// ── Storage wrappers ──
 
 function storageGet(keys) {
     return new Promise((resolve, reject) => {
         chrome.storage.local.get(keys, (items) => {
             const error = chrome.runtime.lastError;
-            if (error) {
-                reject(new Error(error.message));
-                return;
-            }
+            if (error) { reject(new Error(error.message)); return; }
             resolve(items || {});
         });
     });
@@ -124,10 +154,7 @@ function storageSet(entries) {
     return new Promise((resolve, reject) => {
         chrome.storage.local.set(entries, () => {
             const error = chrome.runtime.lastError;
-            if (error) {
-                reject(new Error(error.message));
-                return;
-            }
+            if (error) { reject(new Error(error.message)); return; }
             resolve();
         });
     });
@@ -137,13 +164,56 @@ function storageRemove(keys) {
     return new Promise((resolve, reject) => {
         chrome.storage.local.remove(keys, () => {
             const error = chrome.runtime.lastError;
-            if (error) {
-                reject(new Error(error.message));
-                return;
-            }
+            if (error) { reject(new Error(error.message)); return; }
             resolve();
         });
     });
+}
+
+function storageClear() {
+    return new Promise((resolve, reject) => {
+        chrome.storage.local.clear(() => {
+            const error = chrome.runtime.lastError;
+            if (error) { reject(new Error(error.message)); return; }
+            resolve();
+        });
+    });
+}
+
+// ── Shared helpers ──
+
+function deepClone(value) {
+    if (typeof structuredClone === 'function') return structuredClone(value);
+    return JSON.parse(JSON.stringify(value));
+}
+
+function isPlainObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isSafeObjectKey(key) {
+    return typeof key === 'string' && !UNSAFE_OBJECT_KEYS.has(key);
+}
+
+function sanitizeSettingsObject(settings) {
+    if (!isPlainObject(settings)) return {};
+    const sanitized = {};
+    for (const [key, value] of Object.entries(settings)) {
+        if (isSafeObjectKey(key)) sanitized[key] = value;
+    }
+    return sanitized;
+}
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+function countObjectEntries(value) {
+    if (!value || typeof value !== 'object') return 0;
+    return Object.keys(value).length;
 }
 
 function normalizeStoredSettings(items) {
@@ -151,7 +221,7 @@ function normalizeStoredSettings(items) {
     const settings = {};
     const legacyKeys = [];
 
-    if (rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings)) {
+    if (isPlainObject(rawSettings)) {
         for (const [key, value] of Object.entries(rawSettings)) {
             if (UNSAFE_OBJECT_KEYS.has(key)) continue;
             settings[key] = value;
@@ -161,9 +231,7 @@ function normalizeStoredSettings(items) {
     for (const key of QUICK_TOGGLE_KEYS) {
         if (typeof items?.[key] !== 'boolean') continue;
         legacyKeys.push(key);
-        if (typeof settings[key] === 'undefined') {
-            settings[key] = items[key];
-        }
+        if (typeof settings[key] === 'undefined') settings[key] = items[key];
     }
 
     return { settings, legacyKeys };
@@ -173,8 +241,6 @@ async function loadSettings() {
     const items = await storageGet([SETTINGS_STORAGE_KEY, ...QUICK_TOGGLE_KEYS]);
     const normalized = normalizeStoredSettings(items);
 
-    // Migrate previously broken popup writes from stray top-level keys into the
-    // nested settings object the extension actually reads.
     if (normalized.legacyKeys.length > 0) {
         await storageSet({ [SETTINGS_STORAGE_KEY]: normalized.settings });
         await storageRemove(normalized.legacyKeys);
@@ -184,21 +250,11 @@ async function loadSettings() {
     return popupState.settings;
 }
 
-// Serialize writes so two toggles clicked in rapid succession can't race
-// the storage read-merge-write cycle. Each toggle click produces a task that
-// waits for the previous one to finish before starting its own merge.
+// Serialize writes so rapid toggle clicks can't race the merge cycle.
 let _pendingWriteChain = Promise.resolve();
-
 async function writeSetting(key, value) {
     const task = _pendingWriteChain.catch(() => undefined).then(async () => {
-        // Merge against the in-memory settings kept fresh by the onChanged
-        // listener and the previous write task. This avoids the classic
-        // read-merge-write race where two concurrent storageGet() calls both
-        // observe pre-write state and the later write clobbers the earlier.
-        const nextSettings = {
-            ...popupState.settings,
-            [key]: value
-        };
+        const nextSettings = { ...popupState.settings, [key]: value };
         popupState.settings = nextSettings;
         await storageSet({ [SETTINGS_STORAGE_KEY]: nextSettings });
         return nextSettings;
@@ -206,6 +262,8 @@ async function writeSetting(key, value) {
     _pendingWriteChain = task;
     return task;
 }
+
+// ── URL / tab classification ──
 
 function isAnyYouTubeUrl(urlString) {
     try {
@@ -215,63 +273,21 @@ function isAnyYouTubeUrl(urlString) {
             || parsed.hostname === 'youtube-nocookie.com'
             || parsed.hostname.endsWith('.youtube.com')
             || parsed.hostname.endsWith('.youtube-nocookie.com');
-    } catch {
-        return false;
-    }
+    } catch { return false; }
 }
 
 function isSupportedInlinePanelUrl(urlString) {
     try {
         const parsed = new URL(urlString);
         const hostname = parsed.hostname;
-
-        if (hostname === 'm.youtube.com' || hostname === 'studio.youtube.com') {
-            return false;
-        }
-        if (parsed.pathname.startsWith('/live_chat')) {
-            return false;
-        }
-
+        if (hostname === 'm.youtube.com' || hostname === 'studio.youtube.com') return false;
+        if (parsed.pathname.startsWith('/live_chat')) return false;
         return hostname === 'youtu.be'
             || hostname === 'youtube.com'
             || hostname === 'youtube-nocookie.com'
             || hostname.endsWith('.youtube.com')
             || hostname.endsWith('.youtube-nocookie.com');
-    } catch {
-        return false;
-    }
-}
-
-function showStatus(message = '', type = 'info', durationMs = 2400) {
-    if (popupState.statusTimer) {
-        clearTimeout(popupState.statusTimer);
-        popupState.statusTimer = null;
-    }
-
-    if (!message) {
-        statusBanner.textContent = '';
-        statusBanner.className = 'status-banner';
-        return;
-    }
-
-    statusBanner.textContent = message;
-    statusBanner.className = `status-banner is-visible status-${type}`;
-    if (durationMs > 0) {
-        popupState.statusTimer = setTimeout(() => {
-            statusBanner.textContent = '';
-            statusBanner.className = 'status-banner';
-            popupState.statusTimer = null;
-        }, durationMs);
-    }
-}
-
-function updateSummary(settings) {
-    const enabled = QUICK_TOGGLE_KEYS.reduce((count, key) => count + (settings[key] ? 1 : 0), 0);
-    enabledCount.textContent = String(enabled);
-}
-
-function updateSearchState() {
-    clearSearchButton.hidden = !q.value.trim();
+    } catch { return false; }
 }
 
 function getTabContext(tab) {
@@ -279,21 +295,24 @@ function getTabContext(tab) {
     if (isSupportedInlinePanelUrl(url)) {
         return {
             label: 'YouTube',
-            note: 'Changes sync to this tab automatically.',
-            openLabel: 'Open Full Settings'
+            note: 'Click Open Full Settings to launch the in-page workspace on this tab.',
+            openLabel: 'Open Full Settings',
+            mode: 'inline-panel'
         };
     }
     if (isAnyYouTubeUrl(url)) {
         return {
             label: 'YouTube',
-            note: 'Changes sync to open YouTube tabs automatically.',
-            openLabel: 'Open Full Settings'
+            note: 'Full settings live in the in-page workspace on watchable YouTube tabs.',
+            openLabel: 'Open YouTube',
+            mode: 'launch'
         };
     }
     return {
         label: 'Any Tab',
-        note: 'Changes sync when you open YouTube.',
-        openLabel: 'Go to YouTube'
+        note: 'Quick toggles sync once a YouTube tab is open.',
+        openLabel: 'Open YouTube',
+        mode: 'launch'
     };
 }
 
@@ -305,20 +324,67 @@ function updateContext(tab) {
     openPanelButton.textContent = nextContext.openLabel;
 }
 
+// ── Status banner ──
+
+function showStatus(message = '', type = 'info', durationMs = 2800) {
+    if (popupState.statusTimer) {
+        clearTimeout(popupState.statusTimer);
+        popupState.statusTimer = null;
+    }
+    if (!message) {
+        statusBanner.textContent = '';
+        statusBanner.className = 'status';
+        return;
+    }
+    statusBanner.textContent = message;
+    statusBanner.className = `status ${type}`;
+    if (durationMs > 0) {
+        popupState.statusTimer = setTimeout(() => {
+            statusBanner.textContent = '';
+            statusBanner.className = 'status';
+            popupState.statusTimer = null;
+        }, durationMs);
+    }
+}
+
+// ── Summary ──
+
+function updateSummary(settings) {
+    const enabled = QUICK_TOGGLE_KEYS.reduce((count, key) => count + (settings[key] ? 1 : 0), 0);
+    enabledCount.textContent = String(enabled);
+}
+
+function updateSearchState() {
+    clearSearchButton.hidden = !q.value.trim();
+}
+
+function updateResultsState(totalCount, visibleCount, filter) {
+    const normalizedFilter = (filter || '').trim();
+    const totalLabel = `${totalCount} ${totalCount === 1 ? 'control' : 'controls'}`;
+    if (!normalizedFilter) {
+        resultsState.textContent = totalLabel;
+        resultsState.title = `${totalCount} quick controls are available in this popup`;
+        return;
+    }
+    resultsState.textContent = `${visibleCount} matching`;
+    resultsState.title = `${visibleCount} of ${totalCount} ${totalCount === 1 ? 'control' : 'controls'} match this filter`;
+}
+
+// ── Toggle render ──
+
 function renderLoading() {
     list.textContent = '';
+    resultsState.textContent = 'Loading';
+    resultsState.removeAttribute('title');
     for (let index = 0; index < 5; index += 1) {
         const skeleton = document.createElement('div');
         skeleton.className = 'toggle-skeleton';
-
         const copy = document.createElement('div');
         copy.className = 'skeleton-copy';
-
         const linePrimary = document.createElement('div');
         linePrimary.className = 'skeleton-line';
         const lineSecondary = document.createElement('div');
         lineSecondary.className = 'skeleton-line short';
-
         copy.appendChild(linePrimary);
         copy.appendChild(lineSecondary);
         skeleton.appendChild(copy);
@@ -329,20 +395,16 @@ function renderLoading() {
 function renderEmpty(filter) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-
     const title = document.createElement('span');
     title.className = 'empty-title';
     title.textContent = filter ? 'No quick toggles match' : 'No quick toggles available';
-
     const copy = document.createElement('span');
     copy.className = 'empty-copy';
     copy.textContent = filter
         ? 'Clear the filter to see every quick control again.'
         : 'The popup could not load any quick controls right now.';
-
     empty.appendChild(title);
     empty.appendChild(copy);
-
     if (filter) {
         const action = document.createElement('button');
         action.type = 'button';
@@ -356,23 +418,17 @@ function renderEmpty(filter) {
         });
         empty.appendChild(action);
     }
-
     list.appendChild(empty);
 }
 
 function sendTabMessage(tabId, message) {
     return new Promise((resolve) => {
-        if (!tabId) {
-            resolve(false);
-            return;
-        }
+        if (!tabId) { resolve(false); return; }
         try {
             chrome.tabs.sendMessage(tabId, message, (response) => {
                 resolve(!chrome.runtime.lastError && response?.ok !== false);
             });
-        } catch (_) {
-            resolve(false);
-        }
+        } catch { resolve(false); }
     });
 }
 
@@ -382,20 +438,16 @@ async function broadcast(key, value) {
         for (const tab of tabs) {
             try {
                 chrome.tabs.sendMessage(tab.id, { type: 'YTKIT_SETTING_CHANGED', key, value }, () => {
-                    // Swallow "Receiving end does not exist" — tab may not have loaded ytkit.js yet
                     void chrome.runtime.lastError;
                 });
-            } catch (_) {
-                // reason: tab may be closing or extension host has no receiver
-            }
+            } catch { /* tab closing or no receiver */ }
         }
-    } catch (_) {
-        // reason: chrome.tabs.query rejects when extension is suspended during broadcast
-    }
+    } catch { /* extension suspended */ }
 }
 
 function render(settings, filter) {
     const term = (filter || '').toLowerCase().trim();
+    const totalCount = QUICK_TOGGLES.length;
     const items = QUICK_TOGGLES.filter((t) =>
         !term
             || t.name.toLowerCase().includes(term)
@@ -406,6 +458,7 @@ function render(settings, filter) {
     list.textContent = '';
     updateSummary(settings);
     updateSearchState();
+    updateResultsState(totalCount, items.length, term);
     if (!items.length) {
         renderEmpty(term);
         return;
@@ -425,8 +478,6 @@ function render(settings, filter) {
         section.setAttribute('aria-labelledby', sectionId);
 
         const groupEnabled = groupItems.reduce((count, item) => count + (settings[item.key] ? 1 : 0), 0);
-        // Promote the group header when any of its toggles are enabled —
-        // gives the user a scannable cue about where they've customized.
         section.dataset.active = groupEnabled > 0 ? 'true' : 'false';
 
         const groupHead = document.createElement('div');
@@ -434,11 +485,9 @@ function render(settings, filter) {
 
         const groupTitleWrap = document.createElement('div');
         groupTitleWrap.className = 'toggle-group-title-wrap';
-
         const icon = createGroupIcon(groupName);
         if (icon) groupTitleWrap.appendChild(icon);
-
-        const groupTitle = document.createElement('h2');
+        const groupTitle = document.createElement('h3');
         groupTitle.className = 'toggle-group-title';
         groupTitle.id = sectionId;
         groupTitle.textContent = groupName;
@@ -500,6 +549,318 @@ function render(settings, filter) {
     }
 }
 
+// ── Storage stats ──
+
+function summarizeStorage(allStorage) {
+    const hiddenVideos = Array.isArray(allStorage[STORAGE_KEYS.hiddenVideos]) ? allStorage[STORAGE_KEYS.hiddenVideos].length : 0;
+    const blockedChannels = Array.isArray(allStorage[STORAGE_KEYS.blockedChannels]) ? allStorage[STORAGE_KEYS.blockedChannels].length : 0;
+    const bookmarks = countObjectEntries(allStorage[STORAGE_KEYS.bookmarks]);
+    const keys = Object.keys(allStorage).length;
+    const sizeBytes = new Blob([JSON.stringify(allStorage)]).size;
+    return { hiddenVideos, blockedChannels, bookmarks, keys, sizeBytes, sizeText: formatBytes(sizeBytes) };
+}
+
+async function renderStorageInfo() {
+    try {
+        const allStorage = await chrome.storage.local.get(null);
+        const summary = summarizeStorage(allStorage);
+        statKeys.textContent = String(summary.keys);
+        statSize.textContent = summary.sizeText;
+        statHidden.textContent = String(summary.hiddenVideos);
+        statBlocked.textContent = String(summary.blockedChannels);
+        statBookmarks.textContent = String(summary.bookmarks);
+    } catch (error) {
+        statKeys.textContent = '0';
+        statSize.textContent = '0 B';
+        statHidden.textContent = '0';
+        statBlocked.textContent = '0';
+        statBookmarks.textContent = '0';
+        showStatus('Storage read failed: ' + error.message, 'error', 4200);
+    }
+}
+
+// ── Import sanitizers (ported from options.js) ──
+
+function sanitizeImportedHiddenVideos(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const sanitized = [];
+    for (const entry of value) {
+        if (typeof entry !== 'string') continue;
+        const videoId = entry.trim();
+        if (!VIDEO_ID_PATTERN.test(videoId) || seen.has(videoId)) continue;
+        seen.add(videoId);
+        sanitized.push(videoId);
+        if (sanitized.length >= IMPORT_LIMITS.hiddenVideos) break;
+    }
+    return sanitized;
+}
+
+function getImportedFilteredVideoPosts(data) {
+    if (!isPlainObject(data)) return null;
+    if (Array.isArray(data.hiddenVideos)) return data.hiddenVideos;
+    if (Array.isArray(data.filteredVideoPosts)) return data.filteredVideoPosts;
+    return null;
+}
+
+function sanitizeImportedBlockedChannels(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const sanitized = [];
+    for (const entry of value) {
+        if (!isPlainObject(entry)) continue;
+        const id = typeof entry.id === 'string' ? entry.id.trim().slice(0, 128) : '';
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const name = typeof entry.name === 'string' ? entry.name.trim().slice(0, 200) : id;
+        sanitized.push({ id, name: name || id });
+        if (sanitized.length >= IMPORT_LIMITS.blockedChannels) break;
+    }
+    return sanitized;
+}
+
+function sanitizeImportedBookmarks(value) {
+    if (!isPlainObject(value)) return {};
+    const sanitized = {};
+    let videoCount = 0;
+    for (const [videoId, entries] of Object.entries(value)) {
+        if (!isSafeObjectKey(videoId) || !VIDEO_ID_PATTERN.test(videoId) || !Array.isArray(entries)) continue;
+        const seenTimes = new Set();
+        const sanitizedEntries = [];
+        for (const entry of entries) {
+            if (!isPlainObject(entry)) continue;
+            const rawTime = Number(entry.t);
+            if (!Number.isFinite(rawTime) || rawTime < 0) continue;
+            const time = Math.floor(rawTime);
+            if (seenTimes.has(time)) continue;
+            seenTimes.add(time);
+            const note = typeof entry.n === 'string' ? entry.n.slice(0, IMPORT_LIMITS.bookmarkNoteChars) : '';
+            const createdAt = Number.isFinite(Number(entry.d)) && Number(entry.d) > 0 ? Number(entry.d) : Date.now();
+            sanitizedEntries.push({ t: time, n: note, d: createdAt });
+            if (sanitizedEntries.length >= IMPORT_LIMITS.bookmarksPerVideo) break;
+        }
+        if (sanitizedEntries.length === 0) continue;
+        sanitizedEntries.sort((left, right) => left.t - right.t);
+        sanitized[videoId] = sanitizedEntries;
+        videoCount += 1;
+        if (videoCount >= IMPORT_LIMITS.bookmarkVideos) break;
+    }
+    return sanitized;
+}
+
+function estimateSerializedBytes(value) {
+    return new Blob([JSON.stringify(value)]).size;
+}
+
+function getLegacySidebarOrder(allStorage = {}) {
+    const legacyValue = allStorage[STORAGE_KEYS.legacySidebarOrder];
+    return Array.isArray(legacyValue) && legacyValue.length > 0 ? deepClone(legacyValue) : null;
+}
+
+function mergeLegacySettings(settings, legacySidebarOrder = null) {
+    const merged = sanitizeSettingsObject(settings);
+    if (
+        (!Array.isArray(merged.sidebarOrder) || merged.sidebarOrder.length === 0) &&
+        Array.isArray(legacySidebarOrder) &&
+        legacySidebarOrder.length > 0
+    ) {
+        merged.sidebarOrder = deepClone(legacySidebarOrder);
+    }
+    return merged;
+}
+
+function buildExportData(allStorage) {
+    const mergedSettings = mergeLegacySettings(
+        allStorage[STORAGE_KEYS.settings] || {},
+        getLegacySidebarOrder(allStorage)
+    );
+    const hiddenVideos = sanitizeImportedHiddenVideos(allStorage[STORAGE_KEYS.hiddenVideos]);
+    const settings = sanitizeSettingsObject(mergedSettings);
+    return {
+        settings,
+        hiddenVideos,
+        filteredVideoPosts: hiddenVideos,
+        blockedChannels: sanitizeImportedBlockedChannels(allStorage[STORAGE_KEYS.blockedChannels]),
+        bookmarks: sanitizeImportedBookmarks(allStorage[STORAGE_KEYS.bookmarks]),
+        exportVersion: 3,
+        exportDate: new Date().toISOString(),
+        astraDeckVersion: manifestVersion,
+        ytkitVersion: manifestVersion
+    };
+}
+
+// ── Confirmation dialog ──
+
+function confirmAction({
+    eyebrow = 'Confirm',
+    title,
+    message,
+    confirmLabel = 'Continue',
+    cancelLabel = 'Cancel',
+    tone = 'default'
+}) {
+    const shell = $('#confirm-shell');
+    const dialog = $('#confirm-dialog');
+    const eyebrowEl = $('#confirm-eyebrow');
+    const titleEl = $('#confirm-title');
+    const copyEl = $('#confirm-copy');
+    const cancelBtn = $('#confirm-cancel-btn');
+    const acceptBtn = $('#confirm-accept-btn');
+    const backdrop = shell.querySelector('[data-close-confirm]');
+
+    return new Promise((resolve) => {
+        const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+        eyebrowEl.textContent = eyebrow;
+        titleEl.textContent = title;
+        copyEl.textContent = message;
+        cancelBtn.textContent = cancelLabel;
+        acceptBtn.textContent = confirmLabel;
+        dialog.classList.toggle('is-danger', tone === 'danger');
+        acceptBtn.className = tone === 'danger' ? 'danger' : 'primary';
+        shell.hidden = false;
+
+        const finish = (confirmed) => {
+            shell.hidden = true;
+            shell.removeEventListener('keydown', handleKeydown);
+            backdrop.removeEventListener('click', onCancel);
+            cancelBtn.removeEventListener('click', onCancel);
+            acceptBtn.removeEventListener('click', onConfirm);
+            requestAnimationFrame(() => previousFocus?.focus?.());
+            resolve(confirmed);
+        };
+        const onCancel = () => finish(false);
+        const onConfirm = () => finish(true);
+        function handleKeydown(event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                finish(false);
+            }
+        }
+
+        backdrop.addEventListener('click', onCancel);
+        cancelBtn.addEventListener('click', onCancel);
+        acceptBtn.addEventListener('click', onConfirm);
+        shell.addEventListener('keydown', handleKeydown);
+        requestAnimationFrame(() => (tone === 'danger' ? cancelBtn : acceptBtn).focus());
+    });
+}
+
+// ── Export / Import / Reset ──
+
+async function exportSettings() {
+    exportButton.setAttribute('aria-busy', 'true');
+    exportButton.disabled = true;
+    try {
+        const allStorage = await chrome.storage.local.get(null);
+        const exportData = buildExportData(allStorage);
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        // Prefer the downloads API when available so the file lands in the
+        // user's downloads folder even though the popup will close. Falls back
+        // to an anchor click if the permission is unavailable.
+        const filename = 'astra_deck_settings_' + new Date().toISOString().slice(0, 10) + '.json';
+        if (chrome.downloads?.download) {
+            await new Promise((resolve, reject) => {
+                chrome.downloads.download({ url, filename, saveAs: false }, (downloadId) => {
+                    const err = chrome.runtime.lastError;
+                    if (err) reject(new Error(err.message));
+                    else resolve(downloadId);
+                });
+            });
+        } else {
+            const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+            a.click();
+        }
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        showStatus('Backup exported.', 'success');
+    } catch (error) {
+        showStatus('Export failed: ' + error.message, 'error', 4200);
+    } finally {
+        exportButton.removeAttribute('aria-busy');
+        exportButton.disabled = false;
+    }
+}
+
+async function importSettings(file) {
+    if (!file) return;
+    importButton.setAttribute('aria-busy', 'true');
+    importButton.disabled = true;
+    try {
+        if (file.size > 10 * 1024 * 1024) throw new Error('Import file exceeds 10 MB limit');
+        const text = await file.text();
+        const data = JSON.parse(text);
+        if (!data || typeof data !== 'object') throw new Error('Invalid format');
+
+        const writes = {};
+        if (data.exportVersion >= 3) {
+            const filteredVideoPosts = getImportedFilteredVideoPosts(data);
+            if (isPlainObject(data.settings)) writes[STORAGE_KEYS.settings] = sanitizeSettingsObject(data.settings);
+            if (filteredVideoPosts) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(filteredVideoPosts);
+            if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = sanitizeImportedBlockedChannels(data.blockedChannels);
+            if (isPlainObject(data.bookmarks)) writes[STORAGE_KEYS.bookmarks] = sanitizeImportedBookmarks(data.bookmarks);
+        } else if (data.exportVersion >= 2) {
+            const filteredVideoPosts = getImportedFilteredVideoPosts(data);
+            if (isPlainObject(data.settings)) writes[STORAGE_KEYS.settings] = sanitizeSettingsObject(data.settings);
+            if (filteredVideoPosts) writes[STORAGE_KEYS.hiddenVideos] = sanitizeImportedHiddenVideos(filteredVideoPosts);
+            if (Array.isArray(data.blockedChannels)) writes[STORAGE_KEYS.blockedChannels] = sanitizeImportedBlockedChannels(data.blockedChannels);
+        } else if (isPlainObject(data)) {
+            writes[STORAGE_KEYS.settings] = sanitizeSettingsObject(data);
+        }
+
+        if (Object.keys(writes).length === 0) throw new Error('No valid settings found in file');
+        if (estimateSerializedBytes(writes) > IMPORT_LIMITS.totalBytes) throw new Error('Import data is too large for extension storage');
+
+        await chrome.storage.local.set(writes);
+        if (writes[STORAGE_KEYS.settings]) {
+            await chrome.storage.local.remove(STORAGE_KEYS.legacySidebarOrder).catch(() => { /* reason: legacy key may not exist */ });
+        }
+        await renderStorageInfo();
+        await loadSettings();
+        render(popupState.settings, q.value);
+        // Broadcast whole-settings change so open tabs pick up the new state
+        for (const key of Object.keys(writes[STORAGE_KEYS.settings] || {})) {
+            void broadcast(key, writes[STORAGE_KEYS.settings][key]);
+        }
+        showStatus('Backup imported.', 'success');
+    } catch (error) {
+        showStatus('Import failed: ' + error.message, 'error', 4200);
+    } finally {
+        importFileInput.value = '';
+        importButton.removeAttribute('aria-busy');
+        importButton.disabled = false;
+    }
+}
+
+async function resetAllData() {
+    const confirmed = await confirmAction({
+        eyebrow: 'Destructive action',
+        title: 'Reset all local data?',
+        message: `This clears ${BRAND_NAME} settings, hidden videos, blocked channels, and bookmarks from extension storage.`,
+        confirmLabel: 'Reset',
+        tone: 'danger'
+    });
+    if (!confirmed) return;
+
+    resetButton.setAttribute('aria-busy', 'true');
+    resetButton.disabled = true;
+    try {
+        await storageClear();
+        await renderStorageInfo();
+        await loadSettings();
+        render(popupState.settings, q.value);
+        showStatus('All data cleared.', 'success');
+    } catch (error) {
+        showStatus('Reset failed: ' + error.message, 'error', 4200);
+    } finally {
+        resetButton.removeAttribute('aria-busy');
+        resetButton.disabled = false;
+    }
+}
+
+// ── Wheel scrolling (keep native scroll inside the popup's flex area) ──
+
 function getWheelScrollTarget(rawTarget) {
     let el = rawTarget instanceof Element ? rawTarget : rawTarget?.parentElement || null;
     while (el && el !== document.documentElement) {
@@ -521,28 +882,30 @@ function installWheelScrolling() {
     document.addEventListener('wheel', (event) => {
         const scroller = getWheelScrollTarget(event.target);
         if (!scroller || scroller.scrollHeight <= scroller.clientHeight) return;
-
         const delta = normalizeWheelDelta(event, scroller);
         if (!Number.isFinite(delta) || delta === 0) return;
-
         const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
         const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scroller.scrollTop + delta));
         if (nextScrollTop === scroller.scrollTop) return;
-
         event.preventDefault();
         scroller.scrollTop = nextScrollTop;
     }, { passive: false });
 }
 
+// ── Bootstrap ──
+
 (async () => {
     installWheelScrolling();
     renderLoading();
+
     try {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         updateContext(tab || null);
     } catch {
         updateContext(null);
     }
+
+    void renderStorageInfo();
 
     try {
         const settings = await loadSettings();
@@ -553,8 +916,6 @@ function installWheelScrolling() {
         showStatus('Quick controls could not be loaded. Try reopening the popup.', 'error', 5000);
     }
 
-    // Debounce search re-renders so fast typers don't rebuild the toggle
-    // list (and re-run every group layout + aria update) on every keystroke.
     let _searchDebounce = null;
     q.addEventListener('input', () => {
         updateSearchState();
@@ -565,18 +926,11 @@ function installWheelScrolling() {
         }, 120);
     });
     q.addEventListener('keydown', (event) => {
-        // Enter on the search field focuses the first visible toggle so
-        // keyboard users can filter-then-activate without an extra Tab step.
         if (event.key === 'Enter') {
             const firstToggle = list.querySelector('.toggle');
-            if (firstToggle) {
-                event.preventDefault();
-                firstToggle.focus();
-            }
+            if (firstToggle) { event.preventDefault(); firstToggle.focus(); }
             return;
         }
-        // Escape in the search field clears it (one key press) instead of
-        // needing to arrow-select-delete or click the × button.
         if (event.key === 'Escape' && q.value) {
             event.preventDefault();
             q.value = '';
@@ -592,46 +946,42 @@ function installWheelScrolling() {
     if (chrome.storage?.onChanged) {
         chrome.storage.onChanged.addListener((changes, areaName) => {
             if (areaName !== 'local') return;
-            if (!changes[SETTINGS_STORAGE_KEY] && !QUICK_TOGGLE_KEYS.some((key) => changes[key])) return;
+            const relevant = changes[SETTINGS_STORAGE_KEY]
+                || QUICK_TOGGLE_KEYS.some((key) => changes[key])
+                || changes[STORAGE_KEYS.hiddenVideos]
+                || changes[STORAGE_KEYS.blockedChannels]
+                || changes[STORAGE_KEYS.bookmarks];
+            if (!relevant) return;
             void loadSettings().then((settings) => {
                 render(settings, q.value);
             }).catch((error) => {
                 console.warn('[Astra Deck popup] Failed to refresh settings:', error);
             });
+            void renderStorageInfo();
         });
     }
 
     openPanelButton.addEventListener('click', async () => {
         try {
             const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-            if (tab?.id && isSupportedInlinePanelUrl(tab.url || '')) {
+            const nextContext = getTabContext(tab || null);
+            if (nextContext.mode === 'inline-panel' && tab?.id) {
                 const opened = await sendTabMessage(tab.id, { type: PANEL_OPEN_MESSAGE });
-                if (opened) {
-                    window.close();
-                    return;
-                }
+                if (opened) { window.close(); return; }
             }
-
-            if (isAnyYouTubeUrl(tab?.url || '')) {
-                await chrome.runtime.openOptionsPage();
-                window.close();
-                return;
-            }
-
             await chrome.tabs.create({ url: 'https://www.youtube.com/' });
             window.close();
         } catch (error) {
             console.warn('[Astra Deck popup] Failed to open the full workspace:', error);
-            showStatus('Could not open the full settings workspace. Try again.', 'error', 4200);
+            showStatus('Could not open the full workspace. Try again.', 'error', 4200);
         }
     });
-    openOptionsButton.addEventListener('click', async () => {
-        try {
-            await chrome.runtime.openOptionsPage();
-            window.close();
-        } catch (error) {
-            console.warn('[Astra Deck popup] Failed to open options page:', error);
-            showStatus('Could not open the options page. Try again.', 'error', 4200);
-        }
+
+    exportButton.addEventListener('click', () => { void exportSettings(); });
+    importButton.addEventListener('click', () => { importFileInput.click(); });
+    importFileInput.addEventListener('change', (event) => {
+        const file = event.target.files?.[0];
+        if (file) void importSettings(file);
     });
+    resetButton.addEventListener('click', () => { void resetAllData(); });
 })();

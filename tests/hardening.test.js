@@ -14,13 +14,18 @@ const ytkitSource = fs.readFileSync(
     'utf8'
 );
 
-const optionsSource = fs.readFileSync(
-    path.join(__dirname, '..', 'extension', 'options.js'),
+// v3.19.0: options.html / options.js removed. The toolbar popup
+// now hosts all data management (export/import/reset/stats) plus
+// the quick-toggle list. Tests that touched the options page
+// source have been retired in this release.
+
+const popupSource = fs.readFileSync(
+    path.join(__dirname, '..', 'extension', 'popup.js'),
     'utf8'
 );
 
-const optionsHtmlSource = fs.readFileSync(
-    path.join(__dirname, '..', 'extension', 'options.html'),
+const popupHtmlSource = fs.readFileSync(
+    path.join(__dirname, '..', 'extension', 'popup.html'),
     'utf8'
 );
 
@@ -59,73 +64,17 @@ test('videoHider ReDoS guard catches alternation-wrapped quantifier stacks', () 
     );
 });
 
-// ── v3.14.0 C3: profile import preserves exporter _settingsVersion ──
-
-test('applyImportedSettingsVersion exists and preserves imported _settingsVersion', () => {
-    assert.match(
-        optionsSource,
-        /function\s+applyImportedSettingsVersion\s*\(/,
-        'applyImportedSettingsVersion helper must exist'
-    );
-
-    const start = optionsSource.indexOf('function applyImportedSettingsVersion');
-    // Grab the next ~2000 chars; the function is short enough that this
-    // captures its body without over-reading into unrelated code.
-    const body = optionsSource.slice(start, start + 2000);
-
-    assert.match(
-        body,
-        /Number\s*\(\s*settings\._settingsVersion\s*\)/,
-        'Must read imported _settingsVersion from the payload'
-    );
-    assert.match(
-        body,
-        /next\._settingsVersion\s*=\s*importedVersion/,
-        'Must preserve the imported version, not stamp current'
-    );
-
-    // The legacy path (no _settingsVersion on import) should stamp v0 so
-    // the runtime's migration chain runs from the beginning.
-    assert.match(
-        body,
-        /next\._settingsVersion\s*=\s*0/,
-        'Legacy imports (no version) must stamp 0 so migration runs'
-    );
-});
-
-test('importSettings routes through applyImportedSettingsVersion, not applySettingsVersion', () => {
-    // Grab the importSettings body and assert every settings write goes
-    // through the import-aware helper.
-    const importStart = optionsSource.indexOf('async function importSettings');
-    assert.ok(importStart > -1, 'importSettings function should exist');
-    const importEnd = optionsSource.indexOf('async function resetSettings');
-    const body = optionsSource.slice(importStart, importEnd);
-
-    // Count references — every "applySettingsVersion" inside importSettings
-    // should actually be "applyImportedSettingsVersion".
-    const bareCount = (body.match(/\bapplySettingsVersion\s*\(/g) || []).length;
-    const importAwareCount = (body.match(/\bapplyImportedSettingsVersion\s*\(/g) || []).length;
-
-    assert.equal(
-        bareCount,
-        0,
-        'importSettings must not call applySettingsVersion directly (would overwrite exporter version)'
-    );
-    assert.ok(
-        importAwareCount >= 2,
-        'importSettings should apply the import-aware helper on at least both export-version branches'
-    );
-});
+// ── v3.19.0: export/import now lives in popup.js ──
 
 test('settings backups include filtered video posts and import the alias', () => {
-    const optionsExportStart = optionsSource.indexOf('function buildExportData');
-    const optionsExportEnd = optionsSource.indexOf('function summarizeStorage');
-    assert.ok(optionsExportStart > -1 && optionsExportEnd > optionsExportStart, 'options buildExportData should exist');
-    const optionsExportBody = optionsSource.slice(optionsExportStart, optionsExportEnd);
+    const popupExportStart = popupSource.indexOf('function buildExportData');
+    const popupExportEnd = popupSource.indexOf('function confirmAction');
+    assert.ok(popupExportStart > -1 && popupExportEnd > popupExportStart, 'popup buildExportData should exist');
+    const popupExportBody = popupSource.slice(popupExportStart, popupExportEnd);
     assert.match(
-        optionsExportBody,
+        popupExportBody,
         /filteredVideoPosts:\s*hiddenVideos/,
-        'Options-page exports should include filteredVideoPosts beside hiddenVideos'
+        'Popup exports should include filteredVideoPosts beside hiddenVideos'
     );
 
     const panelExportStart = ytkitSource.indexOf('exportAllSettings()');
@@ -139,12 +88,12 @@ test('settings backups include filtered video posts and import the alias', () =>
     );
 
     assert.ok(
-        optionsSource.includes('function getImportedFilteredVideoPosts') &&
+        popupSource.includes('function getImportedFilteredVideoPosts') &&
         ytkitSource.includes('function getImportedFilteredVideoPosts'),
         'Both import paths should share a filtered-video-posts fallback helper'
     );
     assert.ok(
-        optionsSource.includes('data.filteredVideoPosts') &&
+        popupSource.includes('data.filteredVideoPosts') &&
         ytkitSource.includes('data.filteredVideoPosts'),
         'Imports should restore hidden videos from filteredVideoPosts when hiddenVideos is absent'
     );
@@ -267,7 +216,7 @@ test('empty catch (_) {} blocks are eliminated from extension source', () => {
     for (const [name, source] of [
         ['ytkit.js', ytkitSource],
         ['background.js', backgroundSource],
-        ['options.js', optionsSource]
+        ['popup.js', popupSource]
     ]) {
         const matches = source.match(/catch\s*\(\s*_\s*\)\s*\{\s*\}/g) || [];
         assert.equal(
@@ -293,10 +242,6 @@ test('diagnosticLog destroy clears _errors for immediate storage relief', () => 
 // ── v3.16+ Audit Pass: popup.js serializes toggle writes ──
 
 test('popup.js serializes toggle writes to avoid read-merge-write race', () => {
-    const popupSource = fs.readFileSync(
-        path.join(__dirname, '..', 'extension', 'popup.js'),
-        'utf8'
-    );
     // The fix chains every writeSetting() call onto a shared promise so two
     // rapid toggle clicks can't both read pre-write storage and clobber each
     // other's update.
@@ -314,24 +259,7 @@ test('popup.js serializes toggle writes to avoid read-merge-write race', () => {
     assert.doesNotMatch(fnBody, /await\s+storageGet\s*\(/, 'writeSetting must not re-read storage per call');
 });
 
-test('popup.js avoids duplicate footer actions and exposes live result counts', () => {
-    const popupSource = fs.readFileSync(
-        path.join(__dirname, '..', 'extension', 'popup.js'),
-        'utf8'
-    );
-    const popupHtmlSource = fs.readFileSync(
-        path.join(__dirname, '..', 'extension', 'popup.html'),
-        'utf8'
-    );
-
-    assert.ok(
-        popupSource.includes('showSecondary: false'),
-        'popup context model should be able to suppress the secondary footer action when it would duplicate the primary action'
-    );
-    assert.ok(
-        popupSource.includes("footerActions.classList.toggle('is-single', !nextContext.showSecondary);"),
-        'popup.js should collapse the footer layout when only one action is relevant'
-    );
+test('popup.js exposes live result counts and the new data-management controls', () => {
     assert.ok(
         popupSource.includes('function updateResultsState(totalCount, visibleCount, filter)'),
         'popup.js should compute a live quick-control results summary'
@@ -340,85 +268,47 @@ test('popup.js avoids duplicate footer actions and exposes live result counts', 
         popupHtmlSource.includes('id="resultsState"'),
         'popup.html should expose a dedicated results summary chip'
     );
+    // v3.19.0: export/import/reset + storage stats were absorbed from the
+    // removed options page. Every control must be wired up in the popup.
+    for (const id of ['export-btn', 'import-btn', 'reset-btn', 'stat-keys', 'stat-size', 'stat-hidden-videos']) {
+        assert.ok(
+            popupHtmlSource.includes(`id="${id}"`),
+            `popup.html must expose ${id} (ported from the removed options page)`
+        );
+    }
+    assert.match(popupSource, /async function exportSettings/, 'popup.js must define exportSettings');
+    assert.match(popupSource, /async function importSettings/, 'popup.js must define importSettings');
+    assert.match(popupSource, /async function resetAllData/, 'popup.js must define resetAllData');
+    assert.match(popupSource, /function summarizeStorage/, 'popup.js must own storage summarization');
 });
 
-// ── v3.16+ Audit Pass: options.js import cap removed ──
+// ── v3.19.0: options.html / options.js retirement ──
 
-test('options.js import accepts exportVersion >= 3 without an upper cap', () => {
-    const optSource = fs.readFileSync(
-        path.join(__dirname, '..', 'extension', 'options.js'),
+test('extension bundle no longer ships a standalone options page', () => {
+    const manifest = JSON.parse(fs.readFileSync(
+        path.join(__dirname, '..', 'extension', 'manifest.json'),
         'utf8'
+    ));
+    assert.equal(
+        manifest.options_ui,
+        undefined,
+        'manifest.options_ui must stay removed — the toolbar popup is the only settings surface'
     );
+    assert.ok(
+        !fs.existsSync(path.join(__dirname, '..', 'extension', 'options.html')),
+        'extension/options.html must remain deleted'
+    );
+    assert.ok(
+        !fs.existsSync(path.join(__dirname, '..', 'extension', 'options.js')),
+        'extension/options.js must remain deleted'
+    );
+});
+
+test('popup.js import accepts exportVersion >= 3 without an upper cap', () => {
     assert.doesNotMatch(
-        optSource,
+        popupSource,
         /exportVersion\s*>=\s*3\s*&&\s*data\.exportVersion\s*<\s*100/,
-        'Arbitrary `< 100` import cap must be removed — forward-compat payloads are handled by applyImportedSettingsVersion()'
-    );
-});
-
-// ── v3.16+ Audit Pass: invalidReasons surfaces parse errors ──
-
-test('options.js tracks invalidReasons for list / json / number parse errors', () => {
-    const optSource = fs.readFileSync(
-        path.join(__dirname, '..', 'extension', 'options.js'),
-        'utf8'
-    );
-    assert.match(optSource, /invalidReasons:\s*\{\s*\}/, 'state must carry an invalidReasons map');
-    assert.match(optSource, /state\.invalidReasons\[key\]\s*=\s*error\?\.message/, 'list/json parse catch must record the error message');
-    // The card hint must render the captured reason rather than only the
-    // generic "Fix this field" fallback.
-    assert.match(
-        optSource,
-        /state\.invalidReasons\?\.\[key\]/,
-        'updateCardState must render the per-key reason when available'
-    );
-});
-
-test('options.js derives display metadata from ytkit source instead of relying only on key heuristics', () => {
-    assert.match(
-        optionsSource,
-        /function\s+extractSettingsCatalogFromSource\s*\(/,
-        'options.js should define a catalog extractor for feature metadata'
-    );
-    assert.ok(
-        optionsSource.includes('FEATURE_GROUP_TO_PRIMARY_GROUP'),
-        'options.js should map runtime feature groups into editor navigation groups'
-    );
-    assert.ok(
-        optionsSource.includes('state.settingCatalog = extractSettingsCatalogFromSource(settingsSource);'),
-        'options.js should hydrate the display catalog from ytkit.js source when available'
-    );
-    assert.ok(
-        optionsSource.includes('const mappedFeatureRegex'),
-        'options.js should preserve metadata for generated sub-feature families'
-    );
-});
-
-test('options settings editor renders sectioned, description-led cards', () => {
-    assert.match(
-        optionsSource,
-        /function\s+groupSettingsBySection\s*\(/,
-        'options.js should group visible settings into sections'
-    );
-    assert.ok(
-        optionsSource.includes('description.textContent = descriptionText;'),
-        'settings cards should render feature descriptions for scanning'
-    );
-    assert.ok(
-        optionsSource.includes('createSettingsCard(key, { sectionLabel: section.title })'),
-        'section-aware cards should suppress redundant subgroup labels inside the same section'
-    );
-    assert.ok(
-        optionsHtmlSource.includes('.settings-section-header'),
-        'options.html should style section headers inside the settings list'
-    );
-    assert.ok(
-        optionsHtmlSource.includes('.settings-item-copy'),
-        'options.html should provide a dedicated copy column for settings card content'
-    );
-    assert.ok(
-        optionsHtmlSource.includes('grid-template-columns: minmax(0, 1fr) auto;'),
-        'toggle cards should use a stable two-column layout'
+        'Arbitrary `< 100` import cap must be absent from the ported importer'
     );
 });
 

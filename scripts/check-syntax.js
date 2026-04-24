@@ -10,7 +10,6 @@ const filesToCheck = [
     'build-extension.js',
     'sync-userscript.js',
     'extension/background.js',
-    'extension/options.js',
     'extension/popup.js',
     'extension/ytkit.js',
     'extension/ytkit-main.js',

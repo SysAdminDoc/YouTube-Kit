@@ -4,6 +4,56 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.19.0] - Toolbar popup absorbs the options page
+
+The standalone settings page (`chrome-extension://…/options.html`) is gone.
+All of its functionality — export/import backup, reset-all-data, storage
+statistics, and version chip — now lives inside the toolbar popup, styled
+in the flame-accented workspace language the options page introduced. The
+popup grew slightly (360×560 → 420×600) to fit the hero, stat grid, data
+actions, and quick-toggle list in one surface.
+
+### Removed
+- `extension/options.html`, `extension/options.js`, and the
+  `options_ui` block in `manifest.json`. Users reach full settings via the
+  in-page YouTube workspace (same flow as before). The Settings Editor
+  modal that rendered every 150+ setting in a separate tab is retired; the
+  in-page control centre on YouTube tabs remains the authoritative editor.
+- The popup's secondary "Settings Editor" ghost button (it opened the
+  removed options page).
+
+### Added
+- **Hero workspace card** at the top of the popup — flame-accented
+  header, brand name + version chip, "Settings workspace" eyebrow, and
+  the primary "Open Full Settings" CTA inside the card.
+- **Storage overview** — five live-updating stat cards (Keys, Storage,
+  Hidden, Blocked, Bookmarks) that refresh on every `chrome.storage`
+  change.
+- **Data actions row** — Export, Import, Reset. Export uses
+  `chrome.downloads.download` when available so the JSON lands in the
+  user's downloads folder even after the popup closes. Reset now shows
+  an in-popup confirmation dialog matching the options page's tone.
+- **Quick toggles section** given its own framed panel with an eyebrow
+  header + live count so data controls and quick toggles read as two
+  related but distinct surfaces.
+
+### Changed
+- Popup theme tokens synced to the options page: same page background,
+  workspace card gradient, stat card treatment, flame accent, focus ring.
+- `background.js#togglePanelForTab` opens a new YouTube tab when the
+  panel-toggle message can't be delivered, instead of calling the
+  now-removed `chrome.runtime.openOptionsPage()`.
+- Popup context model simplified — the `showSecondary` flag and the
+  secondary footer button are gone.
+
+### Tests
+- 80/80 passing. `tests/hardening.test.js` rewritten around the new
+  popup: removed options-source invariants, added a regression test that
+  fails if `options_ui`, `options.html`, or `options.js` ever come back;
+  relocated the export/import-parity check to run against `popup.js`.
+
+---
+
 ## [3.18.0] - Premium-aware Auto Quality (no popup flash)
 
 Auto Quality rewritten end-to-end. The previous implementation opened
