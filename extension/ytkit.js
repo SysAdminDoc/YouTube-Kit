@@ -3146,6 +3146,7 @@ return response;
             hideDescriptionRow: true,
             // Consolidated: replaces hideVideoEndCards, hideVideoEndScreen, hideEndVideoStills
             hideVideoEndContent: true,
+            hideJumpAheadButton: true,
             stickyVideo: true,
             cleanShareUrls: true,
             videosPerRow: 0,                // 0 = dynamic, 3-8 = fixed columns
@@ -4817,7 +4818,41 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _premiumStyleElement: null,
             _premiumInteractionStyleElement: null,
             _observer: null,
+            _commentSelectionSelectStartHandler: null,
             pages: [PageTypes.WATCH],
+            _isCommentTextSelectionTarget(target) {
+                const node = target instanceof Element ? target : target?.parentElement;
+                if (!node) return false;
+
+                const comment = node.closest('#comments ytd-comment-view-model, #comments ytd-comment-renderer');
+                if (!comment) return false;
+
+                if (node.closest([
+                    'button',
+                    '[role="button"]',
+                    'yt-icon-button',
+                    'tp-yt-paper-button',
+                    'ytd-button-renderer',
+                    'ytd-menu-renderer',
+                    'ytd-toggle-button-renderer',
+                    '#action-menu',
+                    '#inline-action-menu',
+                    '#reply-button-end',
+                    '#creator-heart',
+                    '#more-replies',
+                    '#more-replies-sub-thread',
+                    '#less-replies',
+                    '#less-replies-sub-thread'
+                ].join(','))) return false;
+
+                return !!node.closest([
+                    '#content',
+                    '#content-text',
+                    'yt-attributed-string',
+                    '.ytAttributedStringHost',
+                    'yt-core-attributed-string'
+                ].join(','));
+            },
             init() {
                 // CSS selectors are scoped to comment elements — safe to inject globally
                 // (removing path guard so styles persist across SPA navigations)
@@ -5009,6 +5044,66 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     #comments ytd-comment-view-model #content-text a,
                     #comments ytd-comment-renderer #content-text a {
                         color: rgba(var(--ytkit-accent-rgb), 0.88) !important;
+                    }
+
+                    #comments ytd-comment-view-model > #body > #main,
+                    #comments ytd-comment-renderer > #body > #main,
+                    #comments ytd-comment-view-model #header,
+                    #comments ytd-comment-renderer #header,
+                    #comments ytd-comment-view-model #header-author,
+                    #comments ytd-comment-renderer #header-author,
+                    #comments ytd-comment-view-model ytd-expander,
+                    #comments ytd-comment-renderer ytd-expander,
+                    #comments ytd-comment-view-model #content,
+                    #comments ytd-comment-renderer #content {
+                        position: relative !important;
+                        z-index: 1 !important;
+                        pointer-events: auto !important;
+                    }
+
+                    #comments ytd-comment-view-model #author-text,
+                    #comments ytd-comment-renderer #author-text,
+                    #comments ytd-comment-view-model #author-text a,
+                    #comments ytd-comment-renderer #author-text a,
+                    #comments ytd-comment-view-model #published-time-text,
+                    #comments ytd-comment-renderer #published-time-text,
+                    #comments ytd-comment-view-model #published-time-text a,
+                    #comments ytd-comment-renderer #published-time-text a {
+                        position: relative !important;
+                        z-index: 2 !important;
+                        pointer-events: auto !important;
+                    }
+
+                    #comments ytd-comment-thread-renderer .thread-hitbox,
+                    #comments ytd-comment-thread-renderer .thread-hitbox.style-scope.ytd-comment-thread-renderer {
+                        display: none !important;
+                        pointer-events: none !important;
+                    }
+
+                    #comments ytd-comment-view-model #content-text,
+                    #comments ytd-comment-renderer #content-text,
+                    #comments ytd-comment-view-model #content-text *,
+                    #comments ytd-comment-renderer #content-text *,
+                    #comments ytd-comment-view-model yt-attributed-string,
+                    #comments ytd-comment-renderer yt-attributed-string,
+                    #comments ytd-comment-view-model .ytAttributedStringHost,
+                    #comments ytd-comment-renderer .ytAttributedStringHost,
+                    #comments ytd-comment-view-model yt-core-attributed-string,
+                    #comments ytd-comment-renderer yt-core-attributed-string {
+                        pointer-events: auto !important;
+                        -webkit-user-select: text !important;
+                        user-select: text !important;
+                    }
+
+                    #comments ytd-comment-view-model #content-text,
+                    #comments ytd-comment-renderer #content-text,
+                    #comments ytd-comment-view-model yt-attributed-string,
+                    #comments ytd-comment-renderer yt-attributed-string,
+                    #comments ytd-comment-view-model .ytAttributedStringHost,
+                    #comments ytd-comment-renderer .ytAttributedStringHost,
+                    #comments ytd-comment-view-model yt-core-attributed-string,
+                    #comments ytd-comment-renderer yt-core-attributed-string {
+                        cursor: text !important;
                     }
 
                     #comments .ytkit-vote-badge {
@@ -5657,9 +5752,47 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 `;
                 this._premiumInteractionStyleElement = injectStyle(premiumInteractionCss, this.id + '-premium-2', true);
 
+                this._commentSelectionSelectStartHandler = (e) => {
+                    if (!this._isCommentTextSelectionTarget(e.target)) return;
+                    e.stopPropagation();
+                    e.stopImmediatePropagation?.();
+                };
+                window.addEventListener('selectstart', this._commentSelectionSelectStartHandler, true);
+
                 const setDataFlag = (comment, flagName, enabled) => {
                     if (enabled) comment.dataset[flagName] = '1';
                     else delete comment.dataset[flagName];
+                };
+
+                const normalizeCommentInteractionSurface = (comment) => {
+                    if (!(comment instanceof Element)) return;
+                    const thread = comment.closest('ytd-comment-thread-renderer');
+                    thread?.querySelectorAll('.thread-hitbox').forEach((hitbox) => {
+                        hitbox.style.setProperty('display', 'none', 'important');
+                        hitbox.style.setProperty('pointer-events', 'none', 'important');
+                        hitbox.style.setProperty('visibility', 'hidden', 'important');
+                        hitbox.style.setProperty('opacity', '0', 'important');
+                        hitbox.style.setProperty('width', '0', 'important');
+                        hitbox.style.setProperty('height', '0', 'important');
+                    });
+
+                    comment.querySelectorAll('#main, #header, #header-author, ytd-expander, #content, #content-text').forEach((node) => {
+                        node.style.setProperty('position', 'relative', 'important');
+                        node.style.setProperty('z-index', '1', 'important');
+                        node.style.setProperty('pointer-events', 'auto', 'important');
+                    });
+
+                    comment.querySelectorAll('#author-text, #author-text a, #published-time-text, #published-time-text a').forEach((node) => {
+                        node.style.setProperty('position', 'relative', 'important');
+                        node.style.setProperty('z-index', '2', 'important');
+                        node.style.setProperty('pointer-events', 'auto', 'important');
+                    });
+
+                    comment.querySelectorAll('#content, #content-text, yt-attributed-string, .ytAttributedStringHost, yt-core-attributed-string').forEach((node) => {
+                        node.style.setProperty('pointer-events', 'auto', 'important');
+                        node.style.setProperty('-webkit-user-select', 'text', 'important');
+                        node.style.setProperty('user-select', 'text', 'important');
+                    });
                 };
 
                 const processComment = (comment) => {
@@ -5668,6 +5801,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     setDataFlag(comment, 'ytkitHeart', !!comment.querySelector('#creator-heart-button[is-hearted], #creator-heart-button:not([hidden])'));
                     setDataFlag(comment, 'ytkitLinked', comment.matches?.('[linked]') || !!comment.querySelector('#linked-comment-badge:not([hidden])'));
                     comment.querySelector('.ytkit-vote-badge')?.remove();
+                    normalizeCommentInteractionSurface(comment);
                 };
 
                 const processAll = () => {
@@ -5770,6 +5904,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._styleElement?.remove(); this._styleElement = null;
                 this._premiumStyleElement?.remove(); this._premiumStyleElement = null;
                 this._premiumInteractionStyleElement?.remove(); this._premiumInteractionStyleElement = null;
+                if (this._commentSelectionSelectStartHandler) {
+                    window.removeEventListener('selectstart', this._commentSelectionSelectStartHandler, true);
+                    this._commentSelectionSelectStartHandler = null;
+                }
                 removeMutationRule(this.id);
                 document.querySelectorAll('.ytkit-vote-badge').forEach(el => el.remove());
                 document.querySelectorAll('[data-ytkit-chat]').forEach(el => {
@@ -5954,10 +6092,81 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         },
         cssFeature('hidePlayables', 'Hide Playables', 'Hide YouTube Playables gaming content from feeds', 'Home / Subscriptions', 'gamepad',
             `ytd-rich-section-renderer:has([is-playables]) { display: none !important; }`),
-        cssFeature('hideMembersOnly', 'Hide Members Only', 'Hide members-only content from channels', 'Home / Subscriptions', 'lock',
-            `ytd-badge-supported-renderer:has([aria-label*="Members only"]),
-                    ytd-rich-item-renderer:has([aria-label*="Members only"]),
-                    ytd-video-renderer:has([aria-label*="Members only"]) { display: none !important; }`),
+        {
+            id: 'hideMembersOnly',
+            name: 'Hide Members Only',
+            description: 'Hide members-only feed cards on Home and Subscriptions',
+            group: 'Home / Subscriptions',
+            icon: 'lock',
+            pages: [PageTypes.HOME, PageTypes.SUBSCRIPTIONS],
+            _cardSelector: 'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer',
+            _hiddenMarker: 'ytkitMembersOnlyHidden',
+            _displayMarker: 'ytkitMembersOnlyDisplay',
+            _normalizeText(value) {
+                return (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            },
+            _badgeHasMembersOnlyText(node) {
+                return this._normalizeText(node?.textContent).includes('members only');
+            },
+            _isMembersOnlyCard(card) {
+                if (!(card instanceof Element)) return false;
+                if (card.matches('[aria-label*="members only" i]') || card.querySelector('[aria-label*="members only" i]')) return true;
+
+                const badgeNodes = card.querySelectorAll([
+                    'badge-shape .ytBadgeShapeText',
+                    '.badge-shape-wiz__text',
+                    '.ytContentMetadataViewModelBadge',
+                    'yt-badge-view-model',
+                    'ytd-badge-supported-renderer'
+                ].join(','));
+                return Array.from(badgeNodes).some((node) => this._badgeHasMembersOnlyText(node));
+            },
+            _hideCard(card) {
+                if (card.dataset[this._hiddenMarker] === '1') return;
+                card.dataset[this._hiddenMarker] = '1';
+                card.dataset[this._displayMarker] = card.style.display || '';
+                card.style.display = 'none';
+            },
+            _restoreCard(card) {
+                if (card.dataset[this._hiddenMarker] !== '1') return;
+                card.style.display = card.dataset[this._displayMarker] || '';
+                delete card.dataset[this._hiddenMarker];
+                delete card.dataset[this._displayMarker];
+            },
+            _processCard(card) {
+                if (!(card instanceof Element)) return;
+                if (this._isMembersOnlyCard(card)) this._hideCard(card);
+                else this._restoreCard(card);
+            },
+            _processCards(addedElements = []) {
+                const cards = new Set();
+                if (addedElements.length) {
+                    addedElements.forEach((el) => {
+                        if (!(el instanceof Element)) return;
+                        if (el.matches?.(this._cardSelector)) cards.add(el);
+                        el.querySelectorAll?.(this._cardSelector).forEach((card) => cards.add(card));
+                    });
+                } else {
+                    document.querySelectorAll(this._cardSelector).forEach((card) => cards.add(card));
+                }
+                cards.forEach((card) => this._processCard(card));
+            },
+            init() {
+                this._processCards();
+                addScopedMutationRule(this.id, this._cardSelector, (_targetNode, addedElements) => {
+                    this._processCards(addedElements);
+                });
+                addNavigateRule(this.id, () => this._processCards());
+            },
+            destroy() {
+                removeScopedMutationRule(this.id);
+                removeNavigateRule(this.id);
+                document.querySelectorAll(`[data-${this._hiddenMarker.replace(/[A-Z]/g, (match) => '-' + match.toLowerCase())}="1"]`).forEach((card) => {
+                    this._restoreCard(card);
+                });
+                document.querySelectorAll(this._cardSelector).forEach((card) => this._restoreCard(card));
+            }
+        },
         cssFeature('hideNewsHome', 'Hide News Section', 'Hide news sections from the homepage', 'Home / Subscriptions', 'newspaper',
             `ytd-rich-section-renderer:has([is-news]),
                     ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[type="news"]) { display: none !important; }`),
@@ -6674,6 +6883,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             _navRuleId: '_theaterSplit',
             _wheelHandler: null,
             _middleMouseHandler: null,
+            _commentSelectionMouseDownHandler: null,
+            _commentSelectionSelectStartHandler: null,
             _autoscrollState: null,
             _touchHandler: null,
             _touchMoveHandler: null,
@@ -6757,6 +6968,38 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
             _isSplitScrollable(el) {
                 return !!(el && el.scrollHeight > el.clientHeight + 1);
+            },
+
+            _isSplitCommentTextTarget(target) {
+                if (!this._isActive || !this._isSplit) return false;
+                const node = target instanceof Element ? target : target?.parentElement;
+                if (!node) return false;
+                const thread = node.closest('ytd-comment-thread-renderer');
+                if (!thread || !thread.closest('#below[style*="position"] #comments')) return false;
+                if (node.closest([
+                    'button',
+                    '[role="button"]',
+                    'yt-icon-button',
+                    'tp-yt-paper-button',
+                    'ytd-button-renderer',
+                    'ytd-menu-renderer',
+                    'ytd-toggle-button-renderer',
+                    '#action-menu',
+                    '#inline-action-menu',
+                    '#reply-button-end',
+                    '#creator-heart',
+                    '#more-replies',
+                    '#more-replies-sub-thread',
+                    '#less-replies',
+                    '#less-replies-sub-thread'
+                ].join(','))) return false;
+                return !!node.closest([
+                    '#content',
+                    '#content-text',
+                    'yt-attributed-string',
+                    '.ytAttributedStringHost',
+                    'yt-core-attributed-string'
+                ].join(','));
             },
 
             _shouldIgnoreSplitAutoscroll(target) {
@@ -8028,6 +8271,12 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 document.addEventListener('touchmove', this._touchMoveHandler, { passive: true, capture: true });
                 this._middleMouseHandler = (e) => this._startSplitAutoscroll(e);
                 document.addEventListener('mousedown', this._middleMouseHandler, true);
+                this._commentSelectionSelectStartHandler = (e) => {
+                    if (!this._isSplitCommentTextTarget(e.target)) return;
+                    e.stopImmediatePropagation?.();
+                    e.stopPropagation();
+                };
+                window.addEventListener('selectstart', this._commentSelectionSelectStartHandler, true);
 
                 // Re-layout on window resize
                 this._windowResizeHandler = () => {
@@ -8380,6 +8629,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (this._middleMouseHandler) {
                     document.removeEventListener('mousedown', this._middleMouseHandler, true);
                     this._middleMouseHandler = null;
+                }
+                if (this._commentSelectionSelectStartHandler) {
+                    window.removeEventListener('selectstart', this._commentSelectionSelectStartHandler, true);
+                    this._commentSelectionSelectStartHandler = null;
                 }
                 if (this._windowResizeHandler) {
                     window.removeEventListener('resize', this._windowResizeHandler);
@@ -10508,6 +10761,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #content-text,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-core-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-core-attributed-string,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model .ytAttributedStringHost,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer .ytAttributedStringHost {
                         pointer-events: auto !important;
@@ -10523,6 +10778,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #published-time-text,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-core-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-core-attributed-string,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model .ytAttributedStringHost,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer .ytAttributedStringHost {
                         -webkit-user-select: text !important;
@@ -10532,7 +10789,9 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model #content-text,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer #content-text,
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-attributed-string,
-                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string {
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-view-model yt-core-attributed-string,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #comments ytd-comment-renderer yt-core-attributed-string {
                         cursor: text !important;
                     }
 
@@ -12203,6 +12462,151 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 this._styleElement = injectStyle(css, this.id, true);
             },
             destroy() { this._styleElement?.remove(); this._styleElement = null; }
+        },
+        {
+            id: 'hideJumpAheadButton',
+            name: 'Hide Jump Ahead',
+            description: 'Remove the Jump Ahead prompt that appears after skipping on eligible videos.',
+            group: 'Video Player',
+            icon: 'skip-forward',
+            pages: [PageTypes.WATCH],
+            _styleElement: null,
+            _scanFrame: 0,
+            _hiddenAttr: 'data-ytkit-jump-ahead-hidden',
+            _displayAttr: 'data-ytkit-jump-ahead-display',
+            _candidateSelector: [
+                'button',
+                '[role="button"]',
+                'yt-button-shape',
+                'button-view-model',
+                '.ytp-bezel-text-wrapper',
+                '.ytp-bezel-text',
+                '.ytp-tooltip-text-wrapper'
+            ].join(', '),
+            _phrases: [
+                'jump ahead',
+                'jumping over commonly skipped section',
+                'commonly skipped section'
+            ],
+            _normalizeText(value) {
+                return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            },
+            _matchesJumpAheadText(value) {
+                const normalized = this._normalizeText(value);
+                return normalized && this._phrases.some((phrase) => normalized.includes(phrase));
+            },
+            _collectCandidateText(node) {
+                if (!(node instanceof Element)) return [];
+                const texts = [
+                    node.getAttribute('aria-label'),
+                    node.getAttribute('aria-description'),
+                    node.getAttribute('title'),
+                    node.getAttribute('data-tooltip-title'),
+                    node.textContent,
+                    node instanceof HTMLElement ? node.innerText : ''
+                ];
+                node.querySelectorAll?.('[aria-label], [aria-description], [title], [data-tooltip-title]').forEach((el) => {
+                    texts.push(
+                        el.getAttribute('aria-label'),
+                        el.getAttribute('aria-description'),
+                        el.getAttribute('title'),
+                        el.getAttribute('data-tooltip-title')
+                    );
+                });
+                return texts.filter(Boolean);
+            },
+            _isJumpAheadNode(node) {
+                if (!(node instanceof Element)) return false;
+                return this._collectCandidateText(node).some((value) => this._matchesJumpAheadText(value));
+            },
+            _resolveHideTarget(node) {
+                if (!(node instanceof Element)) return null;
+                const target = node.closest([
+                    'button',
+                    '[role="button"]',
+                    'yt-button-shape',
+                    'button-view-model',
+                    '.ytp-bezel-text-wrapper',
+                    '.ytp-bezel-text',
+                    '.ytp-tooltip-text-wrapper'
+                ].join(', '));
+                return target instanceof HTMLElement ? target : null;
+            },
+            _getPlayerRoots() {
+                return Array.from(document.querySelectorAll('#movie_player, .html5-video-player'))
+                    .filter((node) => node instanceof HTMLElement);
+            },
+            _hideTarget(target) {
+                if (!(target instanceof HTMLElement) || target.getAttribute(this._hiddenAttr) === '1') return;
+                target.setAttribute(this._hiddenAttr, '1');
+                target.setAttribute(this._displayAttr, target.style.display || '');
+                target.style.setProperty('display', 'none', 'important');
+            },
+            _restoreTarget(target) {
+                if (!(target instanceof HTMLElement) || target.getAttribute(this._hiddenAttr) !== '1') return;
+                const previousDisplay = target.getAttribute(this._displayAttr) || '';
+                if (previousDisplay) target.style.display = previousDisplay;
+                else target.style.removeProperty('display');
+                target.removeAttribute(this._hiddenAttr);
+                target.removeAttribute(this._displayAttr);
+            },
+            _scanPlayer(player) {
+                if (!(player instanceof HTMLElement)) return;
+                const matchedTargets = new Set();
+                player.querySelectorAll(this._candidateSelector).forEach((candidate) => {
+                    if (!this._isJumpAheadNode(candidate)) return;
+                    const target = this._resolveHideTarget(candidate);
+                    if (!(target instanceof HTMLElement) || !player.contains(target)) return;
+                    matchedTargets.add(target);
+                    this._hideTarget(target);
+                });
+                player.querySelectorAll(`[${this._hiddenAttr}="1"]`).forEach((target) => {
+                    if (!matchedTargets.has(target)) this._restoreTarget(target);
+                });
+            },
+            _scan() {
+                this._scanFrame = 0;
+                this._getPlayerRoots().forEach((player) => this._scanPlayer(player));
+            },
+            _scheduleScan() {
+                if (this._scanFrame) return;
+                this._scanFrame = requestAnimationFrame(() => this._scan());
+            },
+            init() {
+                const css = `
+                    #movie_player button[aria-label*="Jump ahead" i],
+                    #movie_player [role="button"][aria-label*="Jump ahead" i],
+                    #movie_player [title*="Jump ahead" i],
+                    #movie_player [data-tooltip-title*="Jump ahead" i],
+                    #movie_player [aria-label*="commonly skipped section" i],
+                    #movie_player [title*="commonly skipped section" i],
+                    #movie_player [data-tooltip-title*="commonly skipped section" i],
+                    .html5-video-player button[aria-label*="Jump ahead" i],
+                    .html5-video-player [role="button"][aria-label*="Jump ahead" i],
+                    .html5-video-player [title*="Jump ahead" i],
+                    .html5-video-player [data-tooltip-title*="Jump ahead" i],
+                    .html5-video-player [aria-label*="commonly skipped section" i],
+                    .html5-video-player [title*="commonly skipped section" i],
+                    .html5-video-player [data-tooltip-title*="commonly skipped section" i] {
+                        display: none !important;
+                    }
+                `;
+                this._styleElement = injectStyle(css, this.id, true);
+                this._scan();
+                addMutationRule(this.id, () => this._scheduleScan());
+                addNavigateRule(this.id, () => this._scheduleScan());
+            },
+            destroy() {
+                removeMutationRule(this.id);
+                removeNavigateRule(this.id);
+                if (this._scanFrame) {
+                    cancelAnimationFrame(this._scanFrame);
+                    this._scanFrame = 0;
+                }
+                this._styleElement?.remove();
+                this._styleElement = null;
+                document.querySelectorAll(`[${this._hiddenAttr}="1"]`).forEach((target) => this._restoreTarget(target));
+            }
         },
         cssFeature('hideFundraiser', 'Hide Fundraisers', 'Remove fundraiser and donation badges', 'Watch Page', 'heart-off',
             `ytd-donation-shelf-renderer,
@@ -24150,6 +24554,252 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         });
     }
 
+    const COMMENT_TEXT_SELECTION_ROOT_SELECTORS = [
+        'ytd-comment-view-model',
+        'ytd-comment-renderer',
+        'ytd-backstage-comment-renderer',
+        'ytd-post-renderer',
+        'ytd-backstage-post-thread-renderer'
+    ];
+    const COMMENT_TEXT_SELECTION_TEXT_SELECTORS = [
+        '#content-text',
+        '#content',
+        '#home-content-text',
+        '#post-text',
+        'yt-attributed-string',
+        '.ytAttributedStringHost',
+        'yt-core-attributed-string'
+    ];
+    const COMMENT_TEXT_SELECTION_INTERACTIVE_SELECTORS = [
+        'button',
+        '[role="button"]',
+        'input',
+        'textarea',
+        'select',
+        'option',
+        'summary',
+        'yt-icon-button',
+        'tp-yt-paper-button',
+        'ytd-button-renderer',
+        'ytd-menu-renderer',
+        'ytd-toggle-button-renderer',
+        '#action-menu',
+        '#inline-action-menu',
+        '#reply-button-end',
+        '#creator-heart',
+        '#more-replies',
+        '#more-replies-sub-thread',
+        '#less-replies',
+        '#less-replies-sub-thread'
+    ];
+    const COMMENT_TEXT_SELECTION_ROOT_SELECTOR = COMMENT_TEXT_SELECTION_ROOT_SELECTORS.join(',');
+    const COMMENT_TEXT_SELECTION_TEXT_SELECTOR = COMMENT_TEXT_SELECTION_TEXT_SELECTORS.join(',');
+    const COMMENT_TEXT_SELECTION_INTERACTIVE_SELECTOR = COMMENT_TEXT_SELECTION_INTERACTIVE_SELECTORS.join(',');
+    const commentTextSelectionSupport = {
+        _initialized: false,
+        _styleElement: null,
+        _observer: null,
+        _normalizeRaf: 0,
+        _selectStartHandler: null,
+        _isTextTarget(target) {
+            const node = target instanceof Element ? target : target?.parentElement;
+            if (!node) return false;
+            if (!node.closest(COMMENT_TEXT_SELECTION_ROOT_SELECTOR)) return false;
+            if (node.closest(COMMENT_TEXT_SELECTION_INTERACTIVE_SELECTOR)) return false;
+            return !!node.closest(COMMENT_TEXT_SELECTION_TEXT_SELECTOR);
+        },
+        _normalizeCommentSurface(root) {
+            const scope = root instanceof Element || root instanceof Document ? root : document;
+            if (!scope) return;
+
+            const rootComments = [];
+            if (scope instanceof Element && scope.matches?.(COMMENT_TEXT_SELECTION_ROOT_SELECTOR)) {
+                rootComments.push(scope);
+            }
+            const nestedComments = scope.querySelectorAll?.(COMMENT_TEXT_SELECTION_ROOT_SELECTOR) || [];
+            rootComments.push(...nestedComments);
+
+            if (scope instanceof Element && scope.matches?.('ytd-comment-thread-renderer')) {
+                scope.querySelectorAll('.thread-hitbox').forEach((hitbox) => {
+                    hitbox.style.setProperty('display', 'none', 'important');
+                    hitbox.style.setProperty('pointer-events', 'none', 'important');
+                    hitbox.style.setProperty('visibility', 'hidden', 'important');
+                    hitbox.style.setProperty('opacity', '0', 'important');
+                    hitbox.style.setProperty('width', '0', 'important');
+                    hitbox.style.setProperty('height', '0', 'important');
+                });
+            }
+
+            rootComments.forEach((comment) => {
+                comment.closest('ytd-comment-thread-renderer')?.querySelectorAll('.thread-hitbox').forEach((hitbox) => {
+                    hitbox.style.setProperty('display', 'none', 'important');
+                    hitbox.style.setProperty('pointer-events', 'none', 'important');
+                    hitbox.style.setProperty('visibility', 'hidden', 'important');
+                    hitbox.style.setProperty('opacity', '0', 'important');
+                    hitbox.style.setProperty('width', '0', 'important');
+                    hitbox.style.setProperty('height', '0', 'important');
+                });
+
+                comment.querySelectorAll('#main, #header, #header-author, ytd-expander, #content, #content-text, #home-content-text, #post-text').forEach((node) => {
+                    node.style.setProperty('position', 'relative', 'important');
+                    node.style.setProperty('z-index', '1', 'important');
+                    node.style.setProperty('pointer-events', 'auto', 'important');
+                });
+
+                comment.querySelectorAll('#author-text, #author-text a, #published-time-text, #published-time-text a').forEach((node) => {
+                    node.style.setProperty('position', 'relative', 'important');
+                    node.style.setProperty('z-index', '2', 'important');
+                    node.style.setProperty('pointer-events', 'auto', 'important');
+                });
+
+                comment.querySelectorAll('#content, #content-text, #home-content-text, #post-text, yt-attributed-string, .ytAttributedStringHost, yt-core-attributed-string').forEach((node) => {
+                    node.style.setProperty('pointer-events', 'auto', 'important');
+                    node.style.setProperty('-webkit-user-select', 'text', 'important');
+                    node.style.setProperty('user-select', 'text', 'important');
+                });
+            });
+        },
+        _scheduleNormalize(root = document) {
+            if (this._normalizeRaf) return;
+            this._normalizeRaf = requestAnimationFrame(() => {
+                this._normalizeRaf = 0;
+                this._normalizeCommentSurface(root);
+            });
+        },
+        init() {
+            if (this._initialized) return;
+            this._initialized = true;
+            const css = `
+                ytd-comment-thread-renderer .thread-hitbox,
+                ytd-comment-thread-renderer .thread-hitbox.style-scope.ytd-comment-thread-renderer {
+                    display: none !important;
+                    pointer-events: none !important;
+                }
+
+                ytd-comment-view-model #content-text,
+                ytd-comment-renderer #content-text,
+                ytd-backstage-comment-renderer #content-text,
+                ytd-post-renderer #content-text,
+                ytd-backstage-post-thread-renderer #content-text,
+                ytd-comment-view-model #content,
+                ytd-comment-renderer #content,
+                ytd-backstage-comment-renderer #content,
+                ytd-post-renderer #content,
+                ytd-backstage-post-thread-renderer #content,
+                ytd-comment-view-model > #body > #main,
+                ytd-comment-renderer > #body > #main,
+                ytd-comment-view-model #header,
+                ytd-comment-renderer #header,
+                ytd-comment-view-model #header-author,
+                ytd-comment-renderer #header-author,
+                ytd-post-renderer #home-content-text,
+                ytd-backstage-post-thread-renderer #home-content-text,
+                ytd-post-renderer #post-text,
+                ytd-backstage-post-thread-renderer #post-text,
+                ytd-comment-view-model #author-text,
+                ytd-comment-renderer #author-text,
+                ytd-comment-view-model #author-text a,
+                ytd-comment-renderer #author-text a,
+                ytd-comment-view-model #published-time-text,
+                ytd-comment-renderer #published-time-text,
+                ytd-comment-view-model #published-time-text a,
+                ytd-comment-renderer #published-time-text a,
+                ytd-comment-view-model yt-attributed-string,
+                ytd-comment-renderer yt-attributed-string,
+                ytd-backstage-comment-renderer yt-attributed-string,
+                ytd-post-renderer yt-attributed-string,
+                ytd-backstage-post-thread-renderer yt-attributed-string,
+                ytd-comment-view-model .ytAttributedStringHost,
+                ytd-comment-renderer .ytAttributedStringHost,
+                ytd-backstage-comment-renderer .ytAttributedStringHost,
+                ytd-post-renderer .ytAttributedStringHost,
+                ytd-backstage-post-thread-renderer .ytAttributedStringHost,
+                ytd-comment-view-model yt-core-attributed-string,
+                ytd-comment-renderer yt-core-attributed-string,
+                ytd-backstage-comment-renderer yt-core-attributed-string,
+                ytd-post-renderer yt-core-attributed-string,
+                ytd-backstage-post-thread-renderer yt-core-attributed-string {
+                    pointer-events: auto !important;
+                    position: relative !important;
+                    z-index: 1 !important;
+                }
+
+                ytd-comment-view-model #author-text,
+                ytd-comment-renderer #author-text,
+                ytd-comment-view-model #author-text a,
+                ytd-comment-renderer #author-text a,
+                ytd-comment-view-model #published-time-text,
+                ytd-comment-renderer #published-time-text,
+                ytd-comment-view-model #published-time-text a,
+                ytd-comment-renderer #published-time-text a {
+                    z-index: 2 !important;
+                }
+
+                ytd-comment-view-model #content-text,
+                ytd-comment-renderer #content-text,
+                ytd-backstage-comment-renderer #content-text,
+                ytd-post-renderer #content-text,
+                ytd-backstage-post-thread-renderer #content-text,
+                ytd-comment-view-model #content,
+                ytd-comment-renderer #content,
+                ytd-backstage-comment-renderer #content,
+                ytd-post-renderer #content,
+                ytd-backstage-post-thread-renderer #content,
+                ytd-post-renderer #home-content-text,
+                ytd-backstage-post-thread-renderer #home-content-text,
+                ytd-post-renderer #post-text,
+                ytd-backstage-post-thread-renderer #post-text,
+                ytd-comment-view-model yt-attributed-string,
+                ytd-comment-renderer yt-attributed-string,
+                ytd-backstage-comment-renderer yt-attributed-string,
+                ytd-post-renderer yt-attributed-string,
+                ytd-backstage-post-thread-renderer yt-attributed-string,
+                ytd-comment-view-model .ytAttributedStringHost,
+                ytd-comment-renderer .ytAttributedStringHost,
+                ytd-backstage-comment-renderer .ytAttributedStringHost,
+                ytd-post-renderer .ytAttributedStringHost,
+                ytd-backstage-post-thread-renderer .ytAttributedStringHost,
+                ytd-comment-view-model yt-core-attributed-string,
+                ytd-comment-renderer yt-core-attributed-string,
+                ytd-backstage-comment-renderer yt-core-attributed-string,
+                ytd-post-renderer yt-core-attributed-string,
+                ytd-backstage-post-thread-renderer yt-core-attributed-string {
+                    -webkit-user-select: text !important;
+                    user-select: text !important;
+                    cursor: text !important;
+                }
+            `;
+            this._styleElement = injectStyle(css, 'ytkit-comment-text-selection', true);
+            this._normalizeCommentSurface(document);
+
+            this._selectStartHandler = (event) => {
+                if (!this._isTextTarget(event.target)) return;
+                event.stopPropagation();
+                event.stopImmediatePropagation?.();
+            };
+
+            window.addEventListener('selectstart', this._selectStartHandler, true);
+
+            this._observer = new MutationObserver((records) => {
+                for (const record of records) {
+                    for (const node of record.addedNodes) {
+                        if (!(node instanceof Element)) continue;
+                        if (
+                            node.matches?.(COMMENT_TEXT_SELECTION_ROOT_SELECTOR) ||
+                            node.matches?.('ytd-comment-thread-renderer') ||
+                            node.querySelector?.(COMMENT_TEXT_SELECTION_ROOT_SELECTOR) ||
+                            node.querySelector?.('.thread-hitbox')
+                        ) {
+                            this._scheduleNormalize(node);
+                            return;
+                        }
+                    }
+                }
+            });
+            this._observer.observe(document.documentElement, { childList: true, subtree: true });
+        }
+    };
+
     //  SECTION 4: PREMIUM UI (Trusted Types Safe)
 
     // SVG Icon Factory - Creates icons using DOM methods (Trusted Types safe)
@@ -28216,6 +28866,7 @@ body.ytkit-panel-open #ytkit-settings-panel {
 
         // Inject base accent CSS variables (default purple, overridden by colorThemeManager)
         injectStyle(`:root, html[dark] { --ytkit-accent: #a78bfa; --ytkit-accent-rgb: 167,139,250; --ytkit-accent-light: #c4b5fd; }`, 'ytkit-accent-vars', true);
+        commentTextSelectionSupport.init();
 
         injectPanelStyles();
 

@@ -177,6 +177,149 @@ test('commentSearch only restores threads it hid and respects pinned comment hid
         'commentSearch destroy should not blindly unhide every hidden comment thread');
 });
 
+test('hideMembersOnly defaults on and detects modern lockup badges', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const defaults = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extension', 'default-settings.json'), 'utf8'));
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    assert.equal(defaults.hideMembersOnly, true, 'members-only feed filtering should be enabled by default');
+
+    const start = source.indexOf("id: 'hideMembersOnly'");
+    const end = source.indexOf("id: 'hideNewsHome'", start);
+    assert.ok(start > -1 && end > start, 'hideMembersOnly block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes('pages: [PageTypes.HOME, PageTypes.SUBSCRIPTIONS]'),
+        'hideMembersOnly should only run on Home and Subscriptions');
+    assert.ok(block.includes("_cardSelector: 'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer'"),
+        'hideMembersOnly should scan modern feed card renderers');
+    assert.ok(block.includes("'badge-shape .ytBadgeShapeText'"),
+        'hideMembersOnly should inspect modern badge text nodes');
+    assert.ok(block.includes("'.ytContentMetadataViewModelBadge'"),
+        'hideMembersOnly should inspect metadata badge wrappers used by new lockups');
+    assert.ok(block.includes("includes('members only')"),
+        'hideMembersOnly should match the visible members-only badge text');
+    assert.ok(block.includes('addScopedMutationRule(this.id, this._cardSelector'),
+        'hideMembersOnly should react to newly inserted feed cards efficiently');
+    assert.ok(block.includes("card.style.display = 'none'"),
+        'hideMembersOnly should hide matched feed cards directly');
+    assert.ok(!block.includes('[aria-label*="Members only"] { display: none !important; }'),
+        'hideMembersOnly should no longer rely on the outdated aria-label-only CSS rule');
+});
+
+test('hideJumpAheadButton defaults on and targets player jump-ahead overlays safely', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const defaults = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extension', 'default-settings.json'), 'utf8'));
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    assert.equal(defaults.hideJumpAheadButton, true, 'jump-ahead hiding should be enabled by default');
+    assert.match(source, /hideJumpAheadButton:\s*true/, 'settings defaults should enable jump-ahead hiding');
+
+    const start = source.indexOf("id: 'hideJumpAheadButton'");
+    const end = source.indexOf("cssFeature('hideFundraiser'", start);
+    assert.ok(start > -1 && end > start, 'hideJumpAheadButton block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes("pages: [PageTypes.WATCH]"),
+        'hideJumpAheadButton should only run on watch pages');
+    assert.ok(block.includes("_hiddenAttr: 'data-ytkit-jump-ahead-hidden'"),
+        'hideJumpAheadButton should mark hidden nodes for safe cleanup');
+    assert.ok(block.includes("'jump ahead'"),
+        'hideJumpAheadButton should look for the visible Jump Ahead label');
+    assert.ok(block.includes("'jumping over commonly skipped section'"),
+        'hideJumpAheadButton should also cover the follow-up overlay copy');
+    assert.ok(block.includes("'#movie_player, .html5-video-player'"),
+        'hideJumpAheadButton should stay scoped to the actual player surface');
+    assert.ok(block.includes('button[aria-label*="Jump ahead" i]'),
+        'hideJumpAheadButton should include an attribute-based CSS fallback');
+    assert.ok(block.includes("style.setProperty('display', 'none', 'important');"),
+        'hideJumpAheadButton should hide matched controls directly');
+    assert.ok(block.includes('addMutationRule(this.id'),
+        'hideJumpAheadButton should react to overlays appearing during playback');
+    assert.ok(block.includes('addNavigateRule(this.id'),
+        'hideJumpAheadButton should rescan on SPA watch navigation');
+    assert.ok(!block.includes('ytSpecTouchFeedbackShapeOverlayTouchResponseInverse { display: none !important; }'),
+        'hideJumpAheadButton should not hide the generic touch-feedback class globally');
+});
+
+test('studio comments preserve native text selection on watch pages', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+
+    const start = source.indexOf("id: 'chatStyleComments'");
+    const end = source.indexOf("id: 'removeAllShorts'", start);
+    assert.ok(start > -1 && end > start, 'chatStyleComments block should exist');
+
+    const block = source.slice(start, end);
+    assert.ok(block.includes('_commentSelectionSelectStartHandler'),
+        'studio comments should track a watch-page comment selection selectstart guard');
+    assert.ok(block.includes('_isCommentTextSelectionTarget(target)'),
+        'studio comments should detect when the user is targeting selectable comment text');
+    assert.ok(block.includes('.thread-hitbox.style-scope.ytd-comment-thread-renderer'),
+        'studio comments should disable the invisible comment hitbox overlay');
+    assert.ok(block.includes('yt-core-attributed-string'),
+        'studio comments should explicitly cover the newer attributed-string host');
+    assert.ok(block.includes('-webkit-user-select: text !important;'),
+        'studio comments should explicitly re-enable text selection');
+    assert.ok(block.includes('cursor: text !important;'),
+        'studio comments should use a text cursor for comment content');
+    assert.ok(block.includes('#published-time-text a'),
+        'studio comments should keep timestamp links in the interactive foreground');
+    assert.ok(block.includes("style.setProperty('display', 'none', 'important');"),
+        'studio comments should inline-hide legacy comment hitboxes when they appear');
+    assert.ok(block.includes("window.addEventListener('selectstart', this._commentSelectionSelectStartHandler, true);"),
+        'studio comments should protect selection before downstream handlers can cancel it');
+    assert.ok(!block.includes("window.addEventListener('mousedown', this._commentSelectionMouseDownHandler, true);"),
+        'studio comments should avoid a global mousedown capture guard that starves native text and link interactions');
+    assert.ok(block.includes("window.removeEventListener('selectstart', this._commentSelectionSelectStartHandler, true);"),
+        'studio comments should clean up the watch-page selection guard on destroy');
+});
+
+test('global comment text selection support covers community posts and comment surfaces', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '..', 'extension', 'ytkit.js'), 'utf8');
+    const start = source.indexOf('const commentTextSelectionSupport = {');
+    const end = source.indexOf('//  SECTION 4: PREMIUM UI', start);
+    assert.ok(start > -1 && end > start, 'global comment selection support block should exist');
+    const block = source.slice(start, end);
+
+    assert.ok(source.includes('const COMMENT_TEXT_SELECTION_ROOT_SELECTORS = ['),
+        'global comment selection support should define comment/post root selectors');
+    assert.ok(source.includes("'ytd-backstage-comment-renderer'"),
+        'global comment selection support should cover backstage comment renderers');
+    assert.ok(source.includes("'ytd-post-renderer'"),
+        'global comment selection support should cover post renderers');
+    assert.ok(source.includes("'ytd-backstage-post-thread-renderer'"),
+        'global comment selection support should cover backstage post thread renderers');
+    assert.ok(source.includes("'#home-content-text'"),
+        'global comment selection support should cover compact post text');
+    assert.ok(source.includes("'#post-text'"),
+        'global comment selection support should cover full post text');
+    assert.ok(source.includes('const commentTextSelectionSupport = {'),
+        'global comment selection support should be centralized in a singleton helper');
+    assert.ok(block.includes("_styleElement = injectStyle(css, 'ytkit-comment-text-selection', true);"),
+        'global comment selection support should inject a dedicated style block');
+    assert.ok(block.includes('#published-time-text a'),
+        'global comment selection support should preserve timestamp link interactivity');
+    assert.ok(block.includes('_normalizeCommentSurface(root)'),
+        'global comment selection support should normalize comment interaction surfaces');
+    assert.ok(block.includes('new MutationObserver((records) => {'),
+        'global comment selection support should re-apply safeguards as YouTube lazily renders new comments');
+    assert.ok(block.includes("window.addEventListener('selectstart', this._selectStartHandler, true);"),
+        'global comment selection support should guard selectstart in the capture phase');
+    assert.ok(!block.includes("window.addEventListener('mousedown', this._mouseDownHandler, true);"),
+        'global comment selection support should avoid a mousedown capture guard that blocks native text and link behavior');
+    assert.ok(source.includes('COMMENT_TEXT_SELECTION_INTERACTIVE_SELECTORS'),
+        'global comment selection support should exclude interactive targets');
+    assert.ok(!source.includes("const COMMENT_TEXT_SELECTION_INTERACTIVE_SELECTORS = [\r\n        'a[href]'")
+        && !source.includes("const COMMENT_TEXT_SELECTION_INTERACTIVE_SELECTORS = [\n        'a[href]'"),
+        'global comment selection support should allow selection to begin inside linked text');
+});
+
 test('split comment replies keep nested cards readable', () => {
     const fs = require('fs');
     const path = require('path');
@@ -193,12 +336,18 @@ test('split comment replies keep nested cards readable', () => {
         'extension split replies should use smaller avatars to preserve text width');
     assert.ok(source.includes('-webkit-user-select: text !important;'),
         'extension split comments should allow selecting comment text');
+    assert.ok(source.includes('yt-core-attributed-string'),
+        'extension split comments should cover the newer attributed-string host');
     assert.ok(source.includes('cursor: text !important;'),
         'extension split comment text should use a text cursor');
     assert.ok(source.includes('.thread-hitbox.style-scope.ytd-comment-thread-renderer'),
         'extension split comments should disable the invisible thread hitbox overlay');
     assert.ok(source.includes('pointer-events: auto !important;'),
         'extension split comments should force pointer events onto the actual text containers');
+    assert.ok(source.includes('_isSplitCommentTextTarget(target)'),
+        'extension split should detect selectable comment-text targets explicitly');
+    assert.ok(source.includes("window.addEventListener('selectstart', this._commentSelectionSelectStartHandler, true);"),
+        'extension split should protect comment selection before downstream handlers can cancel it');
     assert.ok(source.includes('font-weight: 650 !important;'),
         'extension split replies toggle should read as a deliberate pill control');
     assert.ok(source.includes('margin: 6px 0 0 !important;'),
@@ -214,12 +363,18 @@ test('split comment replies keep nested cards readable', () => {
         'standalone split replies should handle nested reply indentation separately');
     assert.ok(theaterSplit.includes('-webkit-user-select: text !important;'),
         'standalone split comments should allow selecting comment text');
+    assert.ok(theaterSplit.includes('yt-core-attributed-string'),
+        'standalone split comments should cover the newer attributed-string host');
     assert.ok(theaterSplit.includes('cursor: text !important;'),
         'standalone split comment text should use a text cursor');
     assert.ok(theaterSplit.includes('.thread-hitbox.style-scope.ytd-comment-thread-renderer'),
         'standalone split comments should disable the invisible thread hitbox overlay');
     assert.ok(theaterSplit.includes('pointer-events: auto !important;'),
         'standalone split comments should force pointer events onto the actual text containers');
+    assert.ok(theaterSplit.includes('function isSplitCommentTextTarget(target)'),
+        'standalone split should detect selectable comment-text targets explicitly');
+    assert.ok(theaterSplit.includes("window.addEventListener('selectstart', commentSelectionSelectStartHandler, true);"),
+        'standalone split should protect comment selection before downstream handlers can cancel it');
     assert.ok(theaterSplit.includes('font-weight: 650 !important;'),
         'standalone split replies toggle should read as a deliberate pill control');
     assert.ok(theaterSplit.includes('margin: 6px 0 0 !important;'),
