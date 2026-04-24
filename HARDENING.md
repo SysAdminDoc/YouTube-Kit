@@ -277,3 +277,213 @@ error pointing at which file is out of sync.
   noted in werkzeug's own docs as not production-grade.
 - Userscript parity audit — ensure the standalone `YTKit.user.js` has
   v3.14.0 hardening ported (most fixes are in the extension build only).
+
+---
+
+## v1.2.0 — Hardening Pass 6 (Astra Downloader companion)
+
+Pass 6 is scoped to the Python/Flask companion (`astra_downloader.py`) and
+its first-run setup. Five Pass 5 follow-ups landed in this release plus a
+batch of new findings around trust on the yt-dlp / ffmpeg install path and
+the install-day UX. The extension side is unchanged; `/health` gains three
+additive fields but the wire contract is backward-compatible (older builds
+ignore unknown keys).
+
+### New Real Issues (Addressed in v1.2.0)
+
+#### Security — Astra Downloader
+
+**S1 — `outputDir` accepted any absolute path (Pass 5 follow-up)**
+The `/download` endpoint passed a client-supplied `outputDir` straight into
+`normalize_output_dir`, which called `mkdir(parents=True, exist_ok=True)`
+on whatever it received and then let yt-dlp write there. A compromised
+extension context or malicious content script running with extension
+privileges could drop files anywhere the server user had write access —
+the service runs as a normal user, but that's still home dir, Documents,
+the Downloads folder, anywhere the user's profile can reach.
+
+Fix: `normalize_output_dir` now takes an optional `allowed_roots`
+argument; when supplied, the resolved path must sit inside one of those
+roots or the request is rejected with 400 *before* `mkdir` runs. The
+`/download` handler always enforces confinement when the client supplies
+`outputDir`; it skips the check when the server falls back to its
+configured defaults (those are always inside the allowlist by
+construction, and skipping avoids a chicken-and-egg on first run). Users
+who want a wider set of roots without widening `DownloadPath` itself can
+add them via the new `ExtraOutputRoots` config list.
+
+**S2 — No rate limit on `/download` (Pass 5 follow-up)**
+`MAX_CONCURRENT=3` gated *running* jobs, but the HTTP endpoint itself had
+no throughput ceiling. A compromised extension could POST 10k
+`/download` requests per second, spending CPU on URL / cookie / path
+normalization for every one. Each rejected request still ran through the
+sanitize pipeline, so rejection didn't bound the cost.
+
+Fix: token-bucket sliding window (`RateLimiter`, 30 req / 60 s by
+default). Burst budget is far above what a real user can produce but
+clamps a runaway client. Rejection runs early (after auth, before body
+parsing) so CPU stays flat under attack. 429 responses include a
+`Retry-After` header.
+
+**S3 — First-run binaries not checksum-verified**
+`SetupWorker` pulled `yt-dlp.exe` and the ffmpeg zip over TLS from GitHub
+but never verified them against the release SHA-256 sidecars. Both
+upstreams ship per-release checksums; a TLS-stripping proxy, a corrupted
+cached copy at a CDN edge, or an incomplete download could install a
+poisoned or broken binary that then executes with user privileges for
+every subsequent download.
+
+Fix: `verify_file_sha256` + `fetch_expected_sha256`. The setup worker
+fetches the sidecar from the same release the binary came from, verifies
+the SHA-256, and hard-fails the install on mismatch (the downloaded
+file is unlinked before the error bubbles up, so the next retry
+re-fetches). If the sidecar itself is 404 / rate-limited / unreachable,
+we soft-fail (log + continue) so a sidecar outage doesn't block a
+legitimate install. The "Reinstall ffmpeg" button in Settings →
+Tools re-runs the same verified download path.
+
+#### Reliability — Astra Downloader
+
+**R1 — Werkzeug dev server in production (Pass 5 follow-up)**
+werkzeug's own documentation warns that `make_server` / `serve_forever`
+is a development server; acceptable on localhost but without the thread
+pool, graceful drain, or graceful shutdown that a real WSGI needs.
+
+Fix: switched to `waitress` (production-grade, battle-tested, single
+wheel dependency) via a `_ServerAdapter` shim that presents a uniform
+`run()` / `stop()` over both backends. Werkzeug is retained only as a
+fallback when waitress isn't installed (legacy source runs, test
+containers). The server start log now reports which backend is active.
+
+**R2 — CORS preflight re-negotiated on every POST (Pass 5 follow-up)**
+Every `POST /download` previously triggered a fresh `OPTIONS` preflight
+because the server returned no `Access-Control-Max-Age`.
+
+Fix: `cors_response()` now sets `Access-Control-Max-Age: 600`. Multi-
+video sessions cut their preflight round-trips to once per 10 min.
+
+**R3 — yt-dlp auto-update fired on every launch**
+`AutoUpdateYtDlp` ran `yt-dlp.exe -U` every time the server started,
+captured no exit code, and logged nothing. Update-check failures were
+invisible until downloads silently regressed.
+
+Fix: new `LastYtDlpUpdateCheck` config stamp gates the update to at most
+once per 24 h; `maybe_auto_update_ytdlp()` runs it in a daemon thread
+with a 2-minute timeout and logs the exit code + captured stdout/stderr
+on both success and failure. Invalidates the `/health` version cache
+on success so `/health` reports the new version within a minute.
+
+**R4 — Orphan cookie jars leaked session credentials across crashes**
+The per-download `.cookies.{id}.txt` files are cleaned in the `_run_download`
+`finally` block, but that doesn't run if the server is killed with
+`taskkill /F` or the host loses power mid-download. The jars accumulated
+in `INSTALL_DIR` indefinitely, each holding a live YouTube session.
+
+Fix: `cleanup_stale_cookie_jars()` sweeps any `.cookies.*.txt` older
+than 5 minutes from `INSTALL_DIR` when the `DownloadManager` is
+constructed. The 5-minute horizon is long enough that no legitimate
+download-in-flight gets its jar stolen (running downloads refresh the
+mtime by being open; new downloads are <5 min old by definition).
+
+**R5 — `ensure_system_integrations()` ran on every launch**
+Shortcut registration, the `schtasks /Create` call, protocol handler
+writes, and the Apps-&-Features entry all re-fired on every launch of
+the frozen exe. That spawned a PowerShell process + 3 `winreg` writes
++ a `schtasks.exe` invocation just to reconfirm state that hadn't
+changed. Adds ~100 ms and a visible window flash on some Windows setups.
+
+Fix: `HKCU\Software\Classes\AstraDownloader\IntegrationsVersion` stamp.
+`ensure_system_integrations()` now short-circuits when the stamp equals
+`APP_VERSION`. Force re-registration is available via `force=True`
+(used after setup). Uninstall removes the stamp.
+
+#### UX — Astra Downloader
+
+**U1 — ffmpeg download had no byte-level progress**
+The setup progress bar jumped 35 → 60 once the zip finished downloading,
+which took a minute or more on slow connections with zero intermediate
+feedback.
+
+Fix: `download_file_atomic` now accepts a `progress_cb`; `SetupWorker`
+passes a callback that maps downloaded bytes into the [35, 55] range of
+the overall setup bar. Throttled to ~10 Hz so fast connections don't
+flood the Qt event loop. Same helper is available to other callers
+(icon download, future ffmpeg reinstall flows).
+
+**U2 — Version readouts and tool maintenance moved to Settings**
+Users had no in-app way to see which yt-dlp / ffmpeg they were running
+or to force a yt-dlp update or reinstall ffmpeg. Both were only
+reachable by poking at `%LOCALAPPDATA%\AstraDownloader` directly.
+
+Fix: new Settings → Tools section showing live version strings plus
+"Check yt-dlp Update" (runs `-U`, logs the result, refreshes the
+version cache) and "Reinstall ffmpeg" (unlinks the current binary and
+re-runs the verified download path). `/health` exposes the same
+version strings so the extension's install/retry prompt can show them.
+
+**U3 — JSON-parsed yt-dlp progress**
+The existing MDLP regex on yt-dlp stdout still works but was fragile to
+upstream format tweaks. Added a parallel JSON progress template
+(`MDLP_JSON %(progress)j`) that emits the full progress dict; the
+parser tries JSON first and falls back to the legacy regex on parse
+failure. No behavioral change in the success path — just insulation
+against yt-dlp drift.
+
+### New Config Fields
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `LastYtDlpUpdateCheck` | `""` | ISO-ish timestamp of last yt-dlp `-U`. Gates the 24h throttle. |
+| `LastFfmpegCheck` | `""` | Monthly ffmpeg refresh nag timestamp (reserved for future use). |
+| `ExtraOutputRoots` | `[]` | Additional directories that may be passed as `outputDir` by the extension. |
+
+### Wire Contract — `/health` Additions
+
+```json
+{
+  "ytDlpVersion": "2026.04.01",
+  "ffmpegVersion": "n7.0",
+  "rateLimit": { "downloadMaxPerWindow": 30, "downloadWindowSeconds": 60 }
+}
+```
+
+All three keys are optional in the extension's `_isAstraDownloaderHealth`
+check; older builds ignore them.
+
+### New Test Coverage
+
+- `PathConfinementTests` (3) — allowlist accepts subfolders, rejects
+  outside paths, rejects `..` traversal.
+- `RateLimiterTests` (2) — exhausts window + separate-key isolation.
+- `Sha256VerifyTests` (5) — match / mismatch / malformed sidecar /
+  multi-asset parsing / single-line sidecar.
+- `CookieJarSweepTests` (1) — stale jars removed, fresh jars + unrelated
+  files preserved.
+- `ApiRateLimitTests` (1) — end-to-end 429 via Flask test client.
+- `CorsHeaderTests` (1) — `Access-Control-Max-Age` present on /health.
+- `HealthAdditionsTests` (1) — new /health keys present.
+- `AutoUpdateThrottleTests` (3) — no stamp → check / recent stamp → skip /
+  corrupt stamp → check.
+
+Python: 37 pass (was 19). JS: 81 pass (unchanged).
+
+### Residual Trust Boundaries (still documented, still not bugs)
+
+- **Protocol handlers (`ytdl://`, `mediadl://`)** — unchanged trust
+  boundary. Single argv element, no shell. URL is attacker-controlled
+  input that the app must validate before acting on.
+- **yt-dlp executes with user privileges** — hardened by SHA-256
+  verification at install time but not at run time. yt-dlp self-updates
+  via `-U`; those updates are not re-verified. Upstream signs its
+  updates internally (the `-U` path fetches + checksums).
+
+### Follow-ups (Pass 7 candidates)
+
+- Extend S3 to the yt-dlp `-U` self-update path — currently trusts
+  yt-dlp's own update chain; we could cross-verify after it completes.
+- Extension-side UI to show `/health.ytDlpVersion` in the repair prompt
+  (the field is there, no consumer yet).
+- Monthly ffmpeg freshness nag using `LastFfmpegCheck` (reserved but
+  not yet wired to UI).
+- Optional per-download output confinement log entry for defense-in-
+  depth auditing.

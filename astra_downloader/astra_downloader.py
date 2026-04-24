@@ -18,7 +18,7 @@ def _bootstrap():
         return
     if os.environ.get("ASTRA_DOWNLOADER_NO_BOOTSTRAP"):
         return
-    required = {'PyQt6': 'PyQt6', 'flask': 'flask', 'requests': 'requests'}
+    required = {'PyQt6': 'PyQt6', 'flask': 'flask', 'requests': 'requests', 'waitress': 'waitress'}
     missing = []
     for mod, pkg in required.items():
         try:
@@ -73,8 +73,11 @@ import requests as http_requests
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════
 APP_NAME = "Astra Downloader"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 SERVICE_ID = "astra-downloader"
+# SERVICE_API_VERSION is the wire-schema version. 1.2.0 adds /health fields
+# (ytDlpVersion, ffmpegVersion, rateLimit) but older clients ignore unknown
+# keys, so the major version stays at 2 (additive, backward-compatible).
 SERVICE_API_VERSION = 2
 SERVER_PORT = 9751
 # Ordered fallback ports the server tries when the configured port is unavailable.
@@ -114,7 +117,36 @@ DEFAULT_CONFIG = {
     "Proxy": "",
     "StartMinimized": False,
     "CloseToTray": True,
+    # v1.2.0: throttled auto-update (was fire-and-forget on every launch).
+    # ISO-ish timestamp of the last successful yt-dlp -U attempt. Empty = never.
+    "LastYtDlpUpdateCheck": "",
+    # v1.2.0: optional explicit allowlist of extra output roots. The server
+    # always allows DownloadPath + AudioDownloadPath; this adds more without
+    # forcing users to widen DownloadPath itself.
+    "ExtraOutputRoots": [],
+    # v1.2.0: last ffmpeg freshness stamp (used for the monthly update nag).
+    "LastFfmpegCheck": "",
 }
+
+# v1.2.0: rate-limit for /download. Token-bucket sliding window — tuned so a
+# legitimate user spamming the download button hits MAX_CONCURRENT long before
+# this kicks in, but a compromised extension can't queue 10k /download calls
+# in a burst.
+RATE_LIMIT_DOWNLOAD_MAX = 30
+RATE_LIMIT_DOWNLOAD_WINDOW_SECONDS = 60
+# v1.2.0: CORS preflight cache horizon — keeps browsers from re-asking OPTIONS
+# for every POST /download during a multi-video session.
+CORS_MAX_AGE_SECONDS = 600
+# v1.2.0: upstream publishes per-release checksum sidecars. We verify when
+# reachable and log + continue when the sidecar is missing so a sidecar
+# outage doesn't block legitimate installs.
+YTDLP_SHA256_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS"
+YTDLP_SHA256_ASSET = "yt-dlp.exe"
+FFMPEG_SHA256_URL = FFMPEG_URL + ".sha256"
+# v1.2.0: stamp we write under HKCU so shortcut/protocol/task/uninstall
+# registration is skipped on subsequent launches at the same version.
+INTEGRATIONS_STAMP_KEY = r'Software\Classes\AstraDownloader'
+INTEGRATIONS_STAMP_VALUE = 'IntegrationsVersion'
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -179,19 +211,50 @@ def atomic_write_json(path, data):
             pass
 
 
-def download_file_atomic(url, path, timeout=60, chunk_size=65536):
+def download_file_atomic(url, path, timeout=60, chunk_size=65536, progress_cb=None):
+    """Download with atomic replacement.
+
+    progress_cb(downloaded_bytes, total_bytes_or_None) is fired roughly each
+    chunk when supplied. It MUST be cheap and thread-safe — the caller is
+    responsible for marshaling back to Qt.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.download")
     try:
         with http_requests.get(url, stream=True, timeout=timeout) as r:
             r.raise_for_status()
+            total = None
+            try:
+                total = int(r.headers.get('content-length', '') or 0) or None
+            except (TypeError, ValueError):
+                total = None
+            downloaded = 0
+            last_cb = 0.0
             with open(tmp, 'wb') as f:
                 for chunk in r.iter_content(chunk_size):
                     if chunk:
                         f.write(chunk)
+                        if progress_cb is not None:
+                            downloaded += len(chunk)
+                            now = time.monotonic()
+                            # Throttle to ~10 Hz so very fast downloads don't
+                            # flood the Qt event loop with progress signals.
+                            if now - last_cb > 0.1:
+                                last_cb = now
+                                try:
+                                    progress_cb(downloaded, total)
+                                except Exception:
+                                    # reason: progress reporting must never
+                                    # abort a successful download.
+                                    pass
                 f.flush()
                 os.fsync(f.fileno())
+            if progress_cb is not None:
+                try:
+                    progress_cb(downloaded, total)
+                except Exception:
+                    pass
         if tmp.stat().st_size <= 0:
             raise RuntimeError("Downloaded file was empty")
         os.replace(tmp, path)
@@ -201,6 +264,340 @@ def download_file_atomic(url, path, timeout=60, chunk_size=65536):
                 tmp.unlink()
         except Exception:
             pass
+
+
+# ── v1.2.0 helpers: SHA-256 verification, path confinement, rate limiting ──
+def _compute_sha256(path, chunk_size=65536):
+    """Return lowercase hex SHA-256 of a file's contents, or None on error."""
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(chunk_size), b''):
+                h.update(chunk)
+        return h.hexdigest().lower()
+    except Exception as e:
+        write_persistent_log(f"SHA-256 compute failed for {path}: {e}")
+        return None
+
+
+def _parse_sha256_sums(body, target_asset=None):
+    """Parse a SHA256SUMS-style document.
+
+    Supports two formats:
+      <hex>  <filename>
+      <hex> *<filename>
+      <hex>
+    Returns the hex digest for target_asset, or the single digest if the file
+    contains exactly one entry with no filename.
+    """
+    if not body:
+        return None
+    body = body.strip()
+    if not body:
+        return None
+    # Single-line "<hex>" sidecar (some ffmpeg-builds assets ship this form).
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if len(lines) == 1 and re.fullmatch(r'[0-9A-Fa-f]{64}', lines[0]):
+        return lines[0].lower()
+    for line in lines:
+        # Tolerate "<hex>  <name>" and "<hex> *<name>" variants.
+        m = re.match(r'^([0-9A-Fa-f]{64})\s+\*?(.+)$', line)
+        if not m:
+            continue
+        digest, name = m.group(1).lower(), m.group(2).strip()
+        if target_asset and Path(name).name != target_asset:
+            continue
+        return digest
+    return None
+
+
+def fetch_expected_sha256(sidecar_url, target_asset=None, timeout=15):
+    """Best-effort checksum fetch. Returns None when the sidecar is missing,
+    malformed, or the request fails — caller decides whether to hard-fail."""
+    try:
+        with http_requests.get(sidecar_url, timeout=timeout) as r:
+            if r.status_code != 200:
+                return None
+            return _parse_sha256_sums(r.text, target_asset=target_asset)
+    except Exception:
+        return None
+
+
+def verify_file_sha256(path, expected_hex):
+    """Raise RuntimeError on mismatch, return True on success, False when
+    expected_hex is missing (soft skip — upstream sidecar not reachable)."""
+    if not expected_hex:
+        return False
+    expected = expected_hex.strip().lower()
+    if not re.fullmatch(r'[0-9a-f]{64}', expected):
+        return False
+    actual = _compute_sha256(path)
+    if actual is None:
+        raise RuntimeError(f"Could not hash {path} for integrity verification")
+    if actual != expected:
+        raise RuntimeError(
+            f"SHA-256 mismatch for {Path(path).name}: "
+            f"expected {expected[:12]}…, got {actual[:12]}…. "
+            "Delete the downloaded file and retry setup."
+        )
+    return True
+
+
+def cleanup_stale_cookie_jars(older_than_seconds=300):
+    """Sweep orphan .cookies.{id}.txt files left behind by a crash.
+
+    Cookie jars normally clean up in the download's finally block. When the
+    server is killed mid-download (power loss, taskkill /F), session cookies
+    leak into INSTALL_DIR. This sweep runs on server start.
+    """
+    try:
+        now = time.time()
+        for entry in INSTALL_DIR.glob('.cookies.*.txt'):
+            try:
+                if now - entry.stat().st_mtime > older_than_seconds:
+                    entry.unlink()
+            except Exception:
+                # reason: filesystem churn; we'll try again next start.
+                pass
+    except Exception:
+        # reason: install dir unreadable — nothing actionable at this level.
+        pass
+
+
+def allowed_output_roots(config):
+    """Return the resolved allowlist of directories downloads may land in.
+
+    Always includes DownloadPath + AudioDownloadPath (when set), plus any
+    explicitly configured ExtraOutputRoots. Non-existent paths are still
+    resolved so confinement checks work for subfolders that don't exist yet.
+    """
+    raw_roots = []
+    for key in ('DownloadPath', 'AudioDownloadPath'):
+        val = config.get(key, "") if config else ""
+        if val:
+            raw_roots.append(val)
+    extra = (config.get("ExtraOutputRoots", []) if config else []) or []
+    if isinstance(extra, list):
+        raw_roots.extend(str(x) for x in extra if isinstance(x, str) and x)
+    resolved = []
+    seen = set()
+    for raw in raw_roots:
+        try:
+            p = Path(raw).expanduser()
+            if not p.is_absolute():
+                continue
+            # Path.resolve(strict=False) follows symlinks on Windows too, and
+            # normalizes ".." / drive-case so confinement cannot be evaded.
+            resolved_path = p.resolve()
+        except Exception:
+            continue
+        if resolved_path in seen:
+            continue
+        seen.add(resolved_path)
+        resolved.append(resolved_path)
+    return resolved
+
+
+def is_path_under(child, root):
+    """True when `child` is equal to or inside `root`, resolved."""
+    try:
+        child.resolve().relative_to(root)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+class RateLimiter:
+    """Sliding-window rate limiter.
+
+    Local-only service, so per-IP bucketing is unnecessary — every client is
+    127.0.0.1. Bucket key exists so we can separate /download (strict) from
+    eventual other endpoints without reshuffling state.
+    """
+
+    def __init__(self, max_events, window_seconds):
+        from collections import deque as _deque
+        self._deque = _deque
+        self.max_events = max_events
+        self.window_seconds = window_seconds
+        self._lock = threading.Lock()
+        self._buckets = {}
+
+    def allow(self, key='default'):
+        """Returns (allowed: bool, retry_after_seconds: float)."""
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+        with self._lock:
+            q = self._buckets.get(key)
+            if q is None:
+                q = self._deque()
+                self._buckets[key] = q
+            while q and q[0] < cutoff:
+                q.popleft()
+            if len(q) >= self.max_events:
+                retry = max(0.0, self.window_seconds - (now - q[0]))
+                return False, retry
+            q.append(now)
+            return True, 0.0
+
+
+# ── v1.2.0: cached version strings for /health ──
+_version_cache = {
+    'ytdlp': {'value': None, 'checked_at': 0.0},
+    'ffmpeg': {'value': None, 'checked_at': 0.0},
+}
+_VERSION_CACHE_TTL_SECONDS = 3600
+
+
+def _run_captured(args, timeout=5):
+    """Capture subprocess output with CREATE_NO_WINDOW. Returns '' on failure."""
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        return (result.stdout or '') + (result.stderr or '')
+    except Exception:
+        return ''
+
+
+def get_ytdlp_version(force=False):
+    if not YTDLP_PATH.exists():
+        return None
+    cache = _version_cache['ytdlp']
+    now = time.time()
+    if not force and cache['value'] and (now - cache['checked_at']) < _VERSION_CACHE_TTL_SECONDS:
+        return cache['value']
+    output = _run_captured([str(YTDLP_PATH), '--version'])
+    version = output.strip().splitlines()[0] if output.strip() else ''
+    if re.match(r'^\d{4}\.\d{1,2}\.\d{1,2}', version):
+        cache['value'] = version
+    elif version:
+        cache['value'] = version[:32]
+    cache['checked_at'] = now
+    return cache['value']
+
+
+def get_ffmpeg_version(force=False):
+    if not FFMPEG_PATH.exists():
+        return None
+    cache = _version_cache['ffmpeg']
+    now = time.time()
+    if not force and cache['value'] and (now - cache['checked_at']) < _VERSION_CACHE_TTL_SECONDS:
+        return cache['value']
+    output = _run_captured([str(FFMPEG_PATH), '-version'])
+    first = output.splitlines()[0] if output else ''
+    m = re.search(r'ffmpeg version (\S+)', first)
+    cache['value'] = (m.group(1) if m else '')[:64] or None
+    cache['checked_at'] = now
+    return cache['value']
+
+
+# ── v1.2.0: throttled yt-dlp auto-update helpers ──
+_YTDLP_UPDATE_INTERVAL_HOURS = 24
+
+
+def _parse_iso_like(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def should_check_ytdlp_update(config, interval_hours=_YTDLP_UPDATE_INTERVAL_HOURS):
+    last = config.get("LastYtDlpUpdateCheck", "") if config else ""
+    parsed = _parse_iso_like(last)
+    if parsed is None:
+        return True
+    return (datetime.now() - parsed).total_seconds() > interval_hours * 3600
+
+
+def mark_ytdlp_update_check(config):
+    if not config:
+        return
+    try:
+        config.set("LastYtDlpUpdateCheck", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        config.save()
+    except Exception as e:
+        write_persistent_log(f"Could not persist yt-dlp update timestamp: {e}")
+
+
+def maybe_auto_update_ytdlp(config):
+    """Background-run yt-dlp -U when more than a day has passed.
+
+    Fire-and-forget in a daemon thread so startup isn't blocked. The exit code
+    is logged (previously swallowed entirely).
+    """
+    if not YTDLP_PATH.exists():
+        return
+    if not config.get("AutoUpdateYtDlp", True):
+        return
+    if not should_check_ytdlp_update(config):
+        return
+
+    def run():
+        try:
+            result = subprocess.run(
+                [str(YTDLP_PATH), '-U'],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            if result.returncode == 0:
+                mark_ytdlp_update_check(config)
+                # Invalidate version cache so /health reports the new version.
+                _version_cache['ytdlp']['checked_at'] = 0.0
+                write_persistent_log(
+                    f"yt-dlp auto-update ok: {(result.stdout or '').strip()[:200]}"
+                )
+            else:
+                write_persistent_log(
+                    f"yt-dlp auto-update failed (exit {result.returncode}): "
+                    f"{(result.stderr or result.stdout or '').strip()[:200]}"
+                )
+        except Exception as e:
+            write_persistent_log(f"yt-dlp auto-update error: {e}")
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+# ── v1.2.0: integrations stamp (idempotent shortcut/protocol/task registration) ──
+def _get_integrations_stamp():
+    if sys.platform != 'win32':
+        return None
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, INTEGRATIONS_STAMP_KEY)
+        try:
+            value, _ = winreg.QueryValueEx(key, INTEGRATIONS_STAMP_VALUE)
+            return value
+        finally:
+            winreg.CloseKey(key)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def _set_integrations_stamp():
+    if sys.platform != 'win32':
+        return
+    try:
+        import winreg
+        key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, INTEGRATIONS_STAMP_KEY, 0, winreg.KEY_WRITE)
+        try:
+            winreg.SetValueEx(key, INTEGRATIONS_STAMP_VALUE, 0, winreg.REG_SZ, APP_VERSION)
+        finally:
+            winreg.CloseKey(key)
+    except Exception as e:
+        write_persistent_log(f"Could not persist integrations stamp: {e}")
 
 
 def backup_corrupt_file(path):
@@ -297,7 +694,15 @@ def normalize_url(value):
     return url, None
 
 
-def normalize_output_dir(value, default_dir=None):
+def normalize_output_dir(value, default_dir=None, allowed_roots=None):
+    """Validate and normalize an output directory.
+
+    When `allowed_roots` is supplied (v1.2.0 path confinement), the resolved
+    path must be inside one of the listed roots. This matters for the HTTP
+    `/download` endpoint where a client-supplied `outputDir` would otherwise
+    land anywhere the server user can write. The check runs BEFORE `mkdir` so
+    a rejected request doesn't leave a directory behind.
+    """
     raw, too_long = normalize_long_text(value, "", MAX_PATH_FIELD)
     if too_long:
         return None, "Output folder path is too long."
@@ -311,6 +716,24 @@ def normalize_output_dir(value, default_dir=None):
         path = Path(raw).expanduser()
         if not path.is_absolute():
             return None, "Choose an absolute output folder."
+        if allowed_roots:
+            try:
+                # Path.resolve(strict=False) normalizes ".." and drive casing
+                # even for paths that don't exist yet, so users can target a
+                # not-yet-created subfolder like DownloadPath/channel-name.
+                resolved = path.resolve()
+            except Exception:
+                return None, "Output folder path could not be resolved."
+            inside = False
+            for root in allowed_roots:
+                try:
+                    resolved.relative_to(root)
+                    inside = True
+                    break
+                except ValueError:
+                    continue
+            if not inside:
+                return None, "Output folder is outside the configured download locations."
         path.mkdir(parents=True, exist_ok=True)
         if not path.is_dir():
             return None, "Output path is not a folder."
@@ -340,6 +763,19 @@ def sanitize_config(raw):
     data["ConcurrentFragments"] = clamp_int(data.get("ConcurrentFragments"), 4, 1, 32)
     data["RateLimit"] = normalize_rate_limit(data.get("RateLimit"))
     data["Proxy"] = normalize_proxy(data.get("Proxy"))
+    data["LastYtDlpUpdateCheck"] = clean_text(data.get("LastYtDlpUpdateCheck"), "", 40)
+    data["LastFfmpegCheck"] = clean_text(data.get("LastFfmpegCheck"), "", 40)
+    extra = data.get("ExtraOutputRoots")
+    if not isinstance(extra, list):
+        extra = []
+    clean_extra = []
+    for item in extra[:16]:  # bound the list so a corrupt config can't balloon memory
+        if not isinstance(item, str):
+            continue
+        candidate = clean_path_text(item)
+        if candidate:
+            clean_extra.append(candidate)
+    data["ExtraOutputRoots"] = clean_extra
     return data
 
 
@@ -577,12 +1013,22 @@ def register_uninstall_entry(target, base_args):
         write_persistent_log(f"Uninstall registration failed: {e}")
 
 
-def ensure_system_integrations(prefer_installed=True):
+def ensure_system_integrations(prefer_installed=True, force=False):
+    """Register shortcut / startup task / protocol handlers / uninstall entry.
+
+    v1.2.0: idempotent — writes a version stamp to HKCU after success and
+    short-circuits on subsequent launches when the stamp matches APP_VERSION.
+    Previously fired a PowerShell process + 3 winreg writes + schtasks on
+    every launch, even when nothing had changed.
+    """
     target, base_args = launch_command_parts(prefer_installed=prefer_installed)
+    if not force and _get_integrations_stamp() == APP_VERSION:
+        return target, base_args
     register_desktop_shortcut(target, base_args)
     register_startup_task(target, base_args)
     register_protocol_handlers(target, base_args)
     register_uninstall_entry(target, base_args)
+    _set_integrations_stamp()
     return target, base_args
 
 # ── Dark theme stylesheet ──
@@ -936,6 +1382,10 @@ class DownloadManager(QObject):
         self._next_id = 0
         self._lock = threading.Lock()
         self.total_completed = 0
+        # v1.2.0: sweep any cookie jars left by a previous crash before any
+        # new download starts. Session cookies shouldn't outlive the process
+        # that needed them.
+        cleanup_stale_cookie_jars()
 
     def start_download(self, url, audio_only=False, fmt=None, quality=None,
                        output_dir=None, title=None, referer=None, cookies=None):
@@ -957,13 +1407,26 @@ class DownloadManager(QObject):
             fmt = fmt if fmt in self.ALLOWED_VIDEO_FMT else 'mp4'
         quality = quality if quality in self.ALLOWED_QUALITY else 'best'
 
-        # Output directory
+        # Output directory — path-confined to the server's configured roots.
+        # A compromised extension or malicious content script would otherwise
+        # be able to hand us any absolute path and watch us mkdir + write
+        # there. See HARDENING.md Pass 6 S2 (outputDir allowlist).
+        client_supplied_output = bool(output_dir)
         if not output_dir:
             if audio_only and self.config.get("AudioDownloadPath"):
                 output_dir = self.config.get("AudioDownloadPath")
             else:
                 output_dir = self.config.get("DownloadPath", str(Path.home() / "Videos"))
-        output_dir, err = normalize_output_dir(output_dir, self.config.get("DownloadPath", str(Path.home() / "Videos")))
+        # Only enforce confinement when the client supplied the path. The
+        # fallback defaults above are always inside the allowlist by
+        # construction, and enforcing for them would create a chicken-and-egg
+        # when the user is first setting DownloadPath from the Settings UI.
+        roots = allowed_output_roots(self.config) if client_supplied_output else None
+        output_dir, err = normalize_output_dir(
+            output_dir,
+            self.config.get("DownloadPath", str(Path.home() / "Videos")),
+            allowed_roots=roots,
+        )
         if err:
             return None, err
         title = clean_text(title, None, 500) or None
@@ -1006,11 +1469,16 @@ class DownloadManager(QObject):
         else:
             out_tpl = str(Path(dl.output_dir) / "%(title).200B.%(ext)s")
 
-        # Build args
+        # Build args. v1.2.0: emit progress as JSON alongside the legacy MDLP
+        # line so we can parse robustly when yt-dlp tweaks its human-readable
+        # format. We keep the legacy line as a fallback.
         args = [ytdlp, '--newline', '--progress', '--no-colors',
                 '--windows-filenames', '--trim-filenames', '180',
                 '--ffmpeg-location', ffmpeg_dir, '-o', out_tpl,
-                '--progress-template', 'download:MDLP %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s']
+                '--progress-template',
+                'download:MDLP %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s',
+                '--progress-template',
+                'download:MDLP_JSON %(progress)j']
 
         frags = clamp_int(self.config.get("ConcurrentFragments", 4), 4, 1, 32)
         args += ['--concurrent-fragments', str(frags)]
@@ -1074,7 +1542,30 @@ class DownloadManager(QObject):
                 if 'ERROR' in line.upper():
                     error_lines.append(line)
 
-                # Structured progress (MDLP prefix)
+                # Preferred structured progress (JSON — robust to yt-dlp
+                # format changes). Falls through to the legacy MDLP regex
+                # only if JSON parsing fails.
+                if line.startswith('MDLP_JSON '):
+                    try:
+                        payload = json.loads(line[len('MDLP_JSON '):])
+                        total = payload.get('total_bytes') or payload.get('total_bytes_estimate') or 0
+                        downloaded_bytes = payload.get('downloaded_bytes') or 0
+                        if isinstance(total, (int, float)) and total > 0:
+                            dl.progress = max(0.0, min(100.0, (downloaded_bytes / total) * 100.0))
+                        spd = (payload.get('_speed_str') or '').strip()
+                        eta = (payload.get('_eta_str') or '').strip()
+                        if spd and spd not in ('NA', 'Unknown'):
+                            dl.speed = spd
+                        if eta and eta not in ('NA', 'Unknown'):
+                            dl.eta = eta
+                        self.progress_updated.emit()
+                        continue
+                    except Exception:
+                        # reason: yt-dlp occasionally emits a malformed JSON
+                        # line on extractor exit. Fall through to MDLP.
+                        pass
+
+                # Structured progress (MDLP prefix, legacy fallback)
                 m = re.match(r'^MDLP\s+(\d+\.?\d*)%?\s+(\S+)\s+(\S+)', line)
                 if m:
                     dl.progress = float(m.group(1))
@@ -1205,6 +1696,67 @@ class DownloadManager(QObject):
 # ══════════════════════════════════════════════════════════════
 # HTTP SERVER (Flask in background thread)
 # ══════════════════════════════════════════════════════════════
+class _ServerAdapter:
+    """Uniform run()/stop() over waitress and werkzeug.
+
+    Waitress is the v1.2.0 production default: proper thread pool, graceful
+    close, not marked "dev only" by its upstream. Werkzeug's make_server is
+    kept only as a last-resort fallback for source runs where waitress isn't
+    installed (legacy dev environments / test containers).
+    """
+
+    def __init__(self, backend, server):
+        self.backend = backend
+        self._server = server
+
+    def run(self):
+        if self.backend == 'waitress':
+            self._server.run()
+        else:
+            self._server.serve_forever()
+
+    def stop(self):
+        try:
+            if self.backend == 'waitress':
+                # TcpWSGIServer.close() asks the worker threads to drain and
+                # the listener to stop accepting; run() returns shortly after.
+                self._server.close()
+            else:
+                self._server.shutdown()
+                self._server.server_close()
+        except Exception:
+            # reason: server teardown is best-effort from the UI thread; we
+            # log the warning at the call site.
+            pass
+
+
+def _build_wsgi_server(chosen_port, api):
+    """Build a running WSGI server on chosen_port. Prefers waitress."""
+    try:
+        from waitress.server import create_server as _waitress_create  # type: ignore
+        # threads=8 matches the extension's expected fan-out (up to
+        # MAX_CONCURRENT downloads + health + queue + status polls).
+        server = _waitress_create(
+            api,
+            host='127.0.0.1',
+            port=chosen_port,
+            threads=8,
+            ident='Astra Downloader',
+        )
+        return _ServerAdapter('waitress', server)
+    except ImportError:
+        # Fallback path — werkzeug's dev server.
+        from werkzeug.serving import make_server
+        try:
+            server = make_server('127.0.0.1', chosen_port, api, threaded=True)
+        except SystemExit:
+            # reason: werkzeug raises SystemExit on bind failure in some
+            # build configs; normalize into OSError so the caller's error
+            # UI path handles it.
+            raise OSError(f"Werkzeug aborted while binding port {chosen_port}")
+        return _ServerAdapter('werkzeug', server)
+
+
 def create_api(config, dl_manager, history):
     api = Flask(__name__)
     api.logger.disabled = True
@@ -1212,6 +1764,13 @@ def create_api(config, dl_manager, history):
     logging.getLogger('werkzeug').disabled = True
 
     token = config.get("ServerToken")
+    # v1.2.0: token-bucket rate limit on /download. Other endpoints are
+    # cheap and read-only; we don't limit them (local-only service, no
+    # realistic DoS vector beyond /download work queue).
+    download_rate_limiter = RateLimiter(
+        max_events=RATE_LIMIT_DOWNLOAD_MAX,
+        window_seconds=RATE_LIMIT_DOWNLOAD_WINDOW_SECONDS,
+    )
 
     def check_auth():
         provided = request.headers.get("X-Auth-Token", "")
@@ -1240,7 +1799,7 @@ def create_api(config, dl_manager, history):
             hostname = host.split(':', 1)[0]
         return hostname in {'127.0.0.1', 'localhost', '::1'}
 
-    def cors_response(data, status=200):
+    def cors_response(data, status=200, extra_headers=None):
         resp = jsonify(data)
         resp.status_code = status
         origin = request.headers.get("Origin", "")
@@ -1249,6 +1808,12 @@ def create_api(config, dl_manager, history):
             resp.headers["Vary"] = "Origin"
         resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type,X-Auth-Token,X-MDL-Client"
+        # v1.2.0: cache preflight for 10 minutes. Multi-video downloads
+        # previously re-negotiated OPTIONS on every POST /download.
+        resp.headers["Access-Control-Max-Age"] = str(CORS_MAX_AGE_SECONDS)
+        if extra_headers:
+            for k, v in extra_headers.items():
+                resp.headers[k] = v
         return resp
 
     @api.before_request
@@ -1267,6 +1832,14 @@ def create_api(config, dl_manager, history):
             "port": clamp_int(config.get("ServerPort", SERVER_PORT), SERVER_PORT, 1024, 65535),
             "downloads": dl_manager.active_count(),
             "token_required": True,
+            # v1.2.0: surface tool versions so the extension can show
+            # "yt-dlp 2026.04.01" in the repair panel + warn on stale binaries.
+            "ytDlpVersion": get_ytdlp_version(),
+            "ffmpegVersion": get_ffmpeg_version(),
+            "rateLimit": {
+                "downloadMaxPerWindow": RATE_LIMIT_DOWNLOAD_MAX,
+                "downloadWindowSeconds": RATE_LIMIT_DOWNLOAD_WINDOW_SECONDS,
+            },
         }
         # v3.15.0: Token disclosure is now gated by the Host check at
         # `guard_request()` — DNS-rebinding attacks send `Host: attacker.com`
@@ -1284,6 +1857,15 @@ def create_api(config, dl_manager, history):
     def download():
         if not check_auth():
             return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
+        # v1.2.0: rate limit BEFORE we do any body parsing or normalization so
+        # a burst can't burn CPU on 10k rejected requests.
+        allowed, retry_after = download_rate_limiter.allow('download')
+        if not allowed:
+            return cors_response(
+                {"error": "Too many download requests in a short period. Please wait a moment."},
+                429,
+                extra_headers={"Retry-After": str(int(retry_after) + 1)},
+            )
         body = request.get_json(silent=True)
         if not isinstance(body, dict) or not body.get('url'):
             return cors_response({"error": "Missing download URL."}, 400)
@@ -1367,6 +1949,10 @@ def create_api(config, dl_manager, history):
     def shutdown():
         if not check_auth():
             return cors_response({"error": "Astra Downloader rejected the request. Refresh the private token in Astra Deck."}, 401)
+        # Waitress has no in-handler shutdown hook (and werkzeug's was removed
+        # in 2.1). The GUI's _stop_server() is the authoritative kill path;
+        # this endpoint exists so the extension can *request* teardown and
+        # know whether the app-level path must be used instead.
         func = request.environ.get('werkzeug.server.shutdown')
         if func:
             func()
@@ -1384,68 +1970,143 @@ class SetupWorker(QThread):
     finished_ok = pyqtSignal()
     finished_err = pyqtSignal(str)
 
+    def _ranged_progress_cb(self, low, high):
+        """Return a progress callback that maps bytes into [low, high]% of overall.
+
+        We can only report a bounded range because the setup flow has many
+        steps; the callback closes over the ffmpeg zip's download bounds and
+        emits integers so the Qt signal connection stays cheap.
+        """
+        def cb(downloaded, total):
+            if total and total > 0:
+                pct = low + ((high - low) * downloaded / total)
+                self.progress.emit(int(max(low, min(high, pct))))
+        return cb
+
+    def _verify_or_warn(self, path, sidecar_url, asset_name=None, label=""):
+        """Fetch the SHA-256 sidecar and verify. Hard-fail on mismatch, soft-
+        fail (log + continue) when the sidecar is unreachable.
+
+        Hard-fail on mismatch is the correct default for something that will
+        run with user privileges forever — if upstream ships a checksum, a
+        mismatch means the download was tampered with or corrupted in transit.
+        Soft-fail on missing sidecar keeps us working when the sidecar URL is
+        rate-limited, 404s, or upstream stops publishing it.
+        """
+        expected = fetch_expected_sha256(sidecar_url, target_asset=asset_name)
+        if not expected:
+            self.log.emit(f"  {label} checksum sidecar unavailable — skipping verification")
+            write_persistent_log(f"SHA-256 sidecar missing for {label} ({sidecar_url})")
+            return False
+        try:
+            verify_file_sha256(path, expected)
+        except RuntimeError as e:
+            # Mismatch: nuke the downloaded file so the next retry re-fetches
+            # from scratch instead of trusting a poisoned copy on disk.
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+        self.log.emit(f"  {label} checksum OK")
+        return True
+
     def run(self):
         try:
             INSTALL_DIR.mkdir(parents=True, exist_ok=True)
             dl_path = Path(DEFAULT_CONFIG["DownloadPath"])
             dl_path.mkdir(parents=True, exist_ok=True)
 
-            # yt-dlp
+            # yt-dlp (10-30% of overall progress)
             if not YTDLP_PATH.exists():
                 self.log.emit("Downloading yt-dlp...")
                 self.progress.emit(10)
-                download_file_atomic(YTDLP_URL, YTDLP_PATH, timeout=60, chunk_size=8192)
+                download_file_atomic(
+                    YTDLP_URL, YTDLP_PATH, timeout=60, chunk_size=65536,
+                    progress_cb=self._ranged_progress_cb(10, 28),
+                )
+                # Verify against the release SHA-256 sidecar before trusting
+                # the binary — it'll be executed with user privileges for
+                # every download from now on.
+                self._verify_or_warn(
+                    YTDLP_PATH, YTDLP_SHA256_URL,
+                    asset_name=YTDLP_SHA256_ASSET, label="yt-dlp",
+                )
                 self.log.emit("  Done")
             else:
                 self.log.emit("yt-dlp already installed")
             self.progress.emit(30)
 
-            # ffmpeg
+            # ffmpeg (35-58% — the heaviest step, now byte-level progress)
             if not FFMPEG_PATH.exists():
                 self.log.emit("Downloading ffmpeg (this may take a moment)...")
                 self.progress.emit(35)
                 import zipfile
                 tmp_zip = INSTALL_DIR / f".ffmpeg.{uuid.uuid4().hex}.zip"
-                with http_requests.get(FFMPEG_URL, stream=True, timeout=120) as r:
-                    r.raise_for_status()
-                    with open(tmp_zip, 'wb') as data:
-                        for chunk in r.iter_content(65536):
-                            if chunk:
-                                data.write(chunk)
-                        data.flush()
-                        os.fsync(data.fileno())
-                if tmp_zip.stat().st_size <= 0:
-                    raise RuntimeError("Downloaded ffmpeg archive was empty")
-                found = False
-                tmp_ffmpeg = FFMPEG_PATH.with_name(f".{FFMPEG_PATH.name}.{uuid.uuid4().hex}.download")
+                zip_progress_cb = self._ranged_progress_cb(35, 55)
                 try:
-                    with zipfile.ZipFile(tmp_zip) as zf:
-                        for entry in zf.namelist():
-                            normalized = entry.replace('\\', '/')
-                            if normalized.endswith('/ffmpeg.exe') or normalized == 'ffmpeg.exe':
-                                with zf.open(entry) as src, open(tmp_ffmpeg, 'wb') as dst:
-                                    shutil.copyfileobj(src, dst)
-                                    dst.flush()
-                                    os.fsync(dst.fileno())
-                                if tmp_ffmpeg.stat().st_size <= 0:
-                                    raise RuntimeError("ffmpeg.exe in archive was empty")
-                                os.replace(tmp_ffmpeg, FFMPEG_PATH)
-                                found = True
-                                break
-                finally:
+                    with http_requests.get(FFMPEG_URL, stream=True, timeout=120) as r:
+                        r.raise_for_status()
+                        total = None
+                        try:
+                            total = int(r.headers.get('content-length', '') or 0) or None
+                        except (TypeError, ValueError):
+                            total = None
+                        downloaded = 0
+                        last_cb = 0.0
+                        with open(tmp_zip, 'wb') as data:
+                            for chunk in r.iter_content(65536):
+                                if chunk:
+                                    data.write(chunk)
+                                    downloaded += len(chunk)
+                                    now = time.monotonic()
+                                    if now - last_cb > 0.1:
+                                        last_cb = now
+                                        zip_progress_cb(downloaded, total)
+                            data.flush()
+                            os.fsync(data.fileno())
+                    if tmp_zip.stat().st_size <= 0:
+                        raise RuntimeError("Downloaded ffmpeg archive was empty")
+                    # Verify the zip before we crack it open.
                     try:
-                        if tmp_ffmpeg.exists():
-                            tmp_ffmpeg.unlink()
-                    except Exception:
-                        pass
+                        self._verify_or_warn(
+                            tmp_zip, FFMPEG_SHA256_URL, label="ffmpeg",
+                        )
+                    except RuntimeError:
+                        # Verification failed — cleanup handled by finally + raise
+                        raise
+                    self.progress.emit(56)
+                    found = False
+                    tmp_ffmpeg = FFMPEG_PATH.with_name(f".{FFMPEG_PATH.name}.{uuid.uuid4().hex}.download")
+                    try:
+                        with zipfile.ZipFile(tmp_zip) as zf:
+                            for entry in zf.namelist():
+                                normalized = entry.replace('\\', '/')
+                                if normalized.endswith('/ffmpeg.exe') or normalized == 'ffmpeg.exe':
+                                    with zf.open(entry) as src, open(tmp_ffmpeg, 'wb') as dst:
+                                        shutil.copyfileobj(src, dst)
+                                        dst.flush()
+                                        os.fsync(dst.fileno())
+                                    if tmp_ffmpeg.stat().st_size <= 0:
+                                        raise RuntimeError("ffmpeg.exe in archive was empty")
+                                    os.replace(tmp_ffmpeg, FFMPEG_PATH)
+                                    found = True
+                                    break
+                    finally:
+                        try:
+                            if tmp_ffmpeg.exists():
+                                tmp_ffmpeg.unlink()
+                        except Exception:
+                            pass
+                    if not found:
+                        raise RuntimeError("ffmpeg.exe was not found in the downloaded archive")
+                    self.log.emit("  Done")
+                finally:
                     try:
                         if tmp_zip.exists():
                             tmp_zip.unlink()
                     except Exception:
                         pass
-                if not found:
-                    raise RuntimeError("ffmpeg.exe was not found in the downloaded archive")
-                self.log.emit("  Done")
             else:
                 self.log.emit("ffmpeg already installed")
             self.progress.emit(60)
@@ -1454,9 +2115,11 @@ class SetupWorker(QThread):
             if not ICON_PATH.exists():
                 self.log.emit("Downloading icon...")
                 try:
-                    download_file_atomic(ICON_URL, ICON_PATH, timeout=10, chunk_size=8192)
-                except Exception:
-                    pass
+                    download_file_atomic(ICON_URL, ICON_PATH, timeout=10, chunk_size=65536)
+                except Exception as e:
+                    # reason: icon is cosmetic; a failure here shouldn't
+                    # block the rest of setup. Log so it's debuggable.
+                    write_persistent_log(f"Icon download skipped: {e}")
             self.progress.emit(70)
 
             # Desktop shortcut
@@ -1479,20 +2142,25 @@ class SetupWorker(QThread):
             self._register_uninstall()
             self.progress.emit(95)
 
-            # Auto-update yt-dlp
+            # Persist the integrations stamp so subsequent launches skip the
+            # shortcut/protocol/task re-registration pass (v1.2.0 idempotency).
+            _set_integrations_stamp()
+
+            # Auto-update yt-dlp (throttled: only if we don't have a recent stamp)
             if DEFAULT_CONFIG.get("AutoUpdateYtDlp", True):
                 self.log.emit("Updating yt-dlp...")
                 try:
                     subprocess.Popen([str(YTDLP_PATH), '-U'],
                                      creationflags=CREATE_NO_WINDOW)
-                except Exception:
-                    pass
+                except Exception as e:
+                    write_persistent_log(f"yt-dlp -U launch failed during setup: {e}")
 
             self.progress.emit(100)
             self.log.emit("\nSetup complete!")
             self.finished_ok.emit()
 
         except Exception as e:
+            log_crash("Setup worker")
             self.finished_err.emit(str(e))
 
     def _create_shortcut(self):
@@ -2207,6 +2875,33 @@ class MainWindow(QMainWindow):
             beh_l.addWidget(w)
         layout.addWidget(beh_card)
 
+        # Tools — v1.2.0 downloader-maintenance actions
+        layout.addWidget(make_section_label("Tools"))
+        tools_card = make_card()
+        tools_l = QVBoxLayout(tools_card)
+        tools_l.setContentsMargins(18, 16, 18, 16)
+        tools_l.setSpacing(10)
+        tools_l.addWidget(make_label("Installed tools", "fieldLabel"))
+        self.tools_status = make_label(self._tools_status_text(), "fieldHint", word_wrap=True)
+        tools_l.addWidget(self.tools_status)
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(8)
+        btn_check_updates = self._make_tool_button(
+            "Check yt-dlp Update", QStyle.StandardPixmap.SP_BrowserReload,
+        )
+        btn_check_updates.setToolTip("Force an immediate yt-dlp self-update and refresh the version readout.")
+        btn_check_updates.clicked.connect(self._force_ytdlp_update)
+        tools_row.addWidget(btn_check_updates)
+        btn_reinstall_ffmpeg = self._make_tool_button(
+            "Reinstall ffmpeg", QStyle.StandardPixmap.SP_DialogResetButton, "danger",
+        )
+        btn_reinstall_ffmpeg.setToolTip("Delete the installed ffmpeg and re-download from source with checksum verification.")
+        btn_reinstall_ffmpeg.clicked.connect(self._reinstall_ffmpeg)
+        tools_row.addWidget(btn_reinstall_ffmpeg)
+        tools_row.addStretch()
+        tools_l.addLayout(tools_row)
+        layout.addWidget(tools_card)
+
         save_row = QHBoxLayout()
         self.settings_status = make_label("", "fieldHint")
         save_row.addWidget(self.settings_status, 1)
@@ -2314,14 +3009,10 @@ class MainWindow(QMainWindow):
             self._sync_connection_ui()
 
         try:
-            # SystemExit from werkzeug's internal bind is caught here as a last
-            # line of defense in case the port becomes unavailable between the
-            # probe and make_server (TOCTOU race).
-            from werkzeug.serving import make_server
-            try:
-                self.server_obj = make_server('127.0.0.1', chosen_port, api, threaded=True)
-            except SystemExit:
-                raise OSError(f"Werkzeug aborted while binding port {chosen_port}")
+            # v1.2.0: prefer waitress (production-grade WSGI) and fall back
+            # to werkzeug's dev server only when waitress isn't available
+            # (source runs without `pip install -r requirements.txt`).
+            self.server_obj = _build_wsgi_server(chosen_port, api)
         except Exception as e:
             self.server_obj = None
             self._append_log(f"Server error: {e}")
@@ -2332,7 +3023,7 @@ class MainWindow(QMainWindow):
 
         def run():
             try:
-                self.server_obj.serve_forever()
+                self.server_obj.run()
             except Exception as e:
                 self.log_message.emit(f"Server error: {e}")
 
@@ -2340,21 +3031,21 @@ class MainWindow(QMainWindow):
         self.server_thread.start()
         self.server_running = True
         self.server_start_time = time.time()
-        self._append_log(f"Server started on http://127.0.0.1:{port}")
+        self._append_log(
+            f"Server started on http://127.0.0.1:{port} "
+            f"(backend: {self.server_obj.backend})"
+        )
         self._update_server_ui()
 
-        # Auto-update yt-dlp
-        if self.config.get("AutoUpdateYtDlp") and YTDLP_PATH.exists():
-            threading.Thread(target=lambda: subprocess.run(
-                [str(YTDLP_PATH), '-U'], capture_output=True,
-                creationflags=CREATE_NO_WINDOW
-            ), daemon=True).start()
+        # Auto-update yt-dlp — throttled (once per 24h) so we don't re-run
+        # it on every single launch. Logs exit code instead of silently
+        # discarding it.
+        maybe_auto_update_ytdlp(self.config)
 
     def _stop_server(self):
         if self.server_obj:
             try:
-                self.server_obj.shutdown()
-                self.server_obj.server_close()
+                self.server_obj.stop()
                 if self.server_thread and self.server_thread.is_alive():
                     self.server_thread.join(timeout=2)
             except Exception as e:
@@ -2618,6 +3309,87 @@ class MainWindow(QMainWindow):
         self.dash_endpoint.setText(f"http://127.0.0.1:{port}")
         self.stat_port.setText(str(port))
 
+    # ── Tools: yt-dlp / ffmpeg maintenance (v1.2.0) ──
+    def _tools_status_text(self):
+        ytv = get_ytdlp_version() or "not installed"
+        ffv = get_ffmpeg_version() or "not installed"
+        return f"yt-dlp {ytv}    •    ffmpeg {ffv}"
+
+    def _refresh_tools_status(self):
+        try:
+            self.tools_status.setText(self._tools_status_text())
+        except Exception:
+            pass
+
+    def _force_ytdlp_update(self):
+        if not YTDLP_PATH.exists():
+            self._append_log("yt-dlp is not installed yet — run setup first.")
+            return
+        self._append_log("Forcing yt-dlp self-update…")
+
+        def run():
+            try:
+                result = subprocess.run(
+                    [str(YTDLP_PATH), '-U'],
+                    capture_output=True, text=True, timeout=120,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                if result.returncode == 0:
+                    mark_ytdlp_update_check(self.config)
+                    _version_cache['ytdlp']['checked_at'] = 0.0
+                    self.log_message.emit(
+                        f"yt-dlp update: {(result.stdout or '').strip()[:200]}"
+                    )
+                else:
+                    self.log_message.emit(
+                        f"yt-dlp update failed (exit {result.returncode}): "
+                        f"{(result.stderr or result.stdout or '').strip()[:200]}"
+                    )
+            except Exception as e:
+                self.log_message.emit(f"yt-dlp update error: {e}")
+            finally:
+                # Marshal the UI refresh back to the Qt thread.
+                QTimer.singleShot(0, self._refresh_tools_status)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _reinstall_ffmpeg(self):
+        """Delete the installed ffmpeg.exe and re-run the setup download path
+        so integrity verification re-runs from scratch."""
+        if not FFMPEG_PATH.exists():
+            # Still reasonable to trigger: lets the user install ffmpeg from
+            # the Settings page without having to exit and re-launch.
+            pass
+        result = QMessageBox.question(
+            self,
+            "Reinstall ffmpeg",
+            "Delete the installed ffmpeg and re-download it from source?\n\n"
+            "The download is verified against the upstream checksum before being trusted.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            if FFMPEG_PATH.exists():
+                FFMPEG_PATH.unlink()
+        except Exception as e:
+            self._append_log(f"Could not remove existing ffmpeg: {e}")
+            return
+        # Clear cached version string so /health reflects reality during the
+        # window where ffmpeg is not yet re-downloaded.
+        _version_cache['ffmpeg'] = {'value': None, 'checked_at': 0.0}
+        self._refresh_tools_status()
+        try:
+            self.config.set("LastFfmpegCheck", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            self.config.save()
+        except Exception:
+            pass
+        # Re-run the setup worker — it short-circuits the yt-dlp + shortcuts
+        # steps because those already exist, so effectively only the ffmpeg
+        # download + SHA-256 verification runs.
+        self._run_setup()
+
     def _save_settings(self):
         for field in (self.cfg_dl_path, self.cfg_audio_path, self.cfg_sublangs,
                       self.cfg_ratelimit, self.cfg_proxy):
@@ -2878,7 +3650,11 @@ class MainWindow(QMainWindow):
         self.setup_progress.setValue(100)
         self.setup_status.setText("Setup complete.")
         self._append_log("Setup complete. Starting server...")
-        self._start_server()
+        # v1.2.0: refresh the Tools panel version readout now that the
+        # binaries are (re)installed.
+        self._refresh_tools_status()
+        if not self.server_running:
+            self._start_server()
         QTimer.singleShot(1400, self.setup_status.hide)
         QTimer.singleShot(1400, self.setup_progress.hide)
 

@@ -342,5 +342,268 @@ class CookieJarTests(unittest.TestCase):
             self.assertIn("\t100\tC\tc", body)
 
 
+class PathConfinementTests(unittest.TestCase):
+    """v1.2.0 S1 — outputDir allowlist.
+
+    The server accepts a client-supplied `outputDir` on /download. Before
+    v1.2.0 it only checked that the path was absolute — a compromised
+    extension could write anywhere the server user had access to. These
+    tests lock down the rejection path and the permissive subfolder path.
+    """
+
+    def test_confinement_accepts_subfolder_of_allowed_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "downloads"
+            root.mkdir()
+            subfolder = root / "channel-a" / "2026"
+            out, err = ad.normalize_output_dir(
+                str(subfolder),
+                default_dir=str(root),
+                allowed_roots=[root.resolve()],
+            )
+            self.assertIsNone(err)
+            self.assertTrue(Path(out).resolve() == subfolder.resolve())
+            self.assertTrue(subfolder.exists())
+
+    def test_confinement_rejects_path_outside_allowed_roots(self):
+        with tempfile.TemporaryDirectory() as allowed_tmp, tempfile.TemporaryDirectory() as forbidden_tmp:
+            allowed_root = Path(allowed_tmp).resolve()
+            forbidden = Path(forbidden_tmp) / "escape" / "target"
+            out, err = ad.normalize_output_dir(
+                str(forbidden),
+                default_dir=str(allowed_root),
+                allowed_roots=[allowed_root],
+            )
+            self.assertIsNone(out)
+            self.assertEqual(err, "Output folder is outside the configured download locations.")
+            # Critical: confinement must reject BEFORE mkdir; a rejected
+            # request should not create the forbidden directory.
+            self.assertFalse(forbidden.exists())
+
+    def test_confinement_rejects_parent_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            allowed_root = Path(tmp) / "downloads"
+            allowed_root.mkdir()
+            # .. traversal: resolve() normalizes before the check.
+            traversal = str(allowed_root / ".." / ".." / "somewhere")
+            out, err = ad.normalize_output_dir(
+                traversal,
+                default_dir=str(allowed_root),
+                allowed_roots=[allowed_root.resolve()],
+            )
+            self.assertIsNone(out)
+            self.assertEqual(err, "Output folder is outside the configured download locations.")
+
+    def test_allowed_output_roots_dedupes_and_resolves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "videos"
+            audio = Path(tmp) / "audio"
+            video.mkdir()
+            audio.mkdir()
+
+            class _Cfg:
+                def get(self, key, default=None):
+                    return {
+                        "DownloadPath": str(video),
+                        # Same dir under DownloadPath and ExtraOutputRoots
+                        # must collapse in the final list.
+                        "AudioDownloadPath": str(video),
+                        "ExtraOutputRoots": [str(audio), str(audio)],
+                    }.get(key, default)
+
+            roots = ad.allowed_output_roots(_Cfg())
+            resolved_video = video.resolve()
+            resolved_audio = audio.resolve()
+            self.assertIn(resolved_video, roots)
+            self.assertIn(resolved_audio, roots)
+            self.assertEqual(len(roots), 2)
+
+
+class RateLimiterTests(unittest.TestCase):
+    """v1.2.0 S2 — sliding-window rate limit on /download."""
+
+    def test_allows_up_to_max_events_then_rejects(self):
+        limiter = ad.RateLimiter(max_events=3, window_seconds=60)
+        for _ in range(3):
+            allowed, retry = limiter.allow('download')
+            self.assertTrue(allowed)
+            self.assertEqual(retry, 0.0)
+        allowed, retry = limiter.allow('download')
+        self.assertFalse(allowed)
+        self.assertGreater(retry, 0.0)
+
+    def test_separate_bucket_keys_are_independent(self):
+        limiter = ad.RateLimiter(max_events=1, window_seconds=60)
+        self.assertTrue(limiter.allow('a')[0])
+        # Second call to 'a' rejected, but 'b' gets its own budget.
+        self.assertFalse(limiter.allow('a')[0])
+        self.assertTrue(limiter.allow('b')[0])
+
+
+class Sha256VerifyTests(unittest.TestCase):
+    """v1.2.0 S3 — binary integrity verification for yt-dlp/ffmpeg."""
+
+    def test_verify_accepts_matching_hash(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bin.exe"
+            path.write_bytes(b"hello world")
+            expected = hashlib.sha256(b"hello world").hexdigest()
+            self.assertTrue(ad.verify_file_sha256(path, expected))
+
+    def test_verify_raises_on_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bin.exe"
+            path.write_bytes(b"tampered bytes")
+            wrong = "0" * 64
+            with self.assertRaises(RuntimeError) as ctx:
+                ad.verify_file_sha256(path, wrong)
+            self.assertIn("SHA-256 mismatch", str(ctx.exception))
+
+    def test_verify_returns_false_on_missing_or_malformed_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bin.exe"
+            path.write_bytes(b"hi")
+            self.assertFalse(ad.verify_file_sha256(path, None))
+            self.assertFalse(ad.verify_file_sha256(path, ""))
+            self.assertFalse(ad.verify_file_sha256(path, "not-a-hash"))
+
+    def test_parse_sha256_sums_with_multiple_assets(self):
+        doc = (
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  yt-dlp.exe\n"
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  yt-dlp\n"
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  yt-dlp_macos\n"
+        )
+        self.assertEqual(
+            ad._parse_sha256_sums(doc, target_asset="yt-dlp.exe"),
+            "a" * 64,
+        )
+
+    def test_parse_sha256_sums_accepts_single_line_sidecar(self):
+        digest = "d" * 64
+        self.assertEqual(ad._parse_sha256_sums(f"{digest}\n"), digest)
+
+
+class CookieJarSweepTests(unittest.TestCase):
+    """v1.2.0 S4 — orphaned .cookies.*.txt cleanup on server start.
+
+    When the downloader is killed mid-run (power loss, taskkill /F), session
+    cookies leak into INSTALL_DIR. A stale sweep on DownloadManager init
+    keeps session cookies from outliving the process that needed them.
+    """
+
+    def test_cleanup_removes_old_cookie_jars_and_spares_fresh_ones(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            install_dir = Path(tmp)
+            original = ad.INSTALL_DIR
+            try:
+                ad.INSTALL_DIR = install_dir
+                stale = install_dir / ".cookies.abc123.txt"
+                fresh = install_dir / ".cookies.def456.txt"
+                unrelated = install_dir / "config.json"
+                stale.write_text("stale", encoding="utf-8")
+                fresh.write_text("fresh", encoding="utf-8")
+                unrelated.write_text("{}", encoding="utf-8")
+                # Backdate the stale entry to beyond the cleanup horizon.
+                old_mtime = time.time() - 3600
+                import os as _os
+                _os.utime(stale, (old_mtime, old_mtime))
+                ad.cleanup_stale_cookie_jars(older_than_seconds=300)
+                self.assertFalse(stale.exists(), "stale cookie jar should be removed")
+                self.assertTrue(fresh.exists(), "fresh cookie jar should be preserved")
+                self.assertTrue(unrelated.exists(), "non-cookie files must not be touched")
+            finally:
+                ad.INSTALL_DIR = original
+
+
+class ApiRateLimitTests(unittest.TestCase):
+    """End-to-end /download rate limit via the Flask test client."""
+
+    def test_download_endpoint_returns_429_after_burst(self):
+        token = "f" * 32
+        config = FakeConfig({"ServerToken": token})
+        manager = ad.DownloadManager(config, FakeHistory())
+        api = ad.create_api(config, manager, FakeHistory())
+        client = api.test_client()
+
+        # Force a low limit so we can exhaust it without actually starting
+        # 30 real downloads (which would be blocked by MAX_CONCURRENT first).
+        # We replicate the burst at the HTTP layer by patching the limiter
+        # state after construction.
+        # Simpler: send many OPTIONS-bypassed requests with invalid bodies.
+        # The rate check runs after auth but BEFORE body parsing, so a
+        # missing body still consumes a token.
+        saw_429 = False
+        for _ in range(ad.RATE_LIMIT_DOWNLOAD_MAX + 2):
+            resp = client.post(
+                "/download",
+                headers={"X-Auth-Token": token, "Content-Type": "application/json"},
+                data="{}",
+            )
+            if resp.status_code == 429:
+                saw_429 = True
+                self.assertIn("Retry-After", resp.headers)
+                break
+        self.assertTrue(saw_429, "rate limiter should reject eventually")
+
+
+class CorsHeaderTests(unittest.TestCase):
+    def test_response_advertises_max_age(self):
+        token = "g" * 32
+        config = FakeConfig({"ServerToken": token})
+        manager = ad.DownloadManager(config, FakeHistory())
+        api = ad.create_api(config, manager, FakeHistory())
+        resp = api.test_client().get("/health", headers={"X-MDL-Client": "MediaDL"})
+        self.assertEqual(resp.headers.get("Access-Control-Max-Age"), str(ad.CORS_MAX_AGE_SECONDS))
+
+
+class HealthAdditionsTests(unittest.TestCase):
+    """v1.2.0 additions to /health schema — version strings + rate-limit policy."""
+
+    def test_health_surface_includes_rate_limit_policy(self):
+        token = "h" * 32
+        config = FakeConfig({"ServerToken": token})
+        manager = ad.DownloadManager(config, FakeHistory())
+        api = ad.create_api(config, manager, FakeHistory())
+        resp = api.test_client().get("/health", headers={"X-MDL-Client": "MediaDL"})
+        body = resp.get_json()
+        self.assertIn("rateLimit", body)
+        self.assertEqual(body["rateLimit"]["downloadMaxPerWindow"], ad.RATE_LIMIT_DOWNLOAD_MAX)
+        self.assertEqual(body["rateLimit"]["downloadWindowSeconds"], ad.RATE_LIMIT_DOWNLOAD_WINDOW_SECONDS)
+        # ytDlpVersion / ffmpegVersion are present but may be None in CI; the
+        # wire contract is "key exists, value is string or null" — assert both.
+        self.assertIn("ytDlpVersion", body)
+        self.assertIn("ffmpegVersion", body)
+
+
+class AutoUpdateThrottleTests(unittest.TestCase):
+    """v1.2.0 B3 — yt-dlp auto-update runs at most once per 24h."""
+
+    def test_should_check_returns_true_with_no_prior_stamp(self):
+        class _C:
+            def get(self, key, default=None):
+                return "" if key == "LastYtDlpUpdateCheck" else default
+        self.assertTrue(ad.should_check_ytdlp_update(_C()))
+
+    def test_should_check_returns_false_with_recent_stamp(self):
+        recent = (ad.datetime.now() - ad.datetime.now().__class__.min.__class__.min.__class__.resolution).strftime("%Y-%m-%d %H:%M:%S")
+        # Simpler form: use "now" as the stamp.
+        import datetime as _dt
+        recent = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        class _C:
+            def get(self, key, default=None):
+                return recent if key == "LastYtDlpUpdateCheck" else default
+        self.assertFalse(ad.should_check_ytdlp_update(_C()))
+
+    def test_should_check_handles_corrupt_stamp(self):
+        class _C:
+            def get(self, key, default=None):
+                return "not-a-date" if key == "LastYtDlpUpdateCheck" else default
+        # Malformed stamps should not wedge the update path — default to True
+        # so the next launch can re-establish a valid stamp.
+        self.assertTrue(ad.should_check_ytdlp_update(_C()))
+
+
 if __name__ == "__main__":
     unittest.main()
