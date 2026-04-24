@@ -3404,10 +3404,28 @@ return response;
             aiSummaryProvider: 'openai',     // openai | anthropic | gemini | ollama
             copyChapterMarkdown: false,
             chapterJumpButtons: false,
+
+            // v3.17.0 — Alchemy-inspired additions (all default OFF so existing
+            // setups are untouched; users opt in one-by-one from Settings)
+            hideAirplayButton: false,
+            hideQueueOnThumbnails: false,
+            fullTitles: false,
+            titleCaseTransform: false,
+            titleCaseMode: 'none',              // 'none' | 'uppercase' | 'lowercase' | 'capitalize'
+            customSelectionColor: false,
+            selectionColor: '#2dd36f',
+            bypassPlaylistMode: false,
+            musicVideoSpeedLock: false,
+            playlistQuickRemove: false,
+            watchLaterCleanup: false,
+            transcriptAiHandoff: false,
+            transcriptAiTarget: 'notebooklm',   // 'notebooklm' | 'chatgpt' | 'claude' | 'gemini' | 'perplexity'
+            audioTrackLanguage: false,
+            preferredAudioLang: 'en',           // BCP-47 primary subtag
         },
 
         // Settings versioning and migration
-        SETTINGS_VERSION: 4,
+        SETTINGS_VERSION: 5,
 
         _migrations: {
             // v1 -> v2: Renamed/restructured settings in 2.1.2
@@ -3422,6 +3440,14 @@ return response;
             },
             4: (s) => {
                 s.autoExpandComments = true;
+                return s;
+            },
+            5: (s) => {
+                // v3.17.0 Alchemy-imported features. All added defaults are
+                // `false` (or inert values for sub-settings), so the merge
+                // during `load()` already seeds them. This migration is a
+                // no-op marker so `_settingsVersion` advances cleanly and
+                // future migrations can chain from a known baseline.
                 return s;
             },
         },
@@ -25202,6 +25228,518 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 removeNavigateRule('chapterJumpButtons');
                 this._prev?.remove(); this._next?.remove();
                 this._prev = null; this._next = null;
+            }
+        },
+
+        // ═══════════════════════════════════════════════════════════════
+        // ═══ WAVE 10 — Alchemy-inspired additions (v3.17.0) ════════════
+        // ═══════════════════════════════════════════════════════════════
+        // All features in this block default OFF. They were imported from a
+        // competitor review where each offered a small but distinct value-add
+        // not already covered by Astra Deck's catalogue.
+
+        cssFeature(
+            'hideAirplayButton',
+            'Hide Airplay Button',
+            'Remove the Airplay icon from the player controls',
+            'Video Player',
+            'cast-off',
+            '.ytp-airplay-button, button.ytp-airplay-button'
+        ),
+        cssFeature(
+            'hideQueueOnThumbnails',
+            'Hide "Add to Queue" on Thumbnails',
+            'Remove the "Add to queue" overlay button that appears on thumbnail hover',
+            'Home / Subscriptions',
+            'list-x',
+            'ytd-thumbnail-overlay-toggle-button-renderer[aria-label="Add to queue"], ' +
+            'ytd-thumbnail-overlay-toggle-button-renderer:has(button[aria-label="Add to queue"]), ' +
+            'yt-icon-button.ytd-thumbnail:has(yt-button-shape button[aria-label="Add to queue"])'
+        ),
+        cssFeature(
+            'fullTitles',
+            'Show Full Video Titles',
+            'Remove the 2-line clamp on thumbnail titles so long titles show in full',
+            'Home / Subscriptions',
+            'type',
+            `#video-title.ytd-rich-grid-media,
+             #video-title.ytd-grid-video-renderer,
+             #video-title.ytd-compact-video-renderer,
+             ytd-rich-grid-media #video-title,
+             ytd-compact-video-renderer #video-title {
+                 -webkit-line-clamp: unset !important;
+                 max-height: none !important;
+                 overflow: visible !important;
+                 white-space: normal !important;
+             }`
+        ),
+        {
+            id: 'titleCaseTransform',
+            name: 'Transform Video Title Case',
+            description: 'Override YouTube\'s clickbait UPPERCASE titles with a casing style of your choice',
+            group: 'Home / Subscriptions',
+            icon: 'case-sensitive',
+            type: 'select',
+            options: {
+                'none': 'Keep original',
+                'uppercase': 'UPPERCASE',
+                'lowercase': 'lowercase',
+                'capitalize': 'Capitalize Each Word'
+            },
+            settingKey: 'titleCaseMode',
+            _styleEl: null,
+            init() {
+                const mode = appState.settings.titleCaseMode || 'none';
+                // `none` is a valid select value but produces no transform —
+                // we still inject an empty style so destroy() has something
+                // to remove, keeping init/destroy symmetric.
+                let transform = 'none';
+                if (mode === 'uppercase') transform = 'uppercase';
+                else if (mode === 'lowercase') transform = 'lowercase';
+                else if (mode === 'capitalize') transform = 'capitalize';
+                const css = `
+                    #video-title, ytd-rich-grid-media #video-title,
+                    ytd-compact-video-renderer #video-title,
+                    ytd-watch-metadata h1.ytd-watch-metadata,
+                    ytd-video-primary-info-renderer h1 {
+                        text-transform: ${transform} !important;
+                    }
+                `;
+                this._styleEl = injectStyle(css, this.id, true);
+            },
+            destroy() { this._styleEl?.remove(); this._styleEl = null; }
+        },
+        {
+            id: 'customSelectionColor',
+            name: 'Custom Text Selection Color',
+            description: 'Override the default text-selection background with your chosen color',
+            group: 'Theme',
+            icon: 'palette',
+            type: 'color',
+            settingKey: 'selectionColor',
+            _styleEl: null,
+            init() {
+                const color = appState.settings.selectionColor || '#2dd36f';
+                const css = `
+                    ::selection { background: ${color} !important; color: #000 !important; }
+                    ::-moz-selection { background: ${color} !important; color: #000 !important; }
+                `;
+                this._styleEl = injectStyle(css, this.id, true);
+            },
+            destroy() { this._styleEl?.remove(); this._styleEl = null; }
+        },
+        {
+            id: 'bypassPlaylistMode',
+            name: 'Bypass Playlist Mode on Clicks',
+            description: 'Strip the &list= parameter from clicked thumbnails so you don\'t get stuck inside someone\'s playlist',
+            group: 'Navigation',
+            icon: 'list-x',
+            _onClick: null,
+            init() {
+                // Capture-phase click handler. We rewrite the anchor's href in
+                // place so YouTube's own SPA router handles the navigation —
+                // simpler than preventDefault + router.navigate().
+                this._onClick = (e) => {
+                    const a = e.target?.closest?.('a#thumbnail, a.ytd-thumbnail, a[href*="/watch?"]');
+                    if (!a || !a.href) return;
+                    try {
+                        const url = new URL(a.href, window.location.href);
+                        if (!url.pathname.startsWith('/watch')) return;
+                        if (!url.searchParams.has('list')) return;
+                        // Preserve videoId + index-less time anchor; strip
+                        // list/index/pp so the watch page opens as a standalone.
+                        url.searchParams.delete('list');
+                        url.searchParams.delete('index');
+                        url.searchParams.delete('pp');
+                        a.href = url.toString();
+                    } catch (_) {
+                        // reason: foreign anchors (non-YT, non-/watch) — skip
+                    }
+                };
+                document.addEventListener('click', this._onClick, true);
+            },
+            destroy() {
+                if (this._onClick) {
+                    document.removeEventListener('click', this._onClick, true);
+                    this._onClick = null;
+                }
+            }
+        },
+        {
+            id: 'musicVideoSpeedLock',
+            name: 'Lock 1× Speed on Music Videos',
+            description: 'When Persistent Playback Speed is enabled, keep music-category videos at 1× so songs aren\'t sped up',
+            group: 'Video Player',
+            icon: 'music',
+            pages: [PageTypes.WATCH],
+            _navRule: null,
+            _isMusicVideo() {
+                // YouTube exposes category via og:video:tag meta + the
+                // super-title strip on the watch page. The cheapest reliable
+                // signal is the "Music" badge rendered inside the watch
+                // metadata row, which survives SPA nav timing reliably.
+                const badge = document.querySelector(
+                    'ytd-watch-metadata ytd-badge-supported-renderer .badge, ' +
+                    'ytd-watch-metadata yt-formatted-string.super-title, ' +
+                    'ytd-rich-metadata-renderer a[href^="/channel/"]'
+                );
+                if (badge && /music|song|official.*video/i.test(badge.textContent || '')) {
+                    return true;
+                }
+                // Fallback: check the structured og:video:tag meta that YT
+                // sets on music pages for the "Music in this video" panel.
+                const musicPanel = document.querySelector(
+                    'ytd-video-description-music-section-renderer, ' +
+                    'ytd-structured-description-content-renderer ytd-horizontal-card-list-renderer'
+                );
+                return !!musicPanel;
+            },
+            _applyLockIfMusic() {
+                if (!this._isMusicVideo()) return;
+                const video = document.querySelector('video.html5-main-video');
+                if (!video) return;
+                if (video.playbackRate !== 1) {
+                    video.playbackRate = 1;
+                    DebugManager.log('MusicLock', 'Forced 1x speed on music video');
+                }
+            },
+            init() {
+                // Re-check on every nav so a playlist of mixed music/talk
+                // videos flips correctly. 2.5s gives the watch metadata
+                // enough time to hydrate on slow connections.
+                this._navRule = () => setTimeout(() => this._applyLockIfMusic(), 2500);
+                addNavigateRule('musicVideoSpeedLock', this._navRule);
+                this._navRule();
+            },
+            destroy() {
+                removeNavigateRule('musicVideoSpeedLock');
+                this._navRule = null;
+            }
+        },
+        {
+            id: 'playlistQuickRemove',
+            name: 'Playlist Quick-Remove Overlay',
+            description: 'Show a trash icon on each item in playlists you own for one-click removal',
+            group: 'Playlists',
+            icon: 'trash-2',
+            pages: [PageTypes.PLAYLIST, PageTypes.WATCH],
+            _navRule: null,
+            _styleEl: null,
+            _isOwnedPlaylist() {
+                // The "playlist actions" menu is only rendered when the
+                // logged-in user owns the playlist — use it as the owner probe.
+                return !!document.querySelector(
+                    'ytd-playlist-header-renderer ytd-button-renderer[aria-label*="Edit"], ' +
+                    'ytd-playlist-header-renderer yt-button-shape button[aria-label*="Remove videos"]'
+                );
+            },
+            _attachOverlays() {
+                if (!this._isOwnedPlaylist()) return;
+                const items = document.querySelectorAll('ytd-playlist-video-renderer:not([data-ytkit-qr])');
+                items.forEach((item) => {
+                    item.dataset.ytkitQr = '1';
+                    const btn = document.createElement('button');
+                    btn.className = 'ytkit-playlist-qr';
+                    btn.type = 'button';
+                    btn.setAttribute('aria-label', 'Remove from playlist');
+                    btn.textContent = '×';
+                    btn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        // The native "Remove from …" menu item lives under
+                        // the three-dot menu on the row. Click-chain it so
+                        // we reuse YouTube's own mutation path (no API hack).
+                        const menuBtn = item.querySelector(
+                            '#menu yt-icon-button button, ' +
+                            '#menu button[aria-label*="Action menu"]'
+                        );
+                        menuBtn?.click();
+                        setTimeout(() => {
+                            const removeItem = [...document.querySelectorAll(
+                                'ytd-menu-service-item-renderer, tp-yt-paper-item'
+                            )].find(n => /remove from/i.test(n.textContent || ''));
+                            removeItem?.click();
+                        }, 60);
+                    });
+                    item.style.position = 'relative';
+                    item.appendChild(btn);
+                });
+            },
+            init() {
+                const css = `.ytkit-playlist-qr{position:absolute;top:6px;right:6px;z-index:20;width:22px;height:22px;border-radius:50%;background:rgba(239,68,68,0.9);color:#fff;border:0;cursor:pointer;font:700 13px/1 system-ui;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s}ytd-playlist-video-renderer:hover .ytkit-playlist-qr{opacity:1}.ytkit-playlist-qr:hover{background:#dc2626}`;
+                this._styleEl = injectStyle(css, this.id, true);
+                this._navRule = () => setTimeout(() => this._attachOverlays(), 1500);
+                addNavigateRule('playlistQuickRemove', this._navRule);
+                this._navRule();
+                addScopedMutationRule?.('playlistQuickRemove', 'ytd-playlist-video-renderer', () => this._attachOverlays());
+            },
+            destroy() {
+                removeNavigateRule('playlistQuickRemove');
+                removeScopedMutationRule?.('playlistQuickRemove');
+                document.querySelectorAll('.ytkit-playlist-qr').forEach(b => b.remove());
+                document.querySelectorAll('ytd-playlist-video-renderer[data-ytkit-qr]')
+                    .forEach(el => { delete el.dataset.ytkitQr; });
+                this._styleEl?.remove(); this._styleEl = null;
+                this._navRule = null;
+            }
+        },
+        {
+            id: 'watchLaterCleanup',
+            name: 'Watch Later Cleanup Button',
+            description: 'Adds a "Remove Watched" button to the Watch Later playlist header for batch cleanup',
+            group: 'Playlists',
+            icon: 'broom',
+            pages: [PageTypes.PLAYLIST],
+            _navRule: null,
+            _btn: null,
+            _isWatchLater() {
+                // /playlist?list=WL — only place we want this to appear.
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    return params.get('list') === 'WL';
+                } catch (_) { return false; }
+            },
+            _injectButton() {
+                if (!this._isWatchLater()) return;
+                if (document.getElementById('ytkit-wl-cleanup')) return;
+                const host = document.querySelector(
+                    'ytd-playlist-header-renderer .metadata-action-bar, ' +
+                    'ytd-playlist-header-renderer #top-level-buttons-computed'
+                );
+                if (!host) return;
+                const btn = document.createElement('button');
+                btn.id = 'ytkit-wl-cleanup';
+                btn.type = 'button';
+                btn.className = 'ytkit-wl-cleanup';
+                btn.textContent = 'Remove Watched';
+                btn.setAttribute('aria-label', 'Remove all watched videos from Watch Later');
+                btn.addEventListener('click', () => this._removeWatched(btn));
+                host.appendChild(btn);
+                this._btn = btn;
+            },
+            async _removeWatched(btn) {
+                btn.disabled = true;
+                btn.textContent = 'Scanning…';
+                // Threshold: treat ≥90% watched as "watched" for cleanup.
+                const THRESHOLD = 0.9;
+                const targets = [];
+                document.querySelectorAll('ytd-playlist-video-renderer').forEach((row) => {
+                    const fill = row.querySelector('#progress');
+                    if (!fill) return;
+                    const raw = fill.style.width || '';
+                    const pct = parseFloat(raw) / 100;
+                    if (Number.isFinite(pct) && pct >= THRESHOLD) targets.push(row);
+                });
+                if (!targets.length) {
+                    btn.textContent = 'Nothing to remove';
+                    setTimeout(() => { btn.textContent = 'Remove Watched'; btn.disabled = false; }, 2500);
+                    return;
+                }
+                for (let i = 0; i < targets.length; i++) {
+                    btn.textContent = `Removing ${i + 1} / ${targets.length}…`;
+                    const row = targets[i];
+                    const menuBtn = row.querySelector('#menu yt-icon-button button, #menu button[aria-label*="Action menu"]');
+                    menuBtn?.click();
+                    await new Promise(r => setTimeout(r, 120));
+                    const removeItem = [...document.querySelectorAll(
+                        'ytd-menu-service-item-renderer, tp-yt-paper-item'
+                    )].find(n => /remove from/i.test(n.textContent || ''));
+                    removeItem?.click();
+                    // Small gap so YouTube's Polymer can process each mutation
+                    // before we dispatch the next click. Empirically 350ms
+                    // avoids the "ghost row" flicker without being sluggish.
+                    await new Promise(r => setTimeout(r, 350));
+                }
+                btn.textContent = `Removed ${targets.length} ✓`;
+                setTimeout(() => { btn.textContent = 'Remove Watched'; btn.disabled = false; }, 3000);
+            },
+            init() {
+                const css = `.ytkit-wl-cleanup{margin-left:8px;padding:8px 14px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:6px;font:600 13px/1 system-ui;cursor:pointer}.ytkit-wl-cleanup:hover{background:#991b1b;color:#fff}.ytkit-wl-cleanup:disabled{opacity:.7;cursor:progress}`;
+                this._styleEl = injectStyle(css, this.id, true);
+                this._navRule = () => setTimeout(() => this._injectButton(), 1500);
+                addNavigateRule('watchLaterCleanup', this._navRule);
+                this._navRule();
+            },
+            destroy() {
+                removeNavigateRule('watchLaterCleanup');
+                this._btn?.remove(); this._btn = null;
+                this._styleEl?.remove(); this._styleEl = null;
+                this._navRule = null;
+            }
+        },
+        {
+            id: 'transcriptAiHandoff',
+            name: 'Transcript → AI One-Click Handoff',
+            description: 'Adds a player-button that copies the transcript and opens your chosen AI tool with a summarization prompt pre-filled',
+            group: 'Watch Page',
+            icon: 'sparkles',
+            pages: [PageTypes.WATCH],
+            type: 'select',
+            options: {
+                'notebooklm': 'Google NotebookLM',
+                'chatgpt': 'ChatGPT',
+                'claude': 'Claude',
+                'gemini': 'Gemini',
+                'perplexity': 'Perplexity'
+            },
+            settingKey: 'transcriptAiTarget',
+            _btn: null,
+            _navRule: null,
+            _styleEl: null,
+            _targetUrl(target) {
+                // Most of these don't accept a real pre-filled prompt via
+                // URL; we copy the prompt to clipboard and open the landing
+                // page. ChatGPT is the exception — its `?q=` query works.
+                switch (target) {
+                    case 'chatgpt': return 'https://chatgpt.com/?q=';
+                    case 'claude': return 'https://claude.ai/new';
+                    case 'gemini': return 'https://gemini.google.com/app';
+                    case 'perplexity': return 'https://www.perplexity.ai/';
+                    case 'notebooklm':
+                    default: return 'https://notebooklm.google.com/';
+                }
+            },
+            _buildPrompt(videoTitle, channelName, transcript) {
+                const header = `I want a summary of the following YouTube transcript.\n\nTitle: ${videoTitle}\nChannel: ${channelName}\n\nProvide: (1) a 3-sentence TL;DR, (2) key points as bullets, (3) chapters/timestamps if present. Keep it factual and concise.\n\n---\n\n`;
+                return header + transcript;
+            },
+            async _handoff() {
+                const target = appState.settings.transcriptAiTarget || 'notebooklm';
+                showToast('Fetching transcript…', '#3b82f6', { duration: 3 });
+                try {
+                    const videoId = getVideoId();
+                    if (!videoId) { showToast('No video detected', '#ef4444'); return; }
+                    const trackData = await TranscriptService._getCaptionTracks(videoId);
+                    if (!trackData?.tracks?.length) {
+                        showToast('No transcript available for this video', '#ef4444', { duration: 5 });
+                        return;
+                    }
+                    const track = TranscriptService._selectBestTrack(trackData.tracks);
+                    const segments = await TranscriptService._fetchTranscriptContent(track.baseUrl);
+                    const text = TranscriptService._formatTranscript(segments);
+                    const title = trackData.videoTitle || document.title.replace(/\s*-\s*YouTube$/, '');
+                    const channel = document.querySelector('ytd-channel-name a')?.textContent?.trim() || 'Unknown';
+                    const prompt = this._buildPrompt(title, channel, text);
+                    try {
+                        await navigator.clipboard.writeText(prompt);
+                    } catch (_) {
+                        // reason: clipboard can be blocked by page focus loss;
+                        // we still open the target so the user can paste manually.
+                    }
+                    let url = this._targetUrl(target);
+                    if (target === 'chatgpt') {
+                        // ChatGPT supports a ?q= query — truncate to ~6k chars
+                        // so the URL stays below the browser limit. Full prompt
+                        // is on the clipboard regardless.
+                        const q = encodeURIComponent(prompt.slice(0, 6000));
+                        url = `${url}${q}`;
+                    }
+                    await openExternalUrl(url);
+                    showToast('Prompt copied + target opened', '#22c55e', { duration: 3 });
+                } catch (e) {
+                    DebugManager.log('TranscriptAI', `Handoff failed: ${e.message}`);
+                    showToast('Handoff failed — check diagnostics log', '#ef4444', { duration: 5 });
+                }
+            },
+            _injectButton() {
+                if (!isWatchPagePath()) return;
+                if (document.getElementById('ytkit-ai-handoff')) return;
+                const controls = document.querySelector('.ytp-right-controls');
+                if (!controls) return;
+                const btn = document.createElement('button');
+                btn.id = 'ytkit-ai-handoff';
+                btn.className = 'ytp-button ytkit-ai-handoff';
+                btn.type = 'button';
+                btn.setAttribute('aria-label', 'Send transcript to AI tool');
+                btn.title = 'Send transcript to AI tool';
+                btn.innerHTML = '<svg height="100%" viewBox="0 0 24 24" width="100%"><path fill="currentColor" d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74z"/></svg>';
+                btn.addEventListener('click', () => this._handoff());
+                controls.insertBefore(btn, controls.firstChild);
+                this._btn = btn;
+            },
+            init() {
+                const css = `.ytkit-ai-handoff{width:36px;height:36px;opacity:.85}.ytkit-ai-handoff:hover{opacity:1}.ytkit-ai-handoff svg{width:22px;height:22px}`;
+                this._styleEl = injectStyle(css, this.id, true);
+                this._navRule = () => setTimeout(() => this._injectButton(), 1800);
+                addNavigateRule('transcriptAiHandoff', this._navRule);
+                this._navRule();
+            },
+            destroy() {
+                removeNavigateRule('transcriptAiHandoff');
+                this._btn?.remove(); this._btn = null;
+                this._styleEl?.remove(); this._styleEl = null;
+                this._navRule = null;
+            }
+        },
+        {
+            id: 'audioTrackLanguage',
+            name: 'Preferred Audio Track Language',
+            description: 'Automatically switch to your preferred dubbed audio track when a video offers multiple languages (MrBeast-style multi-audio videos)',
+            group: 'Video Player',
+            icon: 'languages',
+            pages: [PageTypes.WATCH],
+            type: 'select',
+            options: {
+                'en': 'English', 'es': 'Spanish', 'pt': 'Portuguese', 'hi': 'Hindi',
+                'fr': 'French', 'de': 'German', 'it': 'Italian', 'ja': 'Japanese',
+                'ko': 'Korean', 'zh': 'Chinese', 'ru': 'Russian', 'ar': 'Arabic',
+                'id': 'Indonesian', 'tr': 'Turkish', 'pl': 'Polish', 'nl': 'Dutch',
+                'sv': 'Swedish', 'no': 'Norwegian', 'da': 'Danish', 'fi': 'Finnish',
+                'he': 'Hebrew', 'cs': 'Czech', 'el': 'Greek', 'vi': 'Vietnamese'
+            },
+            settingKey: 'preferredAudioLang',
+            _navRule: null,
+            _applied: false,
+            async _applyPreferred() {
+                if (this._applied) return;
+                const target = (appState.settings.preferredAudioLang || 'en').toLowerCase();
+                // The audio track selector lives under Settings (gear) →
+                // Audio track → <language>. Open the settings menu, walk
+                // the items, click the one whose label matches.
+                const gear = document.querySelector('.ytp-settings-button');
+                if (!gear) return;
+                gear.click();
+                await new Promise(r => setTimeout(r, 80));
+                const menuItems = [...document.querySelectorAll('.ytp-menuitem')];
+                const audioRow = menuItems.find(m => /audio track/i.test(m.textContent || ''));
+                if (!audioRow) { gear.click(); return; }
+                audioRow.click();
+                await new Promise(r => setTimeout(r, 80));
+                const langItems = [...document.querySelectorAll('.ytp-menuitem')];
+                // Match both the BCP-47 code in the hidden title attribute
+                // and the visible label like "Spanish" / "Español".
+                const match = langItems.find(m => {
+                    const t = (m.textContent || '').toLowerCase();
+                    const label = (this.options || {})[target] || target;
+                    return t.includes(label.toLowerCase()) || t.includes(target);
+                });
+                if (match) {
+                    match.click();
+                    this._applied = true;
+                    DebugManager.log('AudioLang', `Switched to ${target}`);
+                } else {
+                    // Close the submenu gracefully when the requested lang
+                    // isn't offered for this video.
+                    const back = document.querySelector('.ytp-panel-back-button');
+                    back?.click();
+                    gear.click();
+                }
+            },
+            init() {
+                this._navRule = () => {
+                    this._applied = false;
+                    // Give the player 3.5s to hydrate audio tracks before we
+                    // try to drive the settings menu. Music videos / shorts
+                    // rarely expose multi-audio, so misses are fine.
+                    setTimeout(() => this._applyPreferred().catch(() => {}), 3500);
+                };
+                addNavigateRule('audioTrackLanguage', this._navRule);
+                this._navRule();
+            },
+            destroy() {
+                removeNavigateRule('audioTrackLanguage');
+                this._navRule = null;
+                this._applied = false;
             }
         },
 

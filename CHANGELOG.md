@@ -4,6 +4,145 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
+## [3.17.0] - Alchemy-inspired additions (Wave 10)
+
+Eleven new features imported after a feature review of the YouTube Alchemy
+userscript. Every toggle is **OFF by default** so existing setups are
+unchanged — users opt in from Settings. Grouped under a new "Wave 10"
+block at the end of the features array for easy isolation.
+
+### Added — CSS-only toggles (fast, zero-cost)
+- `hideAirplayButton` — remove Airplay icon from player controls.
+- `hideQueueOnThumbnails` — remove "Add to queue" hover button on grid items.
+- `fullTitles` — unclamp the 2-line truncation on thumbnail titles.
+- `titleCaseTransform` + `titleCaseMode` (select: `none` / `uppercase` /
+  `lowercase` / `capitalize`) — override YouTube's SHOUTY UPPERCASE titles.
+- `customSelectionColor` + `selectionColor` (color picker) — override the
+  default `::selection` background.
+
+### Added — Behaviour toggles
+- `bypassPlaylistMode` — capture-phase click handler strips `&list=` /
+  `&index=` / `&pp=` from thumbnail anchors so videos don't trap you inside
+  someone's playlist.
+- `musicVideoSpeedLock` — when Persistent Playback Speed is on, detects
+  music-category videos and forces 1× so songs aren't sped up.
+
+### Added — DOM features
+- `playlistQuickRemove` — trash-icon overlay on each item in playlists you
+  own; click-chains the native "Remove from playlist" menu item. Appears
+  only on owned playlists (detected via the presence of the edit action).
+- `watchLaterCleanup` — injects a "Remove Watched" button into the Watch
+  Later playlist header (only on `?list=WL`). Removes items with ≥90%
+  progress via the native menu path, sequentially with a 350 ms gap to
+  let YouTube's Polymer mutations process.
+
+### Added — Complex features
+- `transcriptAiHandoff` + `transcriptAiTarget` (select: `notebooklm` /
+  `chatgpt` / `claude` / `gemini` / `perplexity`) — adds a sparkle button
+  to the player right-controls. Click fetches the transcript via the
+  existing `TranscriptService`, builds a summary prompt, copies to
+  clipboard, and opens the chosen AI tool. ChatGPT uses its native `?q=`
+  URL for a pre-filled prompt (truncated to 6 KB); others open their
+  landing page and the user pastes. No API key required.
+- `audioTrackLanguage` + `preferredAudioLang` (24-locale select) — on
+  every nav, drives the player's Settings → Audio Track menu to select
+  the requested language. Silently no-ops when the video has no alternate
+  audio track (single-track videos, Shorts, music).
+
+### Settings plumbing
+- `SETTINGS_VERSION` bumped 4 → 5. Migration v5 is a no-op marker — new
+  defaults seed via the existing merge-during-load path (additive, so the
+  marker exists only to advance `_settingsVersion` cleanly for future
+  migrations).
+- All 15 new keys regenerated into `default-settings.json` via the
+  existing `build-extension.js` brace-balanced parser. No code changes
+  to the settings-UI renderer needed — the `type: 'select' | 'color'` +
+  `settingKey` pattern is already wired.
+
+### Notes
+- Parse-clean (new Function() validates). All 81 existing JS tests pass.
+- Build artifacts regenerated: Chrome ZIP + CRX, Firefox ZIP + XPI all at
+  375 KB.
+- Competitor-review source: Alchemy's audio-track picker, header quick
+  links (already covered by Astra Deck's `quickLinkMenu`), tab view
+  (covered by `watchPageTabs`), and the colored transcript buttons
+  (subsumed into the single `transcriptAiHandoff` selector-driven design).
+
+---
+
+## Astra Downloader [1.2.0] - Hardening Pass 6 (companion service)
+
+Deep audit of the Python/Flask `astra_downloader` companion. Clears every
+named Pass 6 follow-up from HARDENING.md plus a batch of new findings.
+Extension wire-compatible (`/health` gains three additive keys, older
+builds ignore unknown keys).
+
+### Added
+- **Path confinement on `/download`** (S1). Client-supplied `outputDir` is
+  now bounded to `DownloadPath` + `AudioDownloadPath` + optional
+  `ExtraOutputRoots`. Resolved before `mkdir`, so a rejected request no
+  longer leaves a directory behind.
+- **`/download` rate limit** (S2). Token-bucket sliding window (30 / 60 s
+  default). Rejection happens before body parsing; CPU stays flat under
+  abuse. 429 responses include `Retry-After`.
+- **SHA-256 verification for yt-dlp + ffmpeg** (S3). First-run downloads
+  verify against the upstream release sidecar. Hard-fail on mismatch
+  (file unlinked so retry re-downloads). Soft-fail on missing sidecar
+  (logged, install continues).
+- **Settings → Tools section.** Shows live `yt-dlp` / `ffmpeg` versions,
+  "Check yt-dlp Update" button (runs `-U`, refreshes version cache), and
+  "Reinstall ffmpeg" (unlink + re-run the verified download path).
+- **ffmpeg download byte-level progress** (U1). Setup bar now advances in
+  the [35, 55] range as the zip streams, throttled to ~10 Hz.
+- **JSON progress template for yt-dlp output** (U3). `MDLP_JSON` lines
+  parsed in addition to legacy MDLP regex — insulates against upstream
+  format drift.
+- **`/health` additions.** `ytDlpVersion`, `ffmpegVersion`, `rateLimit`
+  policy object. Extension consumers can render versions in the repair
+  prompt.
+- **`Access-Control-Max-Age: 600`** (R2) — preflight cache horizon cuts
+  CORS round-trips during multi-video sessions.
+- **Config fields:** `LastYtDlpUpdateCheck`, `LastFfmpegCheck`,
+  `ExtraOutputRoots`.
+
+### Changed
+- **Waitress replaces werkzeug** as the WSGI server (R1). `_ServerAdapter`
+  shim presents uniform `run()` / `stop()`; werkzeug remains as a last-
+  resort fallback when waitress isn't installed. Server-start log reports
+  the active backend.
+- **yt-dlp auto-update throttled to once per 24 h** (R3). Previously fired
+  on every launch with no result logging. New `maybe_auto_update_ytdlp()`
+  runs in a daemon thread, captures exit code + output, invalidates the
+  version cache on success.
+- **`ensure_system_integrations()` is idempotent** (R5). Writes a version
+  stamp to `HKCU\Software\Classes\AstraDownloader\IntegrationsVersion`
+  after successful registration; subsequent launches at the same version
+  skip the shortcut / schtasks / winreg / protocol passes.
+- **`_bootstrap` installs waitress** alongside PyQt6 / flask / requests.
+
+### Security
+- Orphan session cookie jars (`.cookies.*.txt`) from crashed downloads
+  are swept on `DownloadManager` init (R4). 5-minute horizon preserves
+  in-flight jars.
+- Rate limiter decouples CPU cost from client request rate.
+- SHA-256 verification closes the integrity gap on first-run binaries.
+
+### Fixed
+- Setup worker now logs crash context (`log_crash`) on exception instead
+  of dropping the traceback.
+- Icon download failure logged instead of silently swallowed.
+
+### Tests
+- 37 Python tests pass (was 19). New suites: `PathConfinementTests`,
+  `RateLimiterTests`, `Sha256VerifyTests`, `CookieJarSweepTests`,
+  `ApiRateLimitTests`, `CorsHeaderTests`, `HealthAdditionsTests`,
+  `AutoUpdateThrottleTests`.
+- 81 JS tests unchanged (no extension behavior touched).
+
+See [HARDENING.md](HARDENING.md) v1.2.0 section for the full audit.
+
+---
+
 ## [3.16.1] - Remove Workspace summary card from settings sidebar
 
 Settings panel reclaimed ~180 px of vertical space by removing the "Workspace / Home controls" summary card (kicker + title + copy + 3 stat counters + "Live apply" footnote). The section was decorative — the stats (enabled count, total features, populated sections) added no actionable information that wasn't visible elsewhere in the panel.

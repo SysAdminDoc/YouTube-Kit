@@ -297,5 +297,20 @@
   "aiSummaryApiKey": "",
   "aiSummaryProvider": "openai",
   "copyChapterMarkdown": false,
-  "chapterJumpButtons": false
+  "chapterJumpButtons": false,
+  "hideAirplayButton": false,
+  "hideQueueOnThumbnails": false,
+  "fullTitles": false,
+  "titleCaseTransform": false,
+  "titleCaseMode": "none",
+  "customSelectionColor": false,
+  "selectionColor": "#2dd36f",
+  "bypassPlaylistMode": false,
+  "musicVideoSpeedLock": false,
+  "playlistQuickRemove": false,
+  "watchLaterCleanup": false,
+  "transcriptAiHandoff": false,
+  "transcriptAiTarget": "notebooklm",
+  "audioTrackLanguage": false,
+  "preferredAudioLang": "en"
 }
