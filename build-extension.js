@@ -11,6 +11,7 @@ const {
     extractDefaultsFromSource,
     extractSettingsVersionFromSource
 } = require('./scripts/catalog-utils');
+const { patchManifestForFirefox } = require('./scripts/manifest-patch');
 
 const EXT_DIR = path.join(__dirname, 'extension');
 const BUILD_DIR = path.join(__dirname, 'build');
@@ -272,26 +273,7 @@ async function build() {
     // Modify manifest for Firefox
     const ffManifestPath = path.join(firefoxStageDir, 'manifest.json');
     const ffManifest = JSON.parse(fs.readFileSync(ffManifestPath, 'utf8'));
-
-    ffManifest.browser_specific_settings = {
-        gecko: {
-            id: 'ytkit@sysadmindoc.github.io',
-            strict_min_version: '128.0'
-        }
-    };
-
-    if (ffManifest.background && ffManifest.background.service_worker) {
-        const worker = ffManifest.background.service_worker;
-        ffManifest.background = { scripts: [worker] };
-    }
-
-    // v3.20.0: Firefox reserves Ctrl+Shift+Y for "Show Downloads".
-    // Rebind the toggle to Ctrl+Alt+Y on Firefox only. Users can
-    // still remap via about:addons -> Manage Extension Shortcuts.
-    if (ffManifest.commands?.['toggle-control-center']?.suggested_key?.default === 'Ctrl+Shift+Y') {
-        ffManifest.commands['toggle-control-center'].suggested_key.default = 'Ctrl+Alt+Y';
-    }
-
+    patchManifestForFirefox(ffManifest);
     fs.writeFileSync(ffManifestPath, JSON.stringify(ffManifest, null, 2) + '\n', 'utf8');
 
     const firefoxZipName = 'astra-deck-firefox-v' + version + '.zip';

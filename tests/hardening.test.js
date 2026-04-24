@@ -540,7 +540,12 @@ test('_pendingReveals is mirrored to chrome.storage.session for SW-restart survi
         'chrome.downloads.onChanged.addListener'
     );
     assert.ok(listenerStart > -1, 'onChanged listener must exist');
-    const listenerBody = backgroundSource.slice(listenerStart, listenerStart + 1500);
+    // Bound the slice to the closing brace of the addListener() call so
+    // growth of the listener body doesn't silently let the assertion below
+    // reach past it into unrelated code.
+    const listenerEnd = backgroundSource.indexOf('\n}', listenerStart);
+    assert.ok(listenerEnd > listenerStart, 'onChanged listener must have a closing brace');
+    const listenerBody = backgroundSource.slice(listenerStart, listenerEnd);
     assert.match(
         listenerBody,
         /await\s+_pendingRevealsReady/,
@@ -581,24 +586,7 @@ test('manifest declares unlimitedStorage to exceed the 10 MB default quota', () 
 });
 
 test('Firefox build rewrites Ctrl+Shift+Y (reserved by Firefox Downloads) to Ctrl+Alt+Y', () => {
-    const buildSource = fs.readFileSync(
-        path.join(__dirname, '..', 'build-extension.js'),
-        'utf8'
-    );
-    // The patch guards on the Chrome default so running the Firefox build
-    // twice (or after a future Chrome-side remap) stays idempotent.
-    assert.match(
-        buildSource,
-        /ffManifest\.commands\?\.\['toggle-control-center'\]\?\.suggested_key\?\.default\s*===\s*'Ctrl\+Shift\+Y'/,
-        'Firefox patch must guard on the current Chrome default'
-    );
-    assert.match(
-        buildSource,
-        /ffManifest\.commands\['toggle-control-center'\]\.suggested_key\.default\s*=\s*'Ctrl\+Alt\+Y'/,
-        'Firefox patch must rebind to Ctrl+Alt+Y'
-    );
-    // Chrome's manifest must stay on the original shortcut — the Firefox
-    // rebind only applies to the firefox-stage copy produced during build.
+    // Chrome manifest is the build input — stays on the original shortcut.
     const manifest = JSON.parse(fs.readFileSync(
         path.join(__dirname, '..', 'extension', 'manifest.json'),
         'utf8'
@@ -607,6 +595,44 @@ test('Firefox build rewrites Ctrl+Shift+Y (reserved by Firefox Downloads) to Ctr
         manifest.commands?.['toggle-control-center']?.suggested_key?.default,
         'Ctrl+Shift+Y',
         'Chrome manifest must keep Ctrl+Shift+Y as the default (no vendor conflict there)'
+    );
+
+    // Run the actual patch function on a deep copy of the Chrome manifest —
+    // this catches drift in either the Chrome-side source spelling or the
+    // patch's internal string literals, which a pure source-regex test
+    // would silently no-op through.
+    const { patchManifestForFirefox } = require('../scripts/manifest-patch');
+    const ffManifest = JSON.parse(JSON.stringify(manifest));
+    patchManifestForFirefox(ffManifest);
+
+    assert.equal(
+        ffManifest.commands?.['toggle-control-center']?.suggested_key?.default,
+        'Ctrl+Alt+Y',
+        'Firefox-patched manifest must carry Ctrl+Alt+Y'
+    );
+    assert.notEqual(
+        ffManifest.commands?.['toggle-control-center']?.suggested_key?.default,
+        'Ctrl+Shift+Y',
+        'Firefox-patched manifest must NOT retain the reserved Ctrl+Shift+Y default'
+    );
+    // The patch must also apply the Firefox-specific gecko + background
+    // transformations — a regression that dropped those would silently
+    // break Firefox at load time.
+    assert.equal(ffManifest.browser_specific_settings?.gecko?.id, 'ytkit@sysadmindoc.github.io');
+    assert.equal(ffManifest.browser_specific_settings?.gecko?.strict_min_version, '128.0');
+    assert.ok(
+        Array.isArray(ffManifest.background?.scripts) && ffManifest.background.scripts.length > 0,
+        'Firefox background must be a scripts[] array, not a service_worker entry'
+    );
+
+    // Running the patch twice must stay idempotent — protects against a
+    // re-run on an already-patched manifest (the guard on 'Ctrl+Shift+Y'
+    // ensures the second pass is a no-op for the shortcut).
+    patchManifestForFirefox(ffManifest);
+    assert.equal(
+        ffManifest.commands?.['toggle-control-center']?.suggested_key?.default,
+        'Ctrl+Alt+Y',
+        'Patch must be idempotent — a second application must not flip the shortcut back'
     );
 });
 
