@@ -4,12 +4,22 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
 
 ---
 
-## [Unreleased] - Hardening Pass 8
+## [Unreleased]
+
+## [3.20.1] - Hardening Pass 8 - 2026-04-24
 
 Audit-only follow-up to Pass 7. Closes the two remaining roadmap
 audit-pass items that had concrete, bounded fixes: the LOW security
 finding on `_pendingReveals` lifetime, and the SponsorBlock POI
-category correctness note.
+category correctness note. Also bumps a build-time dep to clear an
+npm audit moderate advisory.
+
+### Security
+
+- **`protocol-buffers-schema` bumped to 3.6.1** (GHSA-j452-xhg8-qg39,
+  prototype pollution). Build-only transitive dep via
+  `crx3 → pbf → resolve-protobuf-schema`, never shipped to users,
+  but `npm audit` is now clean.
 
 ### Fixed
 
