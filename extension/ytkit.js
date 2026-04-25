@@ -7047,6 +7047,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         align-items: center !important;
                         justify-content: flex-end !important;
                         height: 100% !important;
+                        box-sizing: border-box !important;
+                        padding-bottom: 4px !important;
                         overflow: visible !important;
                     }
 
