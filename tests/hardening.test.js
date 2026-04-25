@@ -1078,6 +1078,49 @@ test('theater-split teardown calls abortDividerDrag to handle SPA-nav mid-drag',
 // never use. v3.20.4 adds controller.abort() to both paths so all five
 // early-returns are consistent.
 
+// ── v3.20.4 H10: scripts/check-versions.js — pre-push version drift check ──
+//
+// .github/workflows/build.yml validates version-string consistency only
+// after a tag push. A developer who bumps three of four sources locally
+// (e.g. forgets to run `node sync-userscript.js`) won't notice until CI
+// fails post-tag. H10 ports the same check into a local `npm run check`
+// hook so drift is caught pre-push.
+
+test('check-versions.js exists and is wired into npm run check', () => {
+    const scriptPath = path.join(__dirname, '..', 'scripts', 'check-versions.js');
+    assert.ok(fs.existsSync(scriptPath), 'scripts/check-versions.js must exist');
+    const scriptSource = fs.readFileSync(scriptPath, 'utf8');
+    // Confirm the four canonical sources are read.
+    assert.match(scriptSource, /readPackageVersion/, 'must read package.json version');
+    assert.match(scriptSource, /readManifestVersion/, 'must read extension/manifest.json version');
+    assert.match(scriptSource, /readYtkitVersion/, 'must read extension/ytkit.js YTKIT_VERSION');
+    assert.match(scriptSource, /readUserscriptVersion/, 'must read YTKit.user.js @version');
+    // Confirm the empty-string guard fix (earlier draft had .includes('') bug).
+    assert.match(scriptSource, /sources\[0\]\.value\s*!==\s*['"]{2}/,
+        "Empty-string guard must use !== '' (not .includes('') — which would always evaluate true and silently break the happy path)");
+
+    // Confirm npm run check chains both syntax + version validation.
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    assert.match(pkg.scripts.check || '', /check-versions/,
+        '`npm run check` must include node scripts/check-versions.js after check-syntax');
+});
+
+test('check-versions.js runs cleanly against the current tree', () => {
+    // Spawn the script and capture exit code. Should be 0 — all four
+    // sources are kept in sync by the release workflow + the local
+    // sync-userscript.js helper.
+    const { execFileSync } = require('child_process');
+    const scriptPath = path.join(__dirname, '..', 'scripts', 'check-versions.js');
+    let exitCode = 0;
+    try {
+        execFileSync(process.execPath, [scriptPath], { stdio: 'pipe' });
+    } catch (e) {
+        exitCode = e.status || 1;
+    }
+    assert.equal(exitCode, 0,
+        'check-versions must pass on a clean tree — if this fails, version drift exists somewhere in the four canonical sources');
+});
+
 test('EXT_FETCH aborts the controller on every size-limit early return path', () => {
     const fetchHandlerStart = backgroundSource.indexOf('const controller = new AbortController()');
     assert.ok(fetchHandlerStart > -1, 'EXT_FETCH AbortController must exist');
