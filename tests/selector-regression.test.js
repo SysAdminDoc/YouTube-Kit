@@ -53,20 +53,55 @@ const FIXTURES = {
 // Critical selectors. Each must appear as a token in at least one fixture
 // AND as a literal substring in ytkit.js. Use bare identifiers (no `#` or
 // `.`): tokens are raw ids/classes, ytkit.js selector strings embed them.
+//
+// Coverage rationale (v3.20.3 expansion):
+//   - Layout selectors (ytd-app, ytd-watch-flexy, ytd-watch-metadata,
+//     ytd-comments) catch SPA-shape changes that orphan our content
+//     scripts.
+//   - Player API surfaces (movie_player, html5-video-container) catch
+//     the MAIN-world bridge breaking.
+//   - Player CHROME controls (ytp-chrome-bottom, ytp-progress-bar,
+//     ytp-play-button, ytp-settings-button, ytp-fullscreen-button,
+//     ytp-time-display) catch DOM rewrites of the control bar — the
+//     surface where most ad-blocking + theater-split + per-feature hooks
+//     live.
+//   - Feed grid (ytd-rich-grid-renderer / ytd-rich-item-renderer) catches
+//     home/subs/results renderer renames.
+//   - Comments DOM in BOTH shapes:
+//        * old: ytd-comment-thread-renderer
+//        * new: ytd-comment-view-model
+//     YouTube ships the new shape via A/B; theater-split v1.0.6 already
+//     had to follow this rename. Canary keeps both alive until the old
+//     shape is fully retired.
+//   - Text rendering wrappers (yt-formatted-string, yt-attributed-string)
+//     catch the recurring text-DOM rewrite that broke comment-text
+//     selection in v1.0.6. yt-attributed-string is the newer shape;
+//     yt-formatted-string is the older one still used widely.
 const CRITICAL_SELECTORS = [
     // SPA + layout
     'ytd-app',
     'ytd-watch-flexy',
-    // Player
+    'ytd-watch-metadata',
+    'ytd-comments',
+    // Player API
     'movie_player',
     'html5-video-container',
+    // Player chrome / controls
     'ytp-chrome-bottom',
     'ytp-progress-bar',
+    'ytp-play-button',
+    'ytp-settings-button',
+    'ytp-fullscreen-button',
+    'ytp-time-display',
     // Feed / grid
     'ytd-rich-grid-renderer',
     'ytd-rich-item-renderer',
-    // Comments
+    // Comments — both DOM shapes
     'ytd-comment-thread-renderer',
+    'ytd-comment-view-model',
+    // Text rendering wrappers — old + new shapes
+    'yt-formatted-string',
+    'yt-attributed-string',
 ];
 
 test('selector fixtures exist and contain a non-trivial token set', () => {
