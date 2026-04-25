@@ -1018,6 +1018,66 @@ test('normalizeCookieExpiry replaces every prior c.expirationDate || 0 site', ()
     }
 });
 
+// ── v1.0.7 H7: theater-split divider-drag mid-SPA-nav cleanup ──
+//
+// The divider-drag handler in theater-split.user.js attaches mousemove +
+// mouseup to `window` and a position:fixed shield to document.body. The
+// only cleanup path was the mouseup handler — but if a yt-navigate-finish
+// fires between mousedown and mouseup, teardown() would remove the split
+// wrapper while leaving the window listeners + dragShield orphaned. They
+// would then fire closures over the disposed wrapper indefinitely.
+//
+// Fix: hoist drag handles to module-scope state (dragShield, dragOnMove,
+// dragOnUp), provide an idempotent abortDividerDrag() helper, and call
+// it from teardown() so SPA nav mid-drag cleans up the orphan listeners.
+
+test('theater-split bumps to v1.0.7 with abortDividerDrag in teardown', () => {
+    const tsSource = fs.readFileSync(
+        path.join(__dirname, '..', 'theater-split.user.js'),
+        'utf8'
+    );
+    assert.match(tsSource, /@version\s+1\.0\.7/, 'theater-split userscript must declare v1.0.7');
+    assert.match(tsSource, /function abortDividerDrag\(\)/,
+        'abortDividerDrag helper must be defined');
+    // Module-scope state hoisted (was previously closure-local in initDividerDrag).
+    assert.match(tsSource, /let dragShield\s*=\s*null/,
+        'dragShield must be hoisted to module scope so teardown can reach it');
+    assert.match(tsSource, /let dragOnMove\s*=\s*null/,
+        'dragOnMove must be hoisted to module scope');
+    assert.match(tsSource, /let dragOnUp\s*=\s*null/,
+        'dragOnUp must be hoisted to module scope');
+});
+
+test('theater-split teardown calls abortDividerDrag to handle SPA-nav mid-drag', () => {
+    const tsSource = fs.readFileSync(
+        path.join(__dirname, '..', 'theater-split.user.js'),
+        'utf8'
+    );
+    const teardownStart = tsSource.indexOf('function teardown()');
+    assert.ok(teardownStart > -1, 'teardown function must exist');
+    const teardownEnd = tsSource.indexOf('// ── Activate', teardownStart);
+    assert.ok(teardownEnd > teardownStart, 'teardown must have a recognizable end');
+    const teardownBody = tsSource.slice(teardownStart, teardownEnd);
+
+    assert.match(teardownBody, /abortDividerDrag\(\)/,
+        'teardown must call abortDividerDrag so a mid-drag SPA navigation does not orphan window listeners or the dragShield');
+});
+
+test('theater-split divider mousedown clears any pre-existing drag state defensively', () => {
+    const tsSource = fs.readFileSync(
+        path.join(__dirname, '..', 'theater-split.user.js'),
+        'utf8'
+    );
+    const initStart = tsSource.indexOf('function initDividerDrag');
+    assert.ok(initStart > -1, 'initDividerDrag must exist');
+    // mousedown handler must clear any orphan drag before starting a new one.
+    const mdStart = tsSource.indexOf("'mousedown'", initStart);
+    const fnEnd = tsSource.indexOf('function ', mdStart + 1);
+    const handlerBody = tsSource.slice(mdStart, fnEnd);
+    assert.match(handlerBody, /abortDividerDrag\(\)/,
+        'mousedown must defensively call abortDividerDrag before starting a new drag, so re-entrancy or orphans cannot stack listeners');
+});
+
 test('normalizeCookieExpiry produces wire-compatible output with the Python downloader', () => {
     // The Python downloader at astra_downloader/astra_downloader.py:830-838
     // parses raw_expiry as `int(float(x)) if x not in (None, "") else 0`,

@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Theater Split v1.0.6
+// @name         Theater Split v1.0.7
 // @namespace    https://github.com/SysAdminDoc/Astra-Deck
-// @version      1.0.6
+// @version      1.0.7
 // @updateURL      https://raw.githubusercontent.com/SysAdminDoc/Astra-Deck/main/theater-split.user.js
 // @downloadURL    https://raw.githubusercontent.com/SysAdminDoc/Astra-Deck/main/theater-split.user.js
 // @description  Fullscreen video on YouTube watch pages. Scroll down to split: video left, comments/chat right. Scroll up to return.
@@ -1245,6 +1245,15 @@
     let splitHeaderMovedLogo = null;
     let splitLiveHeader = null;
     let splitLiveActionPinned = null;
+    // v1.0.7: in-flight divider drag state. The drag attaches `mousemove`
+    // and `mouseup` listeners to `window` and a position:fixed shield to
+    // `document.body`. If yt-navigate-finish fires mid-drag the splitWrapper
+    // gets removed by teardown but those window listeners + the shield
+    // stayed orphaned. Hoisting the handles here lets teardown call
+    // abortDividerDrag() to clean them up explicitly.
+    let dragShield = null;
+    let dragOnMove = null;
+    let dragOnUp = null;
 
     // ── Helpers ─────────────────────────────────────────────────────────────
     function getVideoId() {
@@ -2312,9 +2321,33 @@
         return wrapper;
     }
 
+    // v1.0.7: idempotent drag teardown. Called from onUp on the normal
+    // path AND from teardown() if a SPA navigation fires mid-drag.
+    function abortDividerDrag() {
+        if (dragShield) {
+            try { dragShield.remove(); } catch (_) { /* already detached */ }
+            dragShield = null;
+        }
+        if (dragOnMove) {
+            window.removeEventListener('mousemove', dragOnMove);
+            dragOnMove = null;
+        }
+        if (dragOnUp) {
+            window.removeEventListener('mouseup', dragOnUp);
+            dragOnUp = null;
+        }
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    }
+
     function initDividerDrag(divider, left, right) {
         divider.addEventListener('mousedown', (e) => {
             if (!isSplit) return;
+            // Defensive: if a previous drag was orphaned (rare — would
+            // require a browser bug or extension conflict), clear it
+            // before starting a new one. Also covers re-entrancy if a
+            // mousedown fires while teardown is mid-flight.
+            abortDividerDrag();
             e.preventDefault();
             const wrapper = splitWrapper;
             const totalW = wrapper.getBoundingClientRect().width;
@@ -2323,11 +2356,11 @@
             document.body.style.cursor = 'col-resize';
             document.body.style.userSelect = 'none';
 
-            const dragShield = document.createElement('div');
+            dragShield = document.createElement('div');
             dragShield.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;cursor:col-resize;';
             document.body.appendChild(dragShield);
 
-            const onMove = (me) => {
+            dragOnMove = (me) => {
                 const dx = me.clientX - startX;
                 const newLeftPct = Math.max(25, Math.min(85, startLeftPct + (dx / totalW * 100)));
                 const newRightPct = 100 - newLeftPct;
@@ -2343,16 +2376,12 @@
                 }
                 saveRatio(100 - newRightPct);
             };
-            const onUp = () => {
-                dragShield.remove();
-                document.body.style.cursor = '';
-                document.body.style.userSelect = '';
-                window.removeEventListener('mousemove', onMove);
-                window.removeEventListener('mouseup', onUp);
+            dragOnUp = () => {
+                abortDividerDrag();
                 triggerPlayerResize();
             };
-            window.addEventListener('mousemove', onMove);
-            window.addEventListener('mouseup', onUp);
+            window.addEventListener('mousemove', dragOnMove);
+            window.addEventListener('mouseup', dragOnUp);
         });
     }
 
@@ -2706,6 +2735,11 @@
             window.removeEventListener('selectstart', commentSelectionSelectStartHandler, true);
             commentSelectionSelectStartHandler = null;
         }
+        // v1.0.7: clean up an in-flight divider drag if SPA nav fires
+        // between mousedown and mouseup. Without this the dragShield div
+        // and the window mousemove/mouseup listeners would orphan and
+        // keep firing closures over the disposed wrapper.
+        abortDividerDrag();
 
         if (splitWrapper) { splitWrapper.remove(); splitWrapper = null; }
 
