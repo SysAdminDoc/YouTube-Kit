@@ -1063,6 +1063,59 @@ test('theater-split teardown calls abortDividerDrag to handle SPA-nav mid-drag',
         'teardown must call abortDividerDrag so a mid-drag SPA navigation does not orphan window listeners or the dragShield');
 });
 
+// ── v3.20.4 H9: EXT_FETCH controller.abort() consistency on size limits ──
+//
+// Five "responded = true" early-return paths in EXT_FETCH:
+//   1. timeout → already aborted
+//   2. redirect to non-allowlisted origin → already aborted
+//   3. content-length declared > MAX_RESPONSE_BYTES → already aborted
+//   4. streamed body exceeds limit while reading → reader.cancel() only,
+//      no controller.abort() — fetch could keep reading until natural EOF
+//   5. non-streaming body exceeds limit after measuring → no abort either
+//
+// (4) and (5) leak: we've already responded to the content script, but the
+// SW continues to consume bandwidth and a socket for a response we will
+// never use. v3.20.4 adds controller.abort() to both paths so all five
+// early-returns are consistent.
+
+test('EXT_FETCH aborts the controller on every size-limit early return path', () => {
+    const fetchHandlerStart = backgroundSource.indexOf('const controller = new AbortController()');
+    assert.ok(fetchHandlerStart > -1, 'EXT_FETCH AbortController must exist');
+    const fetchHandlerEnd = backgroundSource.indexOf('return true; // keep sendResponse channel open', fetchHandlerStart);
+    assert.ok(fetchHandlerEnd > fetchHandlerStart, 'EXT_FETCH handler must terminate');
+    const handler = backgroundSource.slice(fetchHandlerStart, fetchHandlerEnd);
+
+    // Count abort sites — should be at least 4 (timeout + redirect + content-length
+    // + streamed-too-large + non-streaming-too-large = 5 total, but timeout fires
+    // outside the success branch).
+    const abortMatches = handler.match(/controller\.abort\(\)/g) || [];
+    assert.ok(
+        abortMatches.length >= 5,
+        `Expected ≥5 controller.abort() call sites covering timeout + redirect + content-length + streamed-too-large + non-streaming-too-large; found ${abortMatches.length}`
+    );
+
+    // Pin the streamed-too-large block to require BOTH reader.cancel AND
+    // controller.abort. reader.cancel alone closes the reader but doesn't
+    // always tear down the network request.
+    const streamErr = handler.indexOf('Response body too large');
+    assert.ok(streamErr > -1, 'streamed too-large branch must exist');
+    // Walk back from the error to find the opening of the if-block.
+    const blockStart = handler.lastIndexOf('if (received > MAX_RESPONSE_BYTES)', streamErr);
+    assert.ok(blockStart > -1, 'streamed too-large guard must exist');
+    const blockBody = handler.slice(blockStart, streamErr + 200);
+    assert.match(blockBody, /reader\.cancel\(\)/,
+        'streamed too-large path must still call reader.cancel()');
+    assert.match(blockBody, /controller\.abort\(\)/,
+        'streamed too-large path must ALSO call controller.abort() so the SW socket is freed');
+
+    // Pin the non-streaming too-large branch (text = await resp.text() path).
+    const measuredBytesIdx = handler.indexOf('measuredBytes > MAX_RESPONSE_BYTES');
+    assert.ok(measuredBytesIdx > -1, 'non-streaming too-large guard must exist');
+    const nonStreamingBlock = handler.slice(measuredBytesIdx, measuredBytesIdx + 400);
+    assert.match(nonStreamingBlock, /controller\.abort\(\)/,
+        'non-streaming too-large path must call controller.abort() to free the SW + socket');
+});
+
 test('theater-split divider mousedown clears any pre-existing drag state defensively', () => {
     const tsSource = fs.readFileSync(
         path.join(__dirname, '..', 'theater-split.user.js'),

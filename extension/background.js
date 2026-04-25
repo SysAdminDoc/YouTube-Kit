@@ -513,6 +513,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
             // Stream-bounded read so a chunked / unknown-length response cannot
             // OOM the service worker before we reach the size check below.
+            //
+            // v3.20.4: every "too large" early-return now ALSO aborts the
+            // underlying fetch via controller.abort(). Previously the
+            // streamed path called reader.cancel() (which closes the reader
+            // but doesn't always tear down the network request) and the
+            // non-streaming path did neither — both meant we kept reading
+            // bytes off the wire long after we'd already responded with
+            // "too large" to the caller. Aborting the controller is the
+            // belt-and-suspenders cleanup that frees the SW and the
+            // socket immediately.
             let text;
             try {
                 const reader = resp.body?.getReader();
@@ -526,6 +536,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                         if (received > MAX_RESPONSE_BYTES) {
                             try { reader.cancel(); } catch (_) {
                                 // reason: stream may already be closed by caller abort
+                            }
+                            try { controller.abort(); } catch (_) {
+                                // reason: controller may already be aborted by timeout
                             }
                             responded = true;
                             sendResponse({ error: `Response body too large (${received} bytes)` });
@@ -541,6 +554,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     text = await resp.text();
                     const measuredBytes = new TextEncoder().encode(text).byteLength;
                     if (measuredBytes > MAX_RESPONSE_BYTES) {
+                        try { controller.abort(); } catch (_) {
+                            // reason: controller may already be aborted by timeout
+                        }
                         responded = true;
                         sendResponse({ error: `Response body too large (${measuredBytes} bytes)` });
                         return;
