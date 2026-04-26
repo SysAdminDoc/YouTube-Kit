@@ -32,8 +32,8 @@ can land in Now/Next/Later.
 
 ## Recently shipped (last 30 days)
 
-Pass 9 → Pass 14 in chronological order. Sources are commit + tag URL on
-GitHub. Older shipped work is in `CHANGELOG.md`. Passes 12 through 14
+Pass 9 → Pass 15 in chronological order. Sources are commit + tag URL on
+GitHub. Older shipped work is in `CHANGELOG.md`. Passes 12 through 15
 are complete in local commits and await the next release cut.
 
 | Tag | Pass | Items |
@@ -46,8 +46,9 @@ are complete in local commits and await the next release cut.
 | `unreleased` | Pass 12 | N1 profile-import migration now runs the schema chain before stamping current version; N3 popup now has modal dialog semantics, initial focus, Tab wrap, Shift-Tab wrap, and Escape close. |
 | `unreleased` | Pass 13 | NX6 profile-import migration round-trip fixtures cover every prior settings schema v1-v5 into current v6, including defaults restoration, retired/unsafe key stripping, diagnostics, and idempotency. |
 | `unreleased` | Pass 14 | NX3 SponsorBlock keeps a 12-hour bounded segment cache, serves 7-day stale fallback on API failure with cached-at marker tooltips, filters cached markers through current category toggles, and lets `storageQuotaLRU` cap `sb_segments_cache` at 500 entries. |
+| `unreleased` | Pass 15 | NX4 selector canary now covers player overlay anchors (`ytp-progress-bar-padding`, `ytp-tooltip-text`) and uses token-boundary source matching across runtime sources so wrapper names cannot mask missing exact selectors. |
 
-Test count trajectory across these passes: 86 → 129 (+43 regressions).
+Test count trajectory across these passes: 86 → 131 (+45 regressions).
 0 npm audit vulnerabilities at every pass.
 
 ---
@@ -164,6 +165,12 @@ stale cache with a "cached at <ts>" tooltip in the seekbar overlay.
 Pattern from DeArrow API docs (90-min TTL on their side). [src-10] [src-11]
 
 ### NX4. Selector-drift canary expansion to player-controls overlay tier
+
+- **Status:** Completed in Pass 15 (unreleased). The selector canary
+  now includes `ytp-progress-bar-padding` and `ytp-tooltip-text`, checks
+  runtime source token boundaries instead of broad substrings, and ties
+  the progress-bar helper plus Jump Ahead overlay scanner to those exact
+  player overlay anchors.
 
 Current canary covers 18 selectors (layout, comments, controls). Adds
 SponsorBlock-rendered overlay anchors (`.ytp-progress-bar-padding`,
@@ -416,11 +423,11 @@ flagged thin. **All 13 categories addressed below.**
 
 | Category | Coverage | Where |
 |---|---|---|
-| Security | Strong | Pass 7-14 ship items; Risk Register; rejected items 1-3, 9. |
+| Security | Strong | Pass 7-15 ship items; Risk Register; rejected items 1-3, 9. |
 | Accessibility (a11y) | Pass 12 shipped N3; broader audit remains in L7. | Pass 12, Later L7. |
 | i18n / l10n | Next (NX1); deferred but infra-ready | NX1. |
 | Observability / telemetry | Strong — H1 + H4 shipped; L1 ESLint open | Risk register, watchlist medium. |
-| Testing | Strong — 129 tests, +43 new, +canary infra | Recently-shipped, Pass 12, Pass 13, Pass 14, L4. |
+| Testing | Strong — 131 tests, +45 new, +canary infra | Recently-shipped, Pass 12, Pass 13, Pass 14, Pass 15, L4. |
 | Docs | Strong — CHANGELOG/HARDENING.md/this roadmap synced after every change per user instruction | This document; per-pass HARDENING.md sections. |
 | Distribution / packaging | Next (NX5 AMO) + Later (L5 Greasy Fork, L6 key rotation) | NX5, L5, L6. |
 | Plugin ecosystem | N/A — Astra-Deck is monolithic by design; no plugin SDK shipped | Architectural watchlist. |
@@ -564,6 +571,6 @@ items below are reference material only.
 
 ---
 
-*Last updated: 2026-04-26 — Hardening Pass 14 (unreleased). Next review:
-when NX1/NX2/NX4 are triaged or when iter-5 research surfaces a
+*Last updated: 2026-04-26 — Hardening Pass 15 (unreleased). Next review:
+when NX1/NX2/NX7 are triaged or when iter-5 research surfaces a
 higher-leverage item.*

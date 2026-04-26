@@ -1121,3 +1121,34 @@ fresh-before-network lookup, stale fallback diagnostic path, destroy
 flush, stale marker tooltip, and category-filtered rendering. The
 storageQuotaLRU regressions now also assert that `sb_segments_cache`
 is named in the description and pruned through the real top-level key.
+
+### H14 — Selector canary covers player overlay anchors
+
+Pass 10 widened the selector canary to 18 core YouTube DOM tokens.
+NX4 extends that coverage to the player overlay tier that SponsorBlock,
+chapter hover, Jump Ahead suppression, and progress-bar rendering all
+depend on.
+
+Two more watch-page tokens are now critical:
+
+- `ytp-progress-bar-padding` — the padded player timeline wrapper that
+  surrounds the real `.ytp-progress-bar` target. `core/player.js`
+  now looks for `.ytp-progress-bar` through this wrapper before falling
+  back to the broad progress-bar query.
+- `ytp-tooltip-text` — the inner text node for player hover/overlay
+  messages. `hideJumpAheadButton` now scans both `.ytp-tooltip-text`
+  and `.ytp-tooltip-text-wrapper` so a wrapper-only rename does not
+  hide text-bearing overlay nodes from the suppressor.
+
+`tests/selector-regression.test.js` now checks 20 critical selectors
+plus the fixture sanity test. The source-side assertion changed from a
+plain substring check to a token-boundary check against the extension
+runtime sources (`extension/ytkit.js` plus `extension/core/player.js`).
+This matters because `ytp-tooltip-text` should not pass merely because
+`ytp-tooltip-text-wrapper` contains the same substring.
+
+The committed `tests/fixtures/yt-watch.tokens.txt` snapshot already
+contains both overlay tokens, so this pass only widens the canary list
+and strengthens matching. If a future `npm run build:fixtures` refresh
+loses either token, the selector test fails before release and forces
+an intentional runtime update.

@@ -21,7 +21,9 @@
     }
 
     function getPlayerProgressBar(root = document) {
-        return root?.querySelector?.('.ytp-progress-bar') || null;
+        if (!root?.querySelector) return null;
+        const paddedBar = root.querySelector('.ytp-progress-bar-padding .ytp-progress-bar');
+        return paddedBar || root.querySelector('.ytp-progress-bar') || null;
     }
 
     Object.assign(core, {

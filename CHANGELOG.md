@@ -35,6 +35,12 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
   generated default key is restored, retired/unsafe keys are dropped,
   migration diagnostics are emitted, and re-imports are idempotent.
   `HARDENING.md` H12.
+- **Selector drift canary now covers the player overlay tier.** The
+  selector regression fixture list now pins `.ytp-progress-bar-padding`
+  and `.ytp-tooltip-text` alongside the existing player controls and
+  comment text wrappers, and source-side matching uses token boundaries
+  so wrapper names cannot mask a missing exact selector. `HARDENING.md`
+  H14.
 
 ## [3.20.4] - Hardening Pass 11 - 2026-04-25
 

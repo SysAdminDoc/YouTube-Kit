@@ -33,6 +33,10 @@ const YTKIT_SOURCE = fs.readFileSync(
     path.join(REPO_ROOT, 'extension', 'ytkit.js'),
     'utf8'
 );
+const RUNTIME_SOURCE = [
+    YTKIT_SOURCE,
+    fs.readFileSync(path.join(REPO_ROOT, 'extension', 'core', 'player.js'), 'utf8'),
+].join('\n');
 
 function loadTokens(fixtureName) {
     const p = path.join(REPO_ROOT, 'tests', 'fixtures', fixtureName);
@@ -45,26 +49,37 @@ function loadTokens(fixtureName) {
     );
 }
 
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function sourceReferencesToken(selector) {
+    const token = escapeRegExp(selector);
+    return new RegExp(`(^|[^A-Za-z0-9_-])${token}($|[^A-Za-z0-9_-])`).test(RUNTIME_SOURCE);
+}
+
 const FIXTURES = {
     home: 'yt-home.tokens.txt',
     watch: 'yt-watch.tokens.txt',
 };
 
 // Critical selectors. Each must appear as a token in at least one fixture
-// AND as a literal substring in ytkit.js. Use bare identifiers (no `#` or
-// `.`): tokens are raw ids/classes, ytkit.js selector strings embed them.
+// AND as a literal selector token in the extension runtime. Use bare
+// identifiers (no `#` or `.`): tokens are raw ids/classes, runtime selector
+// strings embed them.
 //
-// Coverage rationale (v3.20.3 expansion):
+// Coverage rationale (v3.20.3+ expansions):
 //   - Layout selectors (ytd-app, ytd-watch-flexy, ytd-watch-metadata,
 //     ytd-comments) catch SPA-shape changes that orphan our content
 //     scripts.
 //   - Player API surfaces (movie_player, html5-video-container) catch
 //     the MAIN-world bridge breaking.
 //   - Player CHROME controls (ytp-chrome-bottom, ytp-progress-bar,
-//     ytp-play-button, ytp-settings-button, ytp-fullscreen-button,
-//     ytp-time-display) catch DOM rewrites of the control bar — the
-//     surface where most ad-blocking + theater-split + per-feature hooks
-//     live.
+//     ytp-progress-bar-padding, ytp-play-button, ytp-settings-button,
+//     ytp-fullscreen-button, ytp-time-display, ytp-tooltip-text) catch
+//     DOM rewrites of the control and overlay tier — the surface where
+//     most ad-blocking + theater-split + SponsorBlock + per-feature
+//     hooks live.
 //   - Feed grid (ytd-rich-grid-renderer / ytd-rich-item-renderer) catches
 //     home/subs/results renderer renames.
 //   - Comments DOM in BOTH shapes:
@@ -89,10 +104,12 @@ const CRITICAL_SELECTORS = [
     // Player chrome / controls
     'ytp-chrome-bottom',
     'ytp-progress-bar',
+    'ytp-progress-bar-padding',
     'ytp-play-button',
     'ytp-settings-button',
     'ytp-fullscreen-button',
     'ytp-time-display',
+    'ytp-tooltip-text',
     // Feed / grid
     'ytd-rich-grid-renderer',
     'ytd-rich-item-renderer',
@@ -119,7 +136,7 @@ test('selector fixtures exist and contain a non-trivial token set', () => {
 });
 
 for (const selector of CRITICAL_SELECTORS) {
-    test(`Selector "${selector}" survives in fixture signatures AND is referenced by ytkit.js`, () => {
+    test(`Selector "${selector}" survives in fixture signatures AND is referenced by runtime source`, () => {
         const home = loadTokens(FIXTURES.home);
         const watch = loadTokens(FIXTURES.watch);
         const inFixture = home.has(selector) || watch.has(selector);
@@ -133,8 +150,8 @@ for (const selector of CRITICAL_SELECTORS) {
         );
 
         assert.ok(
-            YTKIT_SOURCE.includes(selector),
-            `Selector "${selector}" is no longer referenced by extension/ytkit.js. ` +
+            sourceReferencesToken(selector),
+            `Selector "${selector}" is no longer referenced by extension runtime source. ` +
             `If the feature using it was retired, remove it from CRITICAL_SELECTORS in this test; ` +
             `otherwise the selector was lost in a refactor and needs to be restored.`
         );

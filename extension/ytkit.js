@@ -12982,6 +12982,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 'button-view-model',
                 '.ytp-bezel-text-wrapper',
                 '.ytp-bezel-text',
+                '.ytp-tooltip-text',
                 '.ytp-tooltip-text-wrapper'
             ].join(', '),
             _phrases: [
@@ -13029,6 +13030,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     'button-view-model',
                     '.ytp-bezel-text-wrapper',
                     '.ytp-bezel-text',
+                    '.ytp-tooltip-text',
                     '.ytp-tooltip-text-wrapper'
                 ].join(', '));
                 return target instanceof HTMLElement ? target : null;
