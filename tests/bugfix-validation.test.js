@@ -499,6 +499,12 @@ test('split title header shows upload date and docks quick links beside YouTube 
         'extension split YouTube logo should navigate to subscriptions');
     assert.ok(source.includes('ytkit-split-upload-date'),
         'extension split should render an upload-date chip in the header');
+    assert.ok(source.includes('grid-template-columns: auto auto minmax(0, 1fr) !important;'),
+        'extension split title header should reserve a right-aligned date column without crowding controls');
+    assert.ok(source.includes('-webkit-line-clamp: 3 !important;'),
+        'extension split title should clamp long titles before they overlap the owner card');
+    assert.ok(source.includes('overflow-wrap: anywhere !important;'),
+        'extension split title should protect the side rail from very long title tokens');
     assert.ok(source.includes("microformat?.publishDate"),
         'extension split upload date should prefer YouTube microformat publishDate');
     assert.ok(source.includes("actions.appendChild(logoWrap);"),
@@ -516,6 +522,12 @@ test('split title header shows upload date and docks quick links beside YouTube 
         'standalone split YouTube logo should navigate to subscriptions');
     assert.ok(theaterSplit.includes('ytkit-split-upload-date'),
         'standalone split should render the upload-date chip styling');
+    assert.ok(theaterSplit.includes('grid-template-columns: auto auto minmax(0, 1fr) !important;'),
+        'standalone split title header should reserve a right-aligned date column without crowding controls');
+    assert.ok(theaterSplit.includes('-webkit-line-clamp: 3 !important;'),
+        'standalone split title should clamp long titles before they overlap the owner card');
+    assert.ok(theaterSplit.includes('overflow-wrap: anywhere !important;'),
+        'standalone split title should protect the side rail from very long title tokens');
     assert.ok(theaterSplit.includes("actions.appendChild(logoWrap);"),
         'standalone split should move an existing player quick-link launcher if present');
 });
@@ -640,6 +652,45 @@ test('split title and owner cards align while quick links stay above the video',
         '#below[style*="position"] #owner ytd-video-owner-renderer',
         'standalone split owner rule'
     );
+    const extensionTitleCard = blockBetween(
+        source,
+        '#below[style*="position"] ytd-watch-metadata #title {',
+        '#below[style*="position"] ytd-watch-metadata #title:has',
+        'extension split title card rule'
+    );
+    const standaloneTitleCard = blockBetween(
+        theaterSplit,
+        '#below[style*="position"] ytd-watch-metadata #title {',
+        '#below[style*="position"] ytd-watch-metadata #title:has',
+        'standalone split title card rule',
+        { fromStart: true }
+    );
+    const extensionTitleBar = blockBetween(
+        source,
+        '#title .ytkit-split-title-bar {',
+        '#title .ytkit-split-youtube-link',
+        'extension split title header rule'
+    );
+    const standaloneTitleBar = blockBetween(
+        theaterSplit,
+        '#title .ytkit-split-title-bar {',
+        '#title .ytkit-split-youtube-link',
+        'standalone split title header rule',
+        { fromStart: true }
+    );
+    const extensionTitleText = blockBetween(
+        source,
+        '#title h1,',
+        '#title yt-formatted-string',
+        'extension split title text rule'
+    );
+    const standaloneTitleText = blockBetween(
+        theaterSplit,
+        '#title h1,',
+        '#title yt-formatted-string',
+        'standalone split title text rule',
+        { fromStart: true }
+    );
 
     for (const [block, label] of [
         [extensionTopRow, 'extension top row'],
@@ -650,6 +701,33 @@ test('split title and owner cards align while quick links stay above the video',
         assert.ok(block.includes('width: 100% !important;'), `${label} should span the metadata column`);
         assert.ok(block.includes('max-width: none !important;'), `${label} should not keep YouTube's narrow card width`);
         assert.ok(block.includes('justify-self: stretch !important;'), `${label} should align with the title card`);
+    }
+
+    for (const [block, label] of [
+        [extensionTitleCard, 'extension title card'],
+        [standaloneTitleCard, 'standalone title card'],
+    ]) {
+        assert.ok(block.includes('display: grid !important;'), `${label} should stack header and title text predictably`);
+        assert.ok(block.includes('row-gap: 10px !important;'), `${label} should keep breathing room between controls and title`);
+        assert.ok(block.includes('box-sizing: border-box !important;'), `${label} should include padding in its measured height`);
+    }
+
+    for (const [block, label] of [
+        [extensionTitleBar, 'extension title header'],
+        [standaloneTitleBar, 'standalone title header'],
+    ]) {
+        assert.ok(block.includes('grid-template-columns: auto auto minmax(0, 1fr) !important;'),
+            `${label} should reserve a right-aligned date column without crowding controls`);
+        assert.ok(block.includes('width: 100% !important;'), `${label} should span the full title card`);
+    }
+
+    for (const [block, label] of [
+        [extensionTitleText, 'extension title text'],
+        [standaloneTitleText, 'standalone title text'],
+    ]) {
+        assert.ok(block.includes('-webkit-line-clamp: 3 !important;'), `${label} should clamp before it overlaps the owner card`);
+        assert.ok(block.includes('overflow: hidden !important;'), `${label} should be contained inside the title card`);
+        assert.ok(block.includes('overflow-wrap: anywhere !important;'), `${label} should protect against long unbroken tokens`);
     }
 
     for (const [contents, label] of [

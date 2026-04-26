@@ -10718,9 +10718,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title {
                         position: relative !important;
+                        display: grid !important;
+                        grid-template-columns: minmax(0, 1fr) !important;
+                        align-content: start !important;
+                        row-gap: 10px !important;
                         z-index: 60 !important;
                         margin: 0 !important;
-                        padding: 10px 12px 10px 14px !important;
+                        padding: 12px 14px 13px !important;
                         border: 1px solid rgba(255, 255, 255, 0.075) !important;
                         border-left: 2px solid rgba(var(--ytkit-split-accent-rgb), 0.42) !important;
                         border-radius: 15px !important;
@@ -10728,6 +10732,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                             linear-gradient(180deg, rgba(255, 255, 255, 0.050), rgba(255, 255, 255, 0.018)),
                             rgba(11, 15, 23, 0.76) !important;
                         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.034), 0 12px 24px rgba(2, 6, 12, 0.18) !important;
+                        box-sizing: border-box !important;
                         overflow: visible !important;
                     }
 
@@ -10736,12 +10741,13 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     }
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-title-bar {
-                        display: flex !important;
+                        display: grid !important;
+                        grid-template-columns: auto auto minmax(0, 1fr) !important;
                         align-items: center !important;
-                        flex-wrap: wrap !important;
-                        gap: 7px !important;
+                        gap: 8px !important;
+                        width: 100% !important;
                         min-width: 0 !important;
-                        margin: 0 0 8px !important;
+                        margin: 0 !important;
                         position: relative !important;
                         z-index: 5 !important;
                     }
@@ -10786,6 +10792,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         display: inline-flex !important;
                         align-items: center !important;
                         flex: 0 0 auto !important;
+                        justify-self: start !important;
                         gap: 4px !important;
                         min-width: 0 !important;
                         position: relative !important;
@@ -10869,9 +10876,10 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         align-items: center !important;
                         justify-content: center !important;
                         flex: 0 1 auto !important;
-                        max-width: 100% !important;
+                        justify-self: end !important;
+                        max-width: min(100%, 210px) !important;
                         min-height: 24px !important;
-                        margin-left: auto !important;
+                        margin-left: 0 !important;
                         padding: 0 9px !important;
                         border-radius: 999px !important;
                         border: 1px solid rgba(var(--ytkit-split-accent-rgb), 0.18) !important;
@@ -10898,25 +10906,35 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata h1.ytd-watch-metadata {
                         margin: 0 !important;
                         padding: 0 !important;
-                        font-size: 17px !important;
-                        line-height: 1.24 !important;
+                        max-width: 100% !important;
+                        min-width: 0 !important;
+                        font-size: 16px !important;
+                        line-height: 1.30 !important;
                         letter-spacing: 0 !important;
                         text-align: left !important;
                         text-transform: none !important;
-                        font-weight: 800 !important;
+                        font-weight: 780 !important;
                         color: rgba(248, 250, 252, 0.96) !important;
                         text-wrap: balance !important;
                         white-space: normal !important;
-                        overflow: visible !important;
-                        text-overflow: clip !important;
+                        display: -webkit-box !important;
+                        -webkit-line-clamp: 3 !important;
+                        -webkit-box-orient: vertical !important;
+                        overflow: hidden !important;
+                        overflow-wrap: anywhere !important;
+                        text-overflow: ellipsis !important;
                     }
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title yt-formatted-string {
+                        display: block !important;
+                        min-width: 0 !important;
+                        max-width: 100% !important;
                         color: inherit !important;
                         font-size: inherit !important;
                         font-weight: inherit !important;
                         line-height: inherit !important;
                         letter-spacing: 0 !important;
+                        overflow-wrap: inherit !important;
                     }
 
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] #owner,
