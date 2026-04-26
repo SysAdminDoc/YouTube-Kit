@@ -25699,7 +25699,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
         {
             id: 'audioTrackLanguage',
             name: 'Preferred Audio Track Language',
-            description: 'Automatically switch to your preferred dubbed audio track when a video offers multiple languages (MrBeast-style multi-audio videos)',
+            description: 'Stores your preferred audio language without opening YouTube settings automatically. YouTube restarts playback when scripts switch audio tracks through the native menu.',
             group: 'Video Player',
             icon: 'languages',
             pages: [PageTypes.WATCH],
@@ -25714,49 +25714,19 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             },
             settingKey: 'preferredAudioLang',
             _navRule: null,
-            _applied: false,
-            async _applyPreferred() {
-                if (this._applied) return;
-                const target = (appState.settings.preferredAudioLang || 'en').toLowerCase();
-                // The audio track selector lives under Settings (gear) →
-                // Audio track → <language>. Open the settings menu, walk
-                // the items, click the one whose label matches.
-                const gear = document.querySelector('.ytp-settings-button');
-                if (!gear) return;
-                gear.click();
-                await new Promise(r => setTimeout(r, 80));
-                const menuItems = [...document.querySelectorAll('.ytp-menuitem')];
-                const audioRow = menuItems.find(m => /audio track/i.test(m.textContent || ''));
-                if (!audioRow) { gear.click(); return; }
-                audioRow.click();
-                await new Promise(r => setTimeout(r, 80));
-                const langItems = [...document.querySelectorAll('.ytp-menuitem')];
-                // Match both the BCP-47 code in the hidden title attribute
-                // and the visible label like "Spanish" / "Español".
-                const match = langItems.find(m => {
-                    const t = (m.textContent || '').toLowerCase();
-                    const label = (this.options || {})[target] || target;
-                    return t.includes(label.toLowerCase()) || t.includes(target);
-                });
-                if (match) {
-                    match.click();
-                    this._applied = true;
-                    DebugManager.log('AudioLang', `Switched to ${target}`);
-                } else {
-                    // Close the submenu gracefully when the requested lang
-                    // isn't offered for this video.
-                    const back = document.querySelector('.ytp-panel-back-button');
-                    back?.click();
-                    gear.click();
-                }
+            _noticeLogged: false,
+            _reportUnavailable() {
+                if (this._noticeLogged) return;
+                this._noticeLogged = true;
+                const target = String(getSetting('preferredAudioLang', 'en') || 'en').toLowerCase();
+                DebugManager.log(
+                    'AudioLang',
+                    `Automatic audio track switching skipped for ${target}: YouTube only exposes this through the native settings menu, which restarts playback.`
+                );
             },
             init() {
                 this._navRule = () => {
-                    this._applied = false;
-                    // Give the player 3.5s to hydrate audio tracks before we
-                    // try to drive the settings menu. Music videos / shorts
-                    // rarely expose multi-audio, so misses are fine.
-                    setTimeout(() => this._applyPreferred().catch(() => {}), 3500);
+                    this._reportUnavailable();
                 };
                 addNavigateRule('audioTrackLanguage', this._navRule);
                 this._navRule();
@@ -25764,7 +25734,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
             destroy() {
                 removeNavigateRule('audioTrackLanguage');
                 this._navRule = null;
-                this._applied = false;
+                this._noticeLogged = false;
             }
         },
 

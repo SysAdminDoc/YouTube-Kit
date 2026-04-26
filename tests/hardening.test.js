@@ -159,6 +159,29 @@ test('quality forcer uses MAIN-world setPlaybackQualityRange, not gear-menu DOM 
     assert.match(mainSource, /\/premium\/i/, 'MAIN bridge must detect Premium-labelled qualityLabel entries');
 });
 
+test('audio track language does not drive the native player settings menu', () => {
+    const start = ytkitSource.indexOf("id: 'audioTrackLanguage'");
+    const end = ytkitSource.indexOf('    ];', start);
+    assert.ok(start > -1 && end > start, 'audioTrackLanguage feature block should exist');
+    const block = ytkitSource.slice(start, end);
+
+    assert.match(
+        block,
+        /without opening YouTube settings automatically/,
+        'Feature description should state that it does not open YouTube settings automatically'
+    );
+    assert.match(
+        block,
+        /Automatic audio track switching skipped/,
+        'Feature should log that automatic switching is skipped instead of driving native menus'
+    );
+    assert.doesNotMatch(
+        block,
+        /\.ytp-settings-button|\.ytp-menuitem|\.click\(|setTimeout\(\s*\(\)\s*=>\s*this\._applyPreferred/,
+        'audioTrackLanguage must not open or click YouTube native settings menu items'
+    );
+});
+
 // ── v3.14.0 getSetting helper ──
 
 test('getSetting helper exists and is null-safe', () => {
