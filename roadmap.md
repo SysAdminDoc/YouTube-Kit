@@ -32,8 +32,8 @@ can land in Now/Next/Later.
 
 ## Recently shipped (last 30 days)
 
-Pass 9 → Pass 15 in chronological order. Sources are commit + tag URL on
-GitHub. Older shipped work is in `CHANGELOG.md`. Passes 12 through 15
+Pass 9 → Pass 16 in chronological order. Sources are commit + tag URL on
+GitHub. Older shipped work is in `CHANGELOG.md`. Passes 12 through 16
 are complete in local commits and await the next release cut.
 
 | Tag | Pass | Items |
@@ -47,8 +47,9 @@ are complete in local commits and await the next release cut.
 | `unreleased` | Pass 13 | NX6 profile-import migration round-trip fixtures cover every prior settings schema v1-v5 into current v6, including defaults restoration, retired/unsafe key stripping, diagnostics, and idempotency. |
 | `unreleased` | Pass 14 | NX3 SponsorBlock keeps a 12-hour bounded segment cache, serves 7-day stale fallback on API failure with cached-at marker tooltips, filters cached markers through current category toggles, and lets `storageQuotaLRU` cap `sb_segments_cache` at 500 entries. |
 | `unreleased` | Pass 15 | NX4 selector canary now covers player overlay anchors (`ytp-progress-bar-padding`, `ytp-tooltip-text`) and uses token-boundary source matching across runtime sources so wrapper names cannot mask missing exact selectors. |
+| `unreleased` | Pass 16 | NX7 storage-size audit reports exact sync-quota byte counts: UI preferences are 7,334 bytes and currently sync-sized, while the typical whole-local payload is 172,461 bytes and must stay local-only. |
 
-Test count trajectory across these passes: 86 → 131 (+45 regressions).
+Test count trajectory across these passes: 86 → 135 (+49 regressions).
 0 npm audit vulnerabilities at every pass.
 
 ---
@@ -196,6 +197,15 @@ equality with the corresponding v6 expected output. [src-1]
 
 ### NX7. Storage size audit for sync-eligibility
 
+- **Status:** Completed in Pass 16 (unreleased). `npm run audit:storage`
+  measures Chrome/Firefox sync-quota bytes using key length plus
+  `JSON.stringify(value)`. Current UI preferences are 7,334 bytes
+  across one item and fit sync today. The repo-defined typical
+  `chrome.storage.local` payload is 172,461 bytes across 16 items and
+  fails sync because caches/history keys exceed both total and per-item
+  limits. Decision: future sync work, if charter-approved, must be
+  preferences-only with a per-item guard; whole-storage sync is rejected.
+
 One-off measurement — exact byte count of a typical Astra-Deck
 `chrome.storage.local` payload. If <100 KB, `chrome.storage.sync` is
 viable for UI preferences. If >100 KB, document the constraint and
@@ -248,7 +258,12 @@ maintainer can decide whether to lift the freeze. **Default: deferred.**
 `CHARTER-REVIEW: feature-extension.` Adds cross-device behaviour the
 extension does not have today. Trade-off: 100 KB cap is tight for
 267 settings; would require selective sync (an opt-in toggle per
-setting group). Decision blocked on **NX7** (size audit). [src-15] [src-16]
+setting group). Pass 16 measured current UI preferences at 7,334 bytes,
+which fits sync today but sits close to the 8,192-byte per-item cap.
+Whole-storage sync is not viable: the typical local payload is
+172,461 bytes and cache/history keys exceed per-item limits. Any future
+implementation must be preferences-only and guarded by
+`scripts/audit-storage-size.js`. [src-15] [src-16] [src-43]
 
 ### UC2. User-account cloud backup
 
@@ -423,17 +438,17 @@ flagged thin. **All 13 categories addressed below.**
 
 | Category | Coverage | Where |
 |---|---|---|
-| Security | Strong | Pass 7-15 ship items; Risk Register; rejected items 1-3, 9. |
+| Security | Strong | Pass 7-16 ship items; Risk Register; rejected items 1-3, 9. |
 | Accessibility (a11y) | Pass 12 shipped N3; broader audit remains in L7. | Pass 12, Later L7. |
 | i18n / l10n | Next (NX1); deferred but infra-ready | NX1. |
 | Observability / telemetry | Strong — H1 + H4 shipped; L1 ESLint open | Risk register, watchlist medium. |
-| Testing | Strong — 131 tests, +45 new, +canary infra | Recently-shipped, Pass 12, Pass 13, Pass 14, Pass 15, L4. |
+| Testing | Strong — 135 tests, +49 new, +canary infra | Recently-shipped, Pass 12, Pass 13, Pass 14, Pass 15, Pass 16, L4. |
 | Docs | Strong — CHANGELOG/HARDENING.md/this roadmap synced after every change per user instruction | This document; per-pass HARDENING.md sections. |
 | Distribution / packaging | Next (NX5 AMO) + Later (L5 Greasy Fork, L6 key rotation) | NX5, L5, L6. |
 | Plugin ecosystem | N/A — Astra-Deck is monolithic by design; no plugin SDK shipped | Architectural watchlist. |
 | Mobile | Next (NX2) + research in iter-4-gap-fill.md | NX2. |
 | Offline / resilience | Pass 14 shipped NX3; former N2 rejected as not applicable to this build. | Pass 14, Rejected table. |
-| Multi-user / collab | Under Consideration (UC1, UC2) blocked on NX7 measurement | UC1, UC2, NX7. |
+| Multi-user / collab | Pass 16 measured sync size; UC1/UC2 remain charter-review only | Pass 16, UC1, UC2. |
 | Migration paths | Pass 12 shipped N1; Pass 13 added the broader fixture suite. | Pass 12, Pass 13. |
 | Upgrade strategy | Recently-shipped chain; CHANGELOG; H10 prevents drift | Quality gates (Release section), recently-shipped table. |
 
@@ -441,8 +456,10 @@ flagged thin. **All 13 categories addressed below.**
 
 - **Plugin ecosystem.** Charter rules out the work; not a gap, an
   explicit non-goal.
-- **Multi-user.** Blocked on NX7. Until the size audit lands, work
-  cannot start. Documented as Under Consideration.
+- **Multi-user.** Pass 16 unblocked the measurement question: UI
+  preferences are sync-sized, whole local storage is not. Any actual
+  sync behavior remains Under Consideration because it adds cross-device
+  product behavior.
 - **Mobile.** Single Next-tier item (NX2). The smoke-test result
   determines whether more mobile work is needed.
 
@@ -507,6 +524,9 @@ items below are reference material only.
 - [src-42] `CLAUDE.md` architecture note: "Return YouTube Dislike is
   not currently shipped in the extension build" + code search for
   `returnyoutubedislike`, `ryd_cache`, and `RYD` in `extension/`.
+- [src-43] `scripts/audit-storage-size.js` +
+  `tests/storage-size-audit.test.js` — Pass 16 sync-eligibility byte
+  accounting and regression coverage.
 
 ### Recently-shipped commit references
 
@@ -571,6 +591,6 @@ items below are reference material only.
 
 ---
 
-*Last updated: 2026-04-26 — Hardening Pass 15 (unreleased). Next review:
-when NX1/NX2/NX7 are triaged or when iter-5 research surfaces a
+*Last updated: 2026-04-26 — Hardening Pass 16 (unreleased). Next review:
+when NX1/NX2/NX5 are triaged or when iter-5 research surfaces a
 higher-leverage item.*

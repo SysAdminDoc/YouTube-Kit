@@ -1152,3 +1152,45 @@ contains both overlay tokens, so this pass only widens the canary list
 and strengthens matching. If a future `npm run build:fixtures` refresh
 loses either token, the selector test fails before release and forces
 an intentional runtime update.
+
+### H15 — Storage sync eligibility audit
+
+NX7 was decision-blocking for any future `chrome.storage.sync` work.
+Chrome and MDN both document the sync quota as 102,400 bytes total,
+8,192 bytes per item, and 512 items, measured as each key length plus
+the JSON stringification of that key's value. Chrome local storage is
+10 MB by default and can ignore that limit when the extension has
+`unlimitedStorage`, which Astra Deck already declares.
+
+`scripts/audit-storage-size.js` now makes that measurement
+reproducible:
+
+- `uiPreferences` is the current generated `ytSuiteSettings` payload
+  with `_settingsVersion` included. It is 7,334 bytes, one item, and
+  currently fits both the sync total cap and the 8,192-byte per-item
+  cap.
+- `typicalLocal` is a repo-defined long-term local-storage sample:
+  settings, hidden videos, blocked channels, bookmarks, watch progress,
+  resume positions, watch-time, DeArrow cache, SponsorBlock cache,
+  stats, and scalar state. It is 172,461 bytes across 16 keys, and
+  fails sync. Five keys exceed the per-item cap:
+  `da_branding_cache` (62,826 bytes), `sb_segments_cache` (49,068),
+  `ytkit-watch-progress` (18,395), `ytkit_resume_positions` (13,189),
+  and `ytkit-bookmarks` (10,609).
+- `capStressLocal` exercises existing local caps. It is 3,176,820
+  bytes, still within local storage's 10 MB baseline, but far outside
+  sync quotas.
+
+Decision: full `chrome.storage.local` sync is not viable and should
+not be built. A future charter-approved settings-sync feature may sync
+UI preferences only, but it needs a per-item guard because the current
+settings item is already about 90% of the 8 KB item limit. Histories,
+caches, diagnostics, watch progress, resume positions, downloads, and
+analytics stay local-only.
+
+`npm run audit:storage` prints the current report. It also supports
+`node scripts/audit-storage-size.js --file <storage-dump.json>` for
+measuring a real browser-exported storage payload later. Four
+regressions in `tests/storage-size-audit.test.js` pin the byte formula,
+the 7,334-byte UI-preferences result, the 172,461-byte typical-local
+result, and the final sync decision text.

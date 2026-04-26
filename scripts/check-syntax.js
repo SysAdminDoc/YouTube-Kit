@@ -20,6 +20,7 @@ const filesToCheck = [
     'extension/core/storage.js',
     'extension/core/styles.js',
     'extension/core/url.js',
+    'scripts/audit-storage-size.js',
     'scripts/catalog-utils.js',
     'scripts/check-syntax.js',
     'scripts/repo-paths.js'

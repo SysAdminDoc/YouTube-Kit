@@ -42,6 +42,15 @@ All notable changes to Astra Deck are documented here. Versions are listed newes
   so wrapper names cannot mask a missing exact selector. `HARDENING.md`
   H14.
 
+### Tooling
+
+- **Storage sync eligibility now has a deterministic audit.**
+  `npm run audit:storage` measures Chrome-style storage bytes for the
+  current UI-preferences payload, a typical long-term local payload, and
+  a cap-stress payload. The current settings candidate is 7,334 bytes;
+  the typical whole-local payload is 172,461 bytes and remains local-only.
+  `HARDENING.md` H15.
+
 ## [3.20.4] - Hardening Pass 11 - 2026-04-25
 
 Third factory-loop pass on top of v3.20.3. One real resource-leak
