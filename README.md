@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  Premium YouTube enhancement extension for Chrome and Firefox with 150+ features — theater split, DeArrow, downloads with format/quality controls, transcript viewer, video/channel hiding, and deep playback customization. Zero configuration required.
+  Premium YouTube enhancement extension for Chrome and Firefox with 150+ features — theater split, DeArrow, downloads with format/quality controls, transcript viewer, video/channel hiding, and deep playback customization.
 </p>
 
 <p align="center">
