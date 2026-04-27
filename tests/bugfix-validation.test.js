@@ -585,14 +585,19 @@ test('split live chat gets a video info header and neutral divider hover', () =>
         'extension live header should include an actions dock');
     assert.ok(source.includes('ytkit-split-live-view-count')
         && source.includes('_getSplitLiveViewCountText()')
-        && source.includes('parts.find(text => /\\bwatching\\b/i.test(text))'),
+        && source.includes("replace(/\\s+views$/i, ' watching')"),
         'extension live header should show current live viewers before falling back to total views');
-    assert.ok(source.includes('_liveHeaderHeight: 96'),
-        'extension live header should stay compact enough to leave room for chat');
-    assert.ok(source.includes('grid-template-areas:"kicker actions" "title title"'),
-        'extension live header should anchor actions beside live state instead of spanning the card');
-    assert.ok(source.includes('align-self:center;justify-content:flex-end;gap:8px;height:38px;min-height:38px'),
-        'extension live header should give pinned native actions a stable top-row measurement box');
+    assert.ok(source.includes('_liveHeaderHeight: 132'),
+        'extension live header should reserve space for channel, live metadata, and title');
+    assert.ok(source.includes("channel.className = 'ytkit-split-live-channel';")
+        && source.includes("date.className = 'ytkit-split-live-date';")
+        && source.includes("videoDetails?.author"),
+        'extension live header should show the posting profile with player-response fallback metadata');
+    assert.ok(source.includes('grid-template-areas:"channel" "meta" "title"')
+        && source.includes('-webkit-line-clamp:2'),
+        'extension live header should use a non-live-like channel/meta/title stack');
+    assert.ok(source.includes('position:absolute;right:14px;top:13px;display:flex;align-items:center;justify-content:flex-end;gap:8px;height:42px;min-height:42px'),
+        'extension live header should give pinned native actions a stable right-aligned measurement box');
     assert.ok(source.includes('_findSplitSubscribeControl()'),
         'extension live header should locate the native subscribe/unsubscribe control');
     assert.ok(source.includes('_pinSplitLiveHeaderActions(controls, actions)'),
@@ -624,14 +629,19 @@ test('split live chat gets a video info header and neutral divider hover', () =>
         'standalone live header should include an actions dock');
     assert.ok(theaterSplit.includes('ytkit-split-live-view-count')
         && theaterSplit.includes('function getSplitLiveViewCountText()')
-        && theaterSplit.includes('parts.find(text => /\\bwatching\\b/i.test(text))'),
+        && theaterSplit.includes("replace(/\\s+views$/i, ' watching')"),
         'standalone live header should show current live viewers before falling back to total views');
-    assert.ok(theaterSplit.includes('const LIVE_HEADER_HEIGHT = 96;'),
-        'standalone live header should stay compact enough to leave room for chat');
-    assert.ok(theaterSplit.includes('grid-template-areas:"kicker actions" "title title"'),
-        'standalone live header should anchor actions beside live state instead of spanning the card');
-    assert.ok(theaterSplit.includes('align-self:center;justify-content:flex-end;gap:8px;height:38px;min-height:38px'),
-        'standalone live header should give pinned native actions a stable top-row measurement box');
+    assert.ok(theaterSplit.includes('const LIVE_HEADER_HEIGHT = 132;'),
+        'standalone live header should reserve space for channel, live metadata, and title');
+    assert.ok(theaterSplit.includes("channel.className = 'ytkit-split-live-channel';")
+        && theaterSplit.includes("date.className = 'ytkit-split-live-date';")
+        && theaterSplit.includes("videoDetails?.author"),
+        'standalone live header should show the posting profile with player-response fallback metadata');
+    assert.ok(theaterSplit.includes('grid-template-areas:"channel" "meta" "title"')
+        && theaterSplit.includes('-webkit-line-clamp:2'),
+        'standalone live header should use a non-live-like channel/meta/title stack');
+    assert.ok(theaterSplit.includes('position:absolute;right:14px;top:13px;display:flex;align-items:center;justify-content:flex-end;gap:8px;height:42px;min-height:42px'),
+        'standalone live header should give pinned native actions a stable right-aligned measurement box');
     assert.ok(theaterSplit.includes('function findSubscribeControl()'),
         'standalone live header should locate the native subscribe/unsubscribe control');
     assert.ok(theaterSplit.includes('function pinLiveHeaderActions(controls, actions)'),
