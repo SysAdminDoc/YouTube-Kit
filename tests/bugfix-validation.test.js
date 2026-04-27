@@ -516,6 +516,13 @@ test('split title header shows upload date and docks quick links beside YouTube 
         'extension split YouTube logo should navigate to subscriptions');
     assert.ok(source.includes('ytkit-split-upload-date'),
         'extension split should render an upload-date chip in the header');
+    assert.ok(source.includes('ytkit-split-upload-meta')
+        && source.includes('ytkit-split-view-count'),
+        'extension split should stack upload date and view count in the header metadata badge');
+    assert.ok(source.includes('_getSplitViewCountText()')
+        && source.includes('videoDetails?.viewCount')
+        && source.includes('new Intl.NumberFormat().format(Math.floor(count))'),
+        'extension split should format the current video view count from playerResponse');
     assert.ok(source.includes('grid-template-columns: auto minmax(0, 1fr) !important;')
         && source.includes('"actions actions" !important;'),
         'extension split title header should give quick controls their own row in condensed rails');
@@ -540,6 +547,13 @@ test('split title header shows upload date and docks quick links beside YouTube 
         'standalone split YouTube logo should navigate to subscriptions');
     assert.ok(theaterSplit.includes('ytkit-split-upload-date'),
         'standalone split should render the upload-date chip styling');
+    assert.ok(theaterSplit.includes('ytkit-split-upload-meta')
+        && theaterSplit.includes('ytkit-split-view-count'),
+        'standalone split should stack upload date and view count in the header metadata badge');
+    assert.ok(theaterSplit.includes('function getSplitViewCountText()')
+        && theaterSplit.includes('videoDetails?.viewCount')
+        && theaterSplit.includes('new Intl.NumberFormat().format(Math.floor(count))'),
+        'standalone split should format the current video view count from playerResponse');
     assert.ok(theaterSplit.includes('grid-template-columns: auto minmax(0, 1fr) !important;')
         && theaterSplit.includes('"actions actions" !important;'),
         'standalone split title header should give quick controls their own row in condensed rails');
@@ -723,11 +737,20 @@ test('split title and owner cards align while quick links stay above the video',
     }
 
     for (const [block, label] of [
+        [extensionTopRow, 'extension top row'],
+        [standaloneTopRow, 'standalone top row'],
+    ]) {
+        assert.ok(block.includes('gap: 14px !important;'), `${label} should leave room between stacked split controls`);
+        assert.ok(block.includes('margin: 0 0 14px !important;'), `${label} should separate metadata from following sections`);
+    }
+
+    for (const [block, label] of [
         [extensionTitleCard, 'extension title card'],
         [standaloneTitleCard, 'standalone title card'],
     ]) {
         assert.ok(block.includes('display: grid !important;'), `${label} should stack header and title text predictably`);
         assert.ok(block.includes('row-gap: 10px !important;'), `${label} should keep breathing room between controls and title`);
+        assert.ok(block.includes('margin: 0 0 10px !important;'), `${label} should keep the title card from touching the owner card`);
         assert.ok(block.includes('box-sizing: border-box !important;'), `${label} should include padding in its measured height`);
     }
 

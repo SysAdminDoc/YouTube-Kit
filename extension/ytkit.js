@@ -7778,6 +7778,43 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 return svg;
             },
 
+            _ensureSplitHeaderMeta(bar) {
+                if (!bar) return null;
+
+                let meta = bar.querySelector(':scope > .ytkit-split-upload-meta');
+                let date = bar.querySelector('.ytkit-split-upload-date');
+                if (!meta) {
+                    meta = document.createElement('span');
+                    meta.className = 'ytkit-split-upload-meta';
+                    meta.setAttribute('translate', 'no');
+                    if (date) {
+                        date.removeAttribute('translate');
+                        bar.insertBefore(meta, date);
+                        meta.appendChild(date);
+                    } else {
+                        date = document.createElement('span');
+                        date.className = 'ytkit-split-upload-date';
+                        meta.appendChild(date);
+                        bar.appendChild(meta);
+                    }
+                }
+
+                if (!date) {
+                    date = document.createElement('span');
+                    date.className = 'ytkit-split-upload-date';
+                    meta.insertBefore(date, meta.firstChild);
+                }
+
+                let views = meta.querySelector(':scope > .ytkit-split-view-count');
+                if (!views) {
+                    views = document.createElement('span');
+                    views.className = 'ytkit-split-view-count';
+                    meta.appendChild(views);
+                }
+
+                return meta;
+            },
+
             _ensureSplitHeaderBar() {
                 const title = this._getSplitTitleEl();
                 if (!title) return null;
@@ -7800,14 +7837,21 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                     actions.setAttribute('aria-label', 'Quick links');
                     bar.appendChild(actions);
 
+                    const meta = document.createElement('span');
+                    meta.className = 'ytkit-split-upload-meta';
+                    meta.setAttribute('translate', 'no');
                     const date = document.createElement('span');
                     date.className = 'ytkit-split-upload-date';
-                    date.setAttribute('translate', 'no');
-                    bar.appendChild(date);
+                    meta.appendChild(date);
+                    const views = document.createElement('span');
+                    views.className = 'ytkit-split-view-count';
+                    meta.appendChild(views);
+                    bar.appendChild(meta);
 
                     title.insertBefore(bar, title.firstChild);
                 }
 
+                this._ensureSplitHeaderMeta(bar);
                 this._splitHeaderBar = bar;
                 return bar;
             },
@@ -7889,6 +7933,35 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 if (/^Published on\s+/i.test(preferred)) return preferred.replace(/^Published on\s+/i, 'Uploaded ');
                 if (/^(Uploaded|Published|Premiered|Streamed)/i.test(preferred)) return preferred;
                 return `Uploaded ${preferred}`;
+            },
+
+            _formatSplitViewCount(value) {
+                const count = Number(value);
+                if (!Number.isFinite(count) || count < 0) return '';
+                return `${new Intl.NumberFormat().format(Math.floor(count))} views`;
+            },
+
+            _getSplitFallbackViewCountText() {
+                const root = this._getBelow() || document;
+                const candidates = Array.from(root.querySelectorAll(
+                    'ytd-watch-metadata #info-container yt-formatted-string, ytd-watch-metadata #info-text yt-formatted-string, ytd-watch-metadata #metadata-line span'
+                ));
+                return candidates
+                    .map(el => (el.textContent || '').replace(/\s+/g, ' ').trim())
+                    .find(text => /\bviews?\b/i.test(text)) || '';
+            },
+
+            _getSplitViewCountText() {
+                const currentVideoId = getVideoId();
+                try {
+                    const playerResponse = _rw.ytInitialPlayerResponse;
+                    const responseVideoId = playerResponse?.videoDetails?.videoId;
+                    if (!responseVideoId || !currentVideoId || responseVideoId === currentVideoId) {
+                        const viewText = this._formatSplitViewCount(playerResponse?.videoDetails?.viewCount);
+                        if (viewText) return viewText;
+                    }
+                } catch {}
+                return this._getSplitFallbackViewCountText();
             },
 
             _getSplitVideoTitleText() {
@@ -8026,17 +8099,28 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                 const bar = this._ensureSplitHeaderBar();
                 if (!bar) return;
 
+                const metaEl = bar.querySelector('.ytkit-split-upload-meta');
                 const dateEl = bar.querySelector('.ytkit-split-upload-date');
+                const viewEl = bar.querySelector('.ytkit-split-view-count');
+                const dateText = this._getSplitUploadDateText();
+                const viewText = this._getSplitViewCountText();
                 if (dateEl) {
-                    const dateText = this._getSplitUploadDateText();
                     dateEl.textContent = dateText;
                     dateEl.hidden = !dateText;
-                    if (dateText) {
-                        dateEl.title = dateText;
-                        dateEl.setAttribute('aria-label', dateText);
+                }
+                if (viewEl) {
+                    viewEl.textContent = viewText;
+                    viewEl.hidden = !viewText;
+                }
+                if (metaEl) {
+                    const metaLabel = [dateText, viewText].filter(Boolean).join(' | ');
+                    metaEl.hidden = !metaLabel;
+                    if (metaLabel) {
+                        metaEl.title = metaLabel;
+                        metaEl.setAttribute('aria-label', metaLabel);
                     } else {
-                        dateEl.removeAttribute('title');
-                        dateEl.removeAttribute('aria-label');
+                        metaEl.removeAttribute('title');
+                        metaEl.removeAttribute('aria-label');
                     }
                 }
 
@@ -10797,8 +10881,8 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         min-width: 0 !important;
                         justify-self: stretch !important;
                         box-sizing: border-box !important;
-                        gap: 12px !important;
-                        margin: 0 0 12px !important;
+                        gap: 14px !important;
+                        margin: 0 0 14px !important;
                         padding: 0 !important;
                         overflow: visible !important;
                     }
@@ -10810,7 +10894,7 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         align-content: start !important;
                         row-gap: 10px !important;
                         z-index: 60 !important;
-                        margin: 0 !important;
+                        margin: 0 0 10px !important;
                         padding: 12px 14px 13px !important;
                         border: 1px solid rgba(255, 255, 255, 0.075) !important;
                         border-left: 2px solid rgba(var(--ytkit-split-accent-rgb), 0.42) !important;
@@ -10965,25 +11049,35 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         transform-origin: top left !important;
                     }
 
-                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-upload-date {
-                        display: inline-flex !important;
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-upload-meta {
+                        display: inline-grid !important;
                         align-items: center !important;
-                        justify-content: center !important;
+                        justify-items: end !important;
+                        align-content: center !important;
+                        gap: 2px !important;
                         flex: 0 1 auto !important;
                         grid-area: date !important;
                         justify-self: end !important;
-                        max-width: min(100%, 210px) !important;
-                        min-height: 24px !important;
+                        max-width: min(100%, 220px) !important;
+                        min-height: 38px !important;
                         margin-left: 0 !important;
-                        padding: 0 9px !important;
-                        border-radius: 999px !important;
+                        padding: 5px 11px 6px !important;
+                        border-radius: 16px !important;
                         border: 1px solid rgba(var(--ytkit-split-accent-rgb), 0.18) !important;
                         background:
                             linear-gradient(180deg, rgba(var(--ytkit-split-accent-rgb), 0.115), rgba(var(--ytkit-split-accent-rgb), 0.035)),
                             rgba(255, 255, 255, 0.035) !important;
+                        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045) !important;
+                        white-space: nowrap !important;
+                        overflow: hidden !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-upload-date {
+                        display: block !important;
+                        max-width: 100% !important;
                         color: rgba(226, 232, 240, 0.90) !important;
-                        font-size: 11px !important;
-                        line-height: 1 !important;
+                        font-size: 11.5px !important;
+                        line-height: 1.05 !important;
                         font-weight: 650 !important;
                         letter-spacing: 0 !important;
                         white-space: nowrap !important;
@@ -10991,8 +11085,24 @@ html[dark] [fill="red"], html[dark] [fill="#FF0000"], html[dark] [fill="#F00"] {
                         text-overflow: ellipsis !important;
                     }
 
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-view-count {
+                        display: block !important;
+                        max-width: 100% !important;
+                        color: rgba(148, 163, 184, 0.86) !important;
+                        font-size: 10.5px !important;
+                        line-height: 1.05 !important;
+                        font-weight: 650 !important;
+                        letter-spacing: 0 !important;
+                        white-space: nowrap !important;
+                        overflow: hidden !important;
+                        text-overflow: ellipsis !important;
+                    }
+
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-upload-meta[hidden],
                     html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-upload-date[hidden],
-                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-upload-date:empty {
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-upload-date:empty,
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-view-count[hidden],
+                    html:is(.ytkit-split-active, .ytkit-split-open) #below[style*="position"] ytd-watch-metadata #title .ytkit-split-view-count:empty {
                         display: none !important;
                     }
 
