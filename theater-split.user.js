@@ -1898,6 +1898,16 @@
         return parts.find(text => /(?:watching|views|streamed|started|ago|\b\d{4}\b)/i.test(text)) || '';
     }
 
+    function getSplitLiveViewCountText() {
+        const root = getBelow() || document;
+        const parts = Array.from(root.querySelectorAll(
+            'ytd-watch-metadata #info-container yt-formatted-string, ytd-watch-metadata #info-text yt-formatted-string, ytd-watch-metadata #metadata-line span'
+        )).map(el => (el.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+        return parts.find(text => /\bwatching\b/i.test(text))
+            || parts.find(text => /\bviews?\b/i.test(text))
+            || getSplitViewCountText();
+    }
+
     function createSplitLiveHeaderNode() {
         const header = document.createElement('section');
         header.className = 'ytkit-split-live-header';
@@ -1928,27 +1938,29 @@
             'box-shadow:inset 0 1px 0 rgba(255,255,255,0.06)',
             'display:grid',
             'grid-template-columns:minmax(0,1fr) auto',
-            'grid-template-areas:"kicker actions" "title actions"',
+            'grid-template-areas:"kicker actions" "title actions" "meta actions"',
+            'align-content:center',
             'align-items:center',
-            'gap:8px 12px',
-            'padding:14px 16px',
+            'gap:5px 12px',
+            'padding:13px 16px',
             'box-sizing:border-box',
             'overflow:visible'
         ].join(';');
 
         const top = document.createElement('div');
         top.className = 'ytkit-split-live-kicker';
-        top.style.cssText = 'grid-area:kicker;display:flex;align-items:center;gap:8px;min-width:0;';
+        top.style.cssText = 'grid-area:kicker;display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;';
 
         const liveBadge = document.createElement('span');
         liveBadge.textContent = 'LIVE';
-        liveBadge.style.cssText = 'font:700 11px/1.2 Arial,sans-serif;letter-spacing:0;color:#fff;background:#dc2626;border-radius:999px;padding:4px 8px;flex:0 0 auto;';
+        liveBadge.style.cssText = 'font:800 11px/1.2 Arial,sans-serif;letter-spacing:0;color:#fff;background:#dc2626;border-radius:999px;padding:5px 9px;flex:0 0 auto;box-shadow:0 8px 18px rgba(220,38,38,0.22);';
         top.appendChild(liveBadge);
 
-        const meta = document.createElement('span');
-        meta.className = 'ytkit-split-live-meta';
-        meta.style.cssText = 'font:600 13px/1.35 Arial,sans-serif;color:rgba(229,231,235,0.72);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;';
-        top.appendChild(meta);
+        const viewCount = document.createElement('span');
+        viewCount.className = 'ytkit-split-live-view-count';
+        viewCount.setAttribute('translate', 'no');
+        viewCount.style.cssText = 'display:inline-flex;align-items:center;min-width:0;max-width:100%;font:700 12px/1.2 Arial,sans-serif;color:rgba(248,250,252,0.94);background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.10);border-radius:999px;padding:5px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        top.appendChild(viewCount);
         card.appendChild(top);
 
         const title = document.createElement('h2');
@@ -1956,20 +1968,25 @@
         title.style.cssText = [
             'grid-area:title',
             'margin:0',
-            'font:800 20px/1.22 Arial,sans-serif',
+            'font:800 17px/1.22 Arial,sans-serif',
             'letter-spacing:0',
             'color:rgba(245,247,250,0.98)',
             'display:-webkit-box',
-            '-webkit-line-clamp:2',
+            '-webkit-line-clamp:1',
             '-webkit-box-orient:vertical',
             'overflow:hidden'
         ].join(';');
         card.appendChild(title);
 
+        const meta = document.createElement('span');
+        meta.className = 'ytkit-split-live-meta';
+        meta.style.cssText = 'grid-area:meta;font:650 12px/1.35 Arial,sans-serif;color:rgba(148,163,184,0.86);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;';
+        card.appendChild(meta);
+
         const actions = document.createElement('div');
         actions.className = 'ytkit-split-live-actions';
         actions.setAttribute('aria-label', 'Live video actions');
-        actions.style.cssText = 'grid-area:actions;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:max-content;max-width:260px;overflow:visible;';
+        actions.style.cssText = 'grid-area:actions;display:flex;align-items:center;align-self:end;justify-content:flex-end;gap:8px;min-width:max-content;max-width:260px;overflow:visible;';
         card.appendChild(actions);
 
         header.appendChild(card);
@@ -1985,13 +2002,23 @@
         splitLiveHeader.style.width = `calc(${rightPct}% - 2px)`;
         const titleEl = splitLiveHeader.querySelector('.ytkit-split-live-title');
         const metaEl = splitLiveHeader.querySelector('.ytkit-split-live-meta');
+        const viewEl = splitLiveHeader.querySelector('.ytkit-split-live-view-count');
         const title = getSplitVideoTitleText();
         const channel = getSplitChannelText();
         const dateText = getSplitUploadDateText();
         const infoText = getSplitLiveInfoText();
-        const metaParts = [channel, dateText || infoText].filter(Boolean);
+        const viewText = getSplitLiveViewCountText();
+        const supplementalInfo = viewText && infoText === viewText ? '' : infoText;
+        const metaParts = [channel, dateText || supplementalInfo].filter(Boolean);
         if (titleEl) titleEl.textContent = title;
         if (metaEl) metaEl.textContent = metaParts.join('  |  ');
+        if (viewEl) {
+            viewEl.textContent = viewText;
+            viewEl.hidden = !viewText;
+            if (viewText) viewEl.title = viewText;
+            else viewEl.removeAttribute('title');
+        }
+        splitLiveHeader.setAttribute('aria-label', ['Live video', viewText, title].filter(Boolean).join(' | '));
         dockSplitLiveHeaderActions();
         return LIVE_HEADER_HEIGHT;
     }

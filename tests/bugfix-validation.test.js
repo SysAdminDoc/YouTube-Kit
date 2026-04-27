@@ -583,6 +583,12 @@ test('split live chat gets a video info header and neutral divider hover', () =>
         'extension live header should use a durable class for cleanup');
     assert.ok(source.includes("actions.className = 'ytkit-split-live-actions';"),
         'extension live header should include an actions dock');
+    assert.ok(source.includes('ytkit-split-live-view-count')
+        && source.includes('_getSplitLiveViewCountText()')
+        && source.includes('parts.find(text => /\\bwatching\\b/i.test(text))'),
+        'extension live header should show current live viewers before falling back to total views');
+    assert.ok(source.includes('grid-template-areas:"kicker actions" "title actions" "meta actions"'),
+        'extension live header should reserve clean rows for live state, title, metadata, and actions');
     assert.ok(source.includes('_findSplitSubscribeControl()'),
         'extension live header should locate the native subscribe/unsubscribe control');
     assert.ok(source.includes('_pinSplitLiveHeaderActions(controls, actions)'),
@@ -612,6 +618,12 @@ test('split live chat gets a video info header and neutral divider hover', () =>
         'standalone live header should use the same durable class');
     assert.ok(theaterSplit.includes("actions.className = 'ytkit-split-live-actions';"),
         'standalone live header should include an actions dock');
+    assert.ok(theaterSplit.includes('ytkit-split-live-view-count')
+        && theaterSplit.includes('function getSplitLiveViewCountText()')
+        && theaterSplit.includes('parts.find(text => /\\bwatching\\b/i.test(text))'),
+        'standalone live header should show current live viewers before falling back to total views');
+    assert.ok(theaterSplit.includes('grid-template-areas:"kicker actions" "title actions" "meta actions"'),
+        'standalone live header should reserve clean rows for live state, title, metadata, and actions');
     assert.ok(theaterSplit.includes('function findSubscribeControl()'),
         'standalone live header should locate the native subscribe/unsubscribe control');
     assert.ok(theaterSplit.includes('function pinLiveHeaderActions(controls, actions)'),
